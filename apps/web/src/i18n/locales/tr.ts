@@ -492,6 +492,9 @@ export const tr: Dict = {
   'preview.fullscreen': '⤢ Tam ekran',
   'preview.closeTitle': 'Kapat (Esc)',
   'preview.loading': '{label} yükleniyor…',
+  'preview.errorTitle': 'Bu örnek yüklenemedi.',
+  'preview.errorBody': 'Örnek HTML\'i alınamadı. Open Design\'ın çalıştığından emin olup tekrar deneyin.',
+  'preview.retry': 'Tekrar dene',
   'preview.showSidebar': '{label} göster',
   'preview.hideSidebar': '{label} gizle',
 
@@ -940,6 +943,8 @@ export const tr: Dict = {
   'pet.slashPetTuck': 'Peti şimdilik sakla.',
   'pet.slashHatch': 'hatch-pet skill\'i ile bir Codex peti üret.',
   'pet.slashHatchArg': '<konsept>',
+  'pet.slashSearch': 'OD research komutuyla web araması yap.',
+  'pet.slashSearchArg': '<sorgu>',
   'pet.codexTitle': 'Yeni kuluçkalananlar',
   'pet.codexSubtitle': 'hatch-pet skill\'inin paketlediği petler tek tıkla evlat edinmek için burada görünür.',
   'pet.codexSubtitleWithDir': 'hatch-pet paketleri için {dir} taranıyor.',

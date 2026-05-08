@@ -568,6 +568,9 @@ export interface Dict {
   'preview.fullscreen': string;
   'preview.closeTitle': string;
   'preview.loading': string;
+  'preview.errorTitle': string;
+  'preview.errorBody': string;
+  'preview.retry': string;
   'preview.showSidebar': string;
   'preview.hideSidebar': string;
 
@@ -1033,6 +1036,8 @@ export interface Dict {
   'pet.slashPetTuck': string;
   'pet.slashHatch': string;
   'pet.slashHatchArg': string;
+  'pet.slashSearch': string;
+  'pet.slashSearchArg': string;
   // Recently-hatched section in pet settings
   'pet.codexTitle': string;
   'pet.codexSubtitle': string;

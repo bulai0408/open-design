@@ -509,6 +509,9 @@ export const ptBR: Dict = {
   'preview.fullscreen': '⤢ Tela cheia',
   'preview.closeTitle': 'Fechar (Esc)',
   'preview.loading': 'Carregando {label}…',
+  'preview.errorTitle': 'Não foi possível carregar este exemplo.',
+  'preview.errorBody': 'A obtenção do HTML do exemplo falhou. Verifique se o Open Design está em execução e tente novamente.',
+  'preview.retry': 'Tentar novamente',
   'preview.showSidebar': 'Mostrar {label}',
   'preview.hideSidebar': 'Ocultar {label}',
 
@@ -979,6 +982,8 @@ export const ptBR: Dict = {
   'pet.slashPetTuck': 'Guardar o pet por agora.',
   'pet.slashHatch': 'Gere um pet Codex com a skill hatch-pet.',
   'pet.slashHatchArg': '<conceito>',
+  'pet.slashSearch': 'Pesquise na web pelo comando OD research.',
+  'pet.slashSearchArg': '<consulta>',
   'pet.codexTitle': 'Recém-chocados',
   'pet.codexSubtitle': 'Pets empacotados pela skill hatch-pet aparecem aqui para adoção em um clique.',
   'pet.codexSubtitleWithDir': 'Verificando {dir} em busca de pacotes do hatch-pet.',

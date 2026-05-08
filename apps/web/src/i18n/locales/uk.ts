@@ -510,6 +510,9 @@ export const uk: Dict = {
   'preview.fullscreen': '⤢ Повноекранний режим',
   'preview.closeTitle': 'Закрити (Esc)',
   'preview.loading': 'Завантаження {label}…',
+  'preview.errorTitle': 'Не вдалося завантажити цей приклад.',
+  'preview.errorBody': 'Не вдалося отримати HTML прикладу. Переконайтеся, що Open Design запущено, і повторіть спробу.',
+  'preview.retry': 'Повторити',
   'preview.showSidebar': 'Показати {label}',
   'preview.hideSidebar': 'Приховати {label}',
 
@@ -980,6 +983,8 @@ export const uk: Dict = {
   'pet.slashPetTuck': 'Сховати домашну тварину на цей час.',
   'pet.slashHatch': 'Створити домашну тварину Codex через навичку hatch-pet.',
   'pet.slashHatchArg': '<concept>',
+  'pet.slashSearch': 'Шукати в інтернеті через команду OD research.',
+  'pet.slashSearchArg': '<запит>',
   'pet.codexTitle': 'Недавно виведені',
   'pet.codexSubtitle': 'Домашні тварини, упаковані навичкою hatch-pet, з\'являються тут для встановлення одним натисненням.',
   'pet.codexSubtitleWithDir': 'Сканування {dir} для домашних тварин, упакованих навичкою hatch-pet.',

@@ -499,6 +499,9 @@ export const ar: Dict = {
   'preview.fullscreen': '⤢ ملء الشاشة',
   'preview.closeTitle': 'إغلاق (Esc)',
   'preview.loading': 'جاري تحميل {label}...',
+  'preview.errorTitle': 'تعذّر تحميل هذا المثال.',
+  'preview.errorBody': 'فشل جلب HTML الخاص بالمثال. تأكد من تشغيل Open Design ثم أعد المحاولة.',
+  'preview.retry': 'إعادة المحاولة',
   'preview.showSidebar': 'إظهار {label}',
   'preview.hideSidebar': 'إخفاء {label}',
 
@@ -949,6 +952,8 @@ export const ar: Dict = {
   'pet.slashPetTuck': 'إخفاء الحيوان الأليف حالياً.',
   'pet.slashHatch': 'توليد حيوان Codex عبر مهارة hatch-pet.',
   'pet.slashHatchArg': '<مفهوم>',
+  'pet.slashSearch': 'ابحث في الويب عبر أمر OD research.',
+  'pet.slashSearchArg': '<استعلام>',
   'pet.codexTitle': 'فقس مؤخراً',
   'pet.codexSubtitle': 'الحيوانات التي تمت تعبئتها بواسطة مهارة hatch-pet تظهر هنا للتبني بنقرة واحدة.',
   'pet.codexSubtitleWithDir': 'مسح {dir} للبحث عن حيوانات معبأة بواسطة مهارة hatch-pet.',

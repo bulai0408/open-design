@@ -727,6 +727,34 @@ describe('SettingsDialog media providers interactions', () => {
     );
   });
 
+  it('re-masks a replacement media provider API key until reveal is used again', () => {
+    renderSettingsDialog(
+      {
+        mode: 'daemon',
+        agentId: 'codex',
+        mediaProviders: {
+          openai: { apiKey: 'sk-media', baseUrl: 'https://api.openai.com/v1' },
+        },
+      },
+      { initialSection: 'media' },
+    );
+
+    const apiKeyInput = screen.getByLabelText('OpenAI API key') as HTMLInputElement;
+    expect(apiKeyInput.type).toBe('password');
+
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI Show key' }));
+    expect(apiKeyInput.type).toBe('text');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Clear' })[0]!);
+    expect(apiKeyInput.type).toBe('password');
+
+    fireEvent.change(apiKeyInput, { target: { value: 'sk-replacement' } });
+    expect(apiKeyInput.type).toBe('password');
+
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI Show key' }));
+    expect(apiKeyInput.type).toBe('text');
+  });
+
   it('supports providers with a custom model override field', () => {
     const { onSave } = renderSettingsDialog(
       { mode: 'daemon', agentId: 'codex' },
@@ -862,8 +890,15 @@ describe('SettingsDialog connectors interactions', () => {
       { initialSection: 'composio' },
     );
 
+    // Issue #734 added a window.confirm guard on the Clear button so a
+    // stray click cannot wipe a daemon-stored Composio key. Auto-accept
+    // the prompt here so the test still exercises the cleared-payload
+    // path.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
 
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
     expect((screen.getByPlaceholderText('Paste Composio API key') as HTMLInputElement).value).toBe('');
     expect(screen.getByText(/Keys are stored locally in the daemon/i)).toBeTruthy();
 
@@ -878,6 +913,46 @@ describe('SettingsDialog connectors interactions', () => {
       }),
       false,
     );
+
+    confirmSpy.mockRestore();
+  });
+
+  it('cancels Clear when the Composio confirmation is dismissed (issue #734)', () => {
+    const { onSave } = renderSettingsDialog(
+      {
+        mode: 'daemon',
+        agentId: 'codex',
+        composio: {
+          apiKey: '',
+          apiKeyConfigured: true,
+          apiKeyTail: 'uQEg',
+        },
+      },
+      { initialSection: 'composio' },
+    );
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    // Saved badge survives because apiKeyConfigured is still true.
+    expect(screen.getByText(/Saved · ••••uQEg/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    // Without a confirmation, the saved key must remain in the payload
+    // so the user does not silently lose their daemon-stored credential.
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        composio: expect.objectContaining({
+          apiKeyConfigured: true,
+          apiKeyTail: 'uQEg',
+        }),
+      }),
+      false,
+    );
+
+    confirmSpy.mockRestore();
   });
 
   it('does not save Composio edits when cancel is used or the backdrop is clicked', () => {

@@ -499,6 +499,9 @@ export const id: Dict = {
   'preview.fullscreen': 'Layar penuh',
   'preview.closeTitle': 'Tutup pratinjau',
   'preview.loading': 'Memuat {label}...',
+  'preview.errorTitle': 'Tidak dapat memuat contoh ini.',
+  'preview.errorBody': 'Pengambilan HTML contoh gagal. Pastikan Open Design berjalan, lalu coba lagi.',
+  'preview.retry': 'Coba lagi',
   'preview.showSidebar': 'Tampilkan {label}',
   'preview.hideSidebar': 'Sembunyikan {label}',
 
@@ -971,6 +974,8 @@ export const id: Dict = {
   'pet.slashPetTuck': 'Sembunyikan pet untuk sekarang.',
   'pet.slashHatch': 'Buat pet Codex lewat skill hatch-pet.',
   'pet.slashHatchArg': '<konsep>',
+  'pet.slashSearch': 'Cari web lewat perintah OD research.',
+  'pet.slashSearchArg': '<kueri>',
   'pet.codexTitle': 'Baru di-hatch',
   'pet.codexSubtitle': 'Pet yang dikemas oleh skill hatch-pet muncul di sini untuk adopsi sekali klik.',
   'pet.codexSubtitleWithDir': 'Memindai {dir} untuk pet yang dikemas oleh skill hatch-pet.',

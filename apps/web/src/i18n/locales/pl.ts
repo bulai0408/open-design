@@ -499,6 +499,9 @@ export const pl: Dict = {
   'preview.fullscreen': '⤢ Pełny ekran',
   'preview.closeTitle': 'Zamknij (Esc)',
   'preview.loading': 'Ładowanie {label}…',
+  'preview.errorTitle': 'Nie udało się załadować tego przykładu.',
+  'preview.errorBody': 'Nie udało się pobrać kodu HTML przykładu. Upewnij się, że Open Design jest uruchomiony, i spróbuj ponownie.',
+  'preview.retry': 'Spróbuj ponownie',
   'preview.showSidebar': 'Pokaż {label}',
   'preview.hideSidebar': 'Ukryj {label}',
 
@@ -949,6 +952,8 @@ export const pl: Dict = {
   'pet.slashPetTuck': 'Schowaj peta na razie.',
   'pet.slashHatch': 'Wygeneruj peta Codex skillem hatch-pet.',
   'pet.slashHatchArg': '<koncept>',
+  'pet.slashSearch': 'Szukaj w sieci przez polecenie OD research.',
+  'pet.slashSearchArg': '<zapytanie>',
   'pet.codexTitle': 'Niedawno wyklute',
   'pet.codexSubtitle': 'Pety zapakowane przez skill hatch-pet pojawiają się tutaj do adopcji jednym kliknięciem.',
   'pet.codexSubtitleWithDir': 'Skanuję {dir} w poszukiwaniu paczek hatch-pet.',

@@ -510,6 +510,9 @@ export const fa: Dict = {
   'preview.fullscreen': '⤢ تمام صفحه',
   'preview.closeTitle': 'بستن (Esc)',
   'preview.loading': 'در حال بارگذاری {label}…',
+  'preview.errorTitle': 'بارگیری این نمونه ممکن نشد.',
+  'preview.errorBody': 'دریافت HTML نمونه با خطا مواجه شد. مطمئن شوید Open Design در حال اجراست و دوباره تلاش کنید.',
+  'preview.retry': 'تلاش دوباره',
   'preview.showSidebar': 'نمایش {label}',
   'preview.hideSidebar': 'پنهان کردن {label}',
 
@@ -981,6 +984,8 @@ export const fa: Dict = {
   'pet.slashPetTuck': 'پت را فعلاً جمع کنید.',
   'pet.slashHatch': 'با مهارت hatch-pet یک پت Codex بسازید.',
   'pet.slashHatchArg': '<مفهوم>',
+  'pet.slashSearch': 'وب را با فرمان OD research جستجو کنید.',
+  'pet.slashSearchArg': '<پرس‌وجو>',
   'pet.codexTitle': 'تازه‌متولدها',
   'pet.codexSubtitle': 'پت‌هایی که مهارت hatch-pet بسته‌بندی کرده اینجا ظاهر می‌شوند تا با یک کلیک پذیرفته شوند.',
   'pet.codexSubtitleWithDir': 'در حال اسکن {dir} برای بسته‌های hatch-pet.',

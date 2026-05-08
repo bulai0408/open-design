@@ -499,6 +499,9 @@ export const fr: Dict = {
   'preview.fullscreen': '⤢ Plein écran',
   'preview.closeTitle': 'Fermer (Échap)',
   'preview.loading': 'Chargement de {label}…',
+  'preview.errorTitle': 'Impossible de charger cet exemple.',
+  'preview.errorBody': 'Le chargement du HTML de l\'exemple a échoué. Vérifiez qu\'Open Design est en cours d\'exécution et réessayez.',
+  'preview.retry': 'Réessayer',
   'preview.showSidebar': 'Afficher {label}',
   'preview.hideSidebar': 'Masquer {label}',
 
@@ -949,6 +952,8 @@ export const fr: Dict = {
   'pet.slashPetTuck': 'Cacher le compagnon pour l\'instant.',
   'pet.slashHatch': 'Générer un pet Codex via la compétence hatch-pet.',
   'pet.slashHatchArg': '<concept>',
+  'pet.slashSearch': 'Rechercher sur le web via la commande OD research.',
+  'pet.slashSearchArg': '<requête>',
   'pet.codexTitle': 'Éclos récemment',
   'pet.codexSubtitle': 'Les pets empaquetés par la compétence hatch-pet apparaissent ici pour une adoption en un clic.',
   'pet.codexSubtitleWithDir': 'Analyse de {dir} pour les pets empaquetés par la compétence hatch-pet.',

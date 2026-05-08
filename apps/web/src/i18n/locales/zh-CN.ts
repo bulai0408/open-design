@@ -501,6 +501,9 @@ export const zhCN: Dict = {
   'preview.fullscreen': '⤢ 全屏',
   'preview.closeTitle': '关闭（Esc）',
   'preview.loading': '正在加载{label}…',
+  'preview.errorTitle': '无法加载此示例。',
+  'preview.errorBody': '示例 HTML 加载失败。请确认 Open Design 正在运行后重试。',
+  'preview.retry': '重试',
   'preview.showSidebar': '展开{label}',
   'preview.hideSidebar': '收起{label}',
 
@@ -964,6 +967,8 @@ export const zhCN: Dict = {
   'pet.slashPetTuck': '把宠物收起来。',
   'pet.slashHatch': '调用 hatch-pet 技能生成一只 Codex 宠物。',
   'pet.slashHatchArg': '<概念>',
+  'pet.slashSearch': '通过 OD research 命令搜索网页。',
+  'pet.slashSearchArg': '<查询>',
   'pet.codexTitle': '最近孵化',
   'pet.codexSubtitle': 'hatch-pet 技能打包的宠物会出现在这里,可一键领养。',
   'pet.codexSubtitleWithDir': '正在扫描 {dir},查找 hatch-pet 技能打包的宠物。',

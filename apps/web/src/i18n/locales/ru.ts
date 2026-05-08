@@ -509,6 +509,9 @@ export const ru: Dict = {
   'preview.fullscreen': '⤢ Полноэкранный',
   'preview.closeTitle': 'Закрыть (Esc)',
   'preview.loading': 'Загрузка {label}…',
+  'preview.errorTitle': 'Не удалось загрузить этот пример.',
+  'preview.errorBody': 'Не удалось получить HTML примера. Убедитесь, что Open Design запущен, и повторите попытку.',
+  'preview.retry': 'Повторить',
   'preview.showSidebar': 'Показать {label}',
   'preview.hideSidebar': 'Скрыть {label}',
 
@@ -979,6 +982,8 @@ export const ru: Dict = {
   'pet.slashPetTuck': 'Спрятать пета на время.',
   'pet.slashHatch': 'Создать Codex-пета через навык hatch-pet.',
   'pet.slashHatchArg': '<концепт>',
+  'pet.slashSearch': 'Искать в вебе через команду OD research.',
+  'pet.slashSearchArg': '<запрос>',
   'pet.codexTitle': 'Недавно вылупленные',
   'pet.codexSubtitle': 'Петы, упакованные навыком hatch-pet, появятся здесь для усыновления в один клик.',
   'pet.codexSubtitleWithDir': 'Сканируем {dir} в поисках пакетов hatch-pet.',

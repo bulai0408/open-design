@@ -501,6 +501,9 @@ export const zhTW: Dict = {
   'preview.fullscreen': '⤢ 全螢幕',
   'preview.closeTitle': '關閉（Esc）',
   'preview.loading': '正在載入{label}…',
+  'preview.errorTitle': '無法載入此範例。',
+  'preview.errorBody': '範例 HTML 載入失敗。請確認 Open Design 正在執行後重試。',
+  'preview.retry': '重試',
   'preview.showSidebar': '展開{label}',
   'preview.hideSidebar': '收合{label}',
 
@@ -964,6 +967,8 @@ export const zhTW: Dict = {
   'pet.slashPetTuck': '把寵物收起來。',
   'pet.slashHatch': '呼叫 hatch-pet 技能生成一隻 Codex 寵物。',
   'pet.slashHatchArg': '<概念>',
+  'pet.slashSearch': '透過 OD research 指令搜尋網頁。',
+  'pet.slashSearchArg': '<查詢>',
   'pet.codexTitle': '最近孵化',
   'pet.codexSubtitle': 'hatch-pet 技能打包的寵物會出現在這裡,可一鍵領養。',
   'pet.codexSubtitleWithDir': '正在掃描 {dir},尋找 hatch-pet 技能打包的寵物。',
