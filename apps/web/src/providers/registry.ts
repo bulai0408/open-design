@@ -18,6 +18,8 @@ import type {
   PreviewComment,
   PreviewCommentStatus,
   PreviewCommentUpsertRequest,
+  CloudflarePagesDeploySelection,
+  CloudflarePagesZonesResponse,
   DeployConfigResponse,
   DeployProjectFileResponse,
   DesignSystemDetail,
@@ -48,6 +50,8 @@ export type WebDeployConfigResponse = DeployConfigResponse;
 export type WebUpdateDeployConfigRequest = UpdateDeployConfigRequest;
 export type WebDeploymentInfo = ProjectDeploymentsResponse['deployments'][number];
 export type WebDeployProjectFileResponse = DeployProjectFileResponse;
+export type WebCloudflarePagesDeploySelection = CloudflarePagesDeploySelection;
+export type WebCloudflarePagesZonesResponse = CloudflarePagesZonesResponse;
 
 export function isDeployProviderId(value: unknown): value is WebDeployProviderId {
   return typeof value === 'string' && (DEPLOY_PROVIDER_IDS as readonly string[]).includes(value);
@@ -393,6 +397,22 @@ export async function updateDeployConfig(
   }
 }
 
+export async function fetchCloudflarePagesZones(): Promise<WebCloudflarePagesZonesResponse | null> {
+  try {
+    const resp = await fetch('/api/deploy/cloudflare-pages/zones');
+    if (!resp.ok) {
+      const payload = (await resp.json().catch(() => null)) as
+        | { error?: { message?: string }; message?: string }
+        | null;
+      throw new Error(payload?.error?.message || payload?.message || `Could not load Cloudflare zones (${resp.status})`);
+    }
+    return (await resp.json()) as WebCloudflarePagesZonesResponse;
+  } catch (err) {
+    if (err instanceof Error) throw err;
+    return null;
+  }
+}
+
 export async function fetchProjectDeployments(
   projectId: string,
 ): Promise<WebDeploymentInfo[]> {
@@ -410,11 +430,17 @@ export async function deployProjectFile(
   projectId: string,
   fileName: string,
   providerId: WebDeployProviderId = DEFAULT_DEPLOY_PROVIDER_ID,
+  cloudflarePages?: WebCloudflarePagesDeploySelection,
 ): Promise<WebDeployProjectFileResponse> {
+  const body = {
+    fileName,
+    providerId,
+    ...(cloudflarePages ? { cloudflarePages } : {}),
+  };
   const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/deploy`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fileName, providerId }),
+    body: JSON.stringify(body),
   });
   if (!resp.ok) {
     const payload = (await resp.json().catch(() => null)) as
