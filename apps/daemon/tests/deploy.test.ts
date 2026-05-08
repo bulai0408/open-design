@@ -2293,6 +2293,6 @@ describe('deployment link readiness', () => {
       server: 'Vercel',
       'set-cookie': '_vercel_sso_nonce=test',
     });
-    expect(isVercelProtectedResponse({ headers }, 'Authentication Required')).toBe(true);
+    expect(isVercelProtectedResponse(new Response(null, { headers }), 'Authentication Required')).toBe(true);
   });
 });

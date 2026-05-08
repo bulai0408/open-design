@@ -1,8 +1,35 @@
 // @ts-nocheck
 import path from 'node:path';
 import chokidar from 'chokidar';
+import type { FSWatcher } from 'chokidar';
 
 import { projectDir, resolveProjectDir } from './projects.js';
+
+export type ProjectWatchEvent = {
+  type: 'file-changed';
+  path: string;
+  kind: 'add' | 'change' | 'unlink';
+};
+
+type ProjectWatchCallback = (evt: ProjectWatchEvent) => void;
+
+type ProjectWatcherEntry = {
+  dir: string;
+  watcher: FSWatcher;
+  ready?: Promise<void>;
+  subscribers: Set<ProjectWatchCallback>;
+  closing: Promise<void> | null;
+};
+
+export type ProjectWatcherOptions = {
+  ignored?: string[] | ((path: string) => boolean);
+  awaitWriteFinish?: boolean | {
+    stabilityThreshold?: number;
+    pollInterval?: number;
+  };
+  metadata?: Parameters<typeof resolveProjectDir>[2];
+  _watcherFactory?: (dir: string, opts: Required<Pick<ProjectWatcherOptions, 'ignored' | 'awaitWriteFinish'>>) => ProjectWatcherEntry;
+};
 
 /**
  * Refcounted per-project file watcher registry.
@@ -48,7 +75,7 @@ export const DEFAULT_AWAIT_WRITE_FINISH = {
   pollInterval: 50,
 };
 
-const registry = new Map();
+const registry = new Map<string, ProjectWatcherEntry>();
 
 function makeEntry(dir, opts) {
   const watcher = chokidar.watch(dir, {
@@ -120,7 +147,12 @@ function makeEntry(dir, opts) {
  *   `unsubscribe` releases the subscriber and closes the watcher if it was the
  *   last; `ready` resolves once chokidar has finished its initial scan.
  */
-export function subscribe(projectsRoot, projectId, onEvent, opts = {}) {
+export function subscribe(
+  projectsRoot: string,
+  projectId: string,
+  onEvent: ProjectWatchCallback,
+  opts: ProjectWatcherOptions = {},
+): { unsubscribe: () => Promise<void>; ready: Promise<void> } {
   // Resolve to the project's actual root: for folder-imported projects
   // (metadata.baseDir set) we watch the user's folder so the live-reload
   // SSE stream actually fires when their files change. The registry is
