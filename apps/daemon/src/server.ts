@@ -1593,6 +1593,7 @@ function sendMulterError(res, err) {
       LIMIT_FIELD_KEY: 400,
       LIMIT_FIELD_VALUE: 400,
       LIMIT_FIELD_COUNT: 400,
+      MISSING_FIELD_NAME: 400,
     };
     const errorByCode = {
       LIMIT_FILE_SIZE: 'file too large',
@@ -1602,6 +1603,7 @@ function sendMulterError(res, err) {
       LIMIT_FIELD_KEY: 'field name too long',
       LIMIT_FIELD_VALUE: 'field value too long',
       LIMIT_FIELD_COUNT: 'too many form fields',
+      MISSING_FIELD_NAME: 'missing field name',
     };
     const status = statusByCode[code] ?? 400;
     const message = errorByCode[code] ?? 'upload failed';

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { test } from 'vitest';
@@ -42,7 +41,9 @@ test('ACP session params preserve caller-provided type and env fields', () => {
   ];
 
   const result = buildAcpSessionNewParams('/tmp/od-project', { mcpServers });
-  assert.equal(result.mcpServers[0].type, 'http');
-  assert.equal(result.mcpServers[0].name, 'http-server');
-  assert.deepEqual(result.mcpServers[0].env, [{ key: 'TOKEN', value: 'secret' }]);
+  const server = result.mcpServers[0];
+  assert.ok(server);
+  assert.equal(server.type, 'http');
+  assert.equal(server.name, 'http-server');
+  assert.deepEqual(server.env, [{ key: 'TOKEN', value: 'secret' }]);
 });

@@ -175,17 +175,20 @@ export async function resolveCurrentArtifact(
 
   const files = await listFiles(projectsRoot, projectId, { metadata: metadata ?? undefined });
   const candidates = files
-    .filter((f: { name: string; artifactManifest?: { updatedAt?: string } | null }) => {
+    .filter((f) => {
       // Require a real sidecar on disk; an inferred manifest does not count.
       return fs.existsSync(path.join(dir, `${f.name}.artifact.json`));
     })
-    .map((f: { name: string; artifactManifest?: { updatedAt?: string } | null }) => ({
-      name: f.name,
-      updatedAt:
-        f.artifactManifest && typeof f.artifactManifest.updatedAt === 'string'
-          ? f.artifactManifest.updatedAt
-          : '',
-    }))
+    .map((f) => {
+      const manifest =
+        f.artifactManifest && typeof f.artifactManifest === 'object'
+          ? f.artifactManifest as { updatedAt?: unknown }
+          : null;
+      return {
+        name: f.name,
+        updatedAt: typeof manifest?.updatedAt === 'string' ? manifest.updatedAt : '',
+      };
+    })
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); // descending; '' sorts last
 
   if (candidates.length > 0) {
