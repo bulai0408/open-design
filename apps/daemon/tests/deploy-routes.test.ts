@@ -549,7 +549,7 @@ describe('deploy provider routes', () => {
             headers: { 'content-type': 'application/json' },
           });
         }
-        if (url.endsWith(`/pages/projects/${expectedPagesProject}/domains`) && method === 'GET') {
+        if (url.includes(`/pages/projects/${expectedPagesProject}/domains?`) && method === 'GET') {
           domainListCount += 1;
           const result =
             domainListCount === 1

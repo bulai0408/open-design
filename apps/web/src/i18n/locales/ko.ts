@@ -715,7 +715,7 @@ export const ko: Dict = {
   'fileViewer.cloudflareApiTokenPlaceholder': 'Cloudflare API 토큰을 붙여넣으세요',
   'fileViewer.cloudflareApiTokenReuseHint': '저장된 Cloudflare API 토큰이 사용됩니다. 변경하려면 새 토큰을 입력하세요.',
   'fileViewer.cloudflareApiTokenRequired': '먼저 Cloudflare API 토큰을 입력하고 저장하세요.',
-  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. DNS Edit is only needed when binding a custom domain.',
+  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. Zone Read is required to list domains. DNS Edit is only needed when binding a custom domain.',
   'fileViewer.vercelTeamId': '팀 ID (Team ID)',
   'fileViewer.vercelTeamSlug': '팀 슬러그 (Team slug)',
   'fileViewer.cloudflareAccountId': '계정 ID',

@@ -669,7 +669,7 @@ export const de: Dict = {
   'fileViewer.cloudflareApiTokenPlaceholder': 'Cloudflare API-Token einfügen',
   'fileViewer.cloudflareApiTokenReuseHint': 'Der gespeicherte Cloudflare API-Token wird verwendet. Gib einen neuen Token ein, um ihn zu ersetzen.',
   'fileViewer.cloudflareApiTokenRequired': 'Gib zuerst einen Cloudflare API-Token ein und speichere ihn.',
-  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. DNS Edit is only needed when binding a custom domain.',
+  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. Zone Read is required to list domains. DNS Edit is only needed when binding a custom domain.',
   'fileViewer.vercelTeamId': 'Team-ID',
   'fileViewer.vercelTeamSlug': 'Team-Slug',
   'fileViewer.cloudflareAccountId': 'Account-ID',

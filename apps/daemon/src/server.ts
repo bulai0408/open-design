@@ -141,6 +141,7 @@ import { composioConnectorProvider } from './connectors/composio.js';
 import { configureComposioConfigStore, readComposioConfig, readPublicComposioConfig, writeComposioConfig } from './connectors/composio-config.js';
 import { CHAT_TOOL_ENDPOINTS, CHAT_TOOL_OPERATIONS, toolTokenRegistry } from './tool-tokens.js';
 import {
+  aggregateCloudflarePagesStatus,
   buildDeployFileSet,
   checkDeploymentUrl,
   CLOUDFLARE_PAGES_PROVIDER_ID,
@@ -981,7 +982,7 @@ async function checkCloudflarePagesDeploymentLinks(existing) {
     const pagesDomainStatus = pagesDomain?.status || customDomain.pagesDomainStatus;
     const failedByApi = ['error', 'blocked', 'deactivated'].includes(String(pagesDomainStatus || '').toLowerCase());
     const activeByApi = String(pagesDomainStatus || '').toLowerCase() === 'active';
-    const readyByReachability = customResult.reachable && (!pagesDomain || activeByApi);
+    const readyByReachability = customResult.reachable && activeByApi;
     customDomain = {
       ...customDomain,
       domainStatus: pagesDomain
@@ -1012,23 +1013,11 @@ async function checkCloudflarePagesDeploymentLinks(existing) {
     pagesDev,
     ...(customDomain ? { customDomain } : {}),
   };
-  const customStatus = customDomain?.status;
-  const status = customStatus
-    ? customStatus === 'ready' && pagesDev.status === 'ready'
-      ? 'ready'
-      : customStatus === 'failed' || customStatus === 'conflict'
-        ? 'failed'
-        : 'link-delayed'
-    : pagesDev.status;
-  const statusMessage = customStatus
-    ? status === 'ready'
-      ? 'Cloudflare Pages and custom domain are ready.'
-      : customDomain?.statusMessage || pagesDev.statusMessage
-    : pagesDev.statusMessage;
+  const aggregate = aggregateCloudflarePagesStatus(pagesDev, customDomain);
   return {
     url: pagesDev.url,
-    status,
-    statusMessage,
+    status: aggregate.status,
+    statusMessage: aggregate.statusMessage,
     cloudflarePages,
     providerMetadata: {
       ...(existing.providerMetadata || {}),

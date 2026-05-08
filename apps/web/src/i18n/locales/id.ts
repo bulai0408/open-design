@@ -730,7 +730,7 @@ export const id: Dict = {
   'fileViewer.cloudflareApiTokenPlaceholder': 'Tempelkan Cloudflare API token Anda',
   'fileViewer.cloudflareApiTokenReuseHint': 'Cloudflare API token yang tersimpan akan digunakan. Masukkan token baru untuk menggantinya.',
   'fileViewer.cloudflareApiTokenRequired': 'Masukkan dan simpan Cloudflare API token terlebih dahulu.',
-  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. DNS Edit is only needed when binding a custom domain.',
+  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. Zone Read is required to list domains. DNS Edit is only needed when binding a custom domain.',
   'fileViewer.cloudflareAccountId': 'Account ID',
   'fileViewer.cloudflareAccountIdHint': 'Wajib. Temukan account ID di dashboard Cloudflare.',
   'fileViewer.cloudflareAccountIdRequired': 'Masukkan dan simpan Cloudflare Account ID terlebih dahulu.',

@@ -732,7 +732,7 @@ export const zhCN: Dict = {
   'fileViewer.cloudflareApiTokenPlaceholder': '粘贴你的 Cloudflare API token',
   'fileViewer.cloudflareApiTokenReuseHint': '将使用已保存的 Cloudflare API token。输入新 token 可替换。',
   'fileViewer.cloudflareApiTokenRequired': '请先输入并保存 Cloudflare API token。',
-  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit 是部署必需权限；只有绑定自定义域名时才需要 DNS Edit。',
+  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit 是部署必需权限；列出域名需要 Zone Read；只有绑定自定义域名时才需要 DNS Edit。',
   'fileViewer.vercelTeamId': 'Team ID',
   'fileViewer.vercelTeamSlug': 'Team slug',
   'fileViewer.cloudflareAccountId': 'Account ID',

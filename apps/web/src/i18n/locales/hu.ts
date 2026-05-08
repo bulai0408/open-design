@@ -715,7 +715,7 @@ export const hu: Dict = {
   'fileViewer.cloudflareApiTokenPlaceholder': 'Illeszd be a Cloudflare API tokenedet',
   'fileViewer.cloudflareApiTokenReuseHint': 'A mentett Cloudflare API tokent használjuk. Adj meg újat a cseréhez.',
   'fileViewer.cloudflareApiTokenRequired': 'Előbb adj meg és ments el egy Cloudflare API tokent.',
-  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. DNS Edit is only needed when binding a custom domain.',
+  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. Zone Read is required to list domains. DNS Edit is only needed when binding a custom domain.',
   'fileViewer.vercelTeamId': 'Team ID',
   'fileViewer.vercelTeamSlug': 'Team slug',
   'fileViewer.cloudflareAccountId': 'Fiók ID',

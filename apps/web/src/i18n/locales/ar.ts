@@ -715,7 +715,7 @@ export const ar: Dict = {
   'fileViewer.cloudflareApiTokenPlaceholder': 'الصق رمز Cloudflare API الخاص بك',
   'fileViewer.cloudflareApiTokenReuseHint': 'سيتم استخدام رمز Cloudflare API المحفوظ. أدخل رمزاً جديداً لاستبداله.',
   'fileViewer.cloudflareApiTokenRequired': 'أدخل واحفظ رمز Cloudflare API أولاً.',
-  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. DNS Edit is only needed when binding a custom domain.',
+  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. Zone Read is required to list domains. DNS Edit is only needed when binding a custom domain.',
   'fileViewer.vercelTeamId': 'معرف الفريق',
   'fileViewer.vercelTeamSlug': 'اسم الفريق اللطيف',
   'fileViewer.cloudflareAccountId': 'معرف الحساب',

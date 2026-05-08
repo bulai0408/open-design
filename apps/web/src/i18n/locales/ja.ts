@@ -668,7 +668,7 @@ export const ja: Dict = {
   'fileViewer.cloudflareApiTokenPlaceholder': 'Cloudflare API トークンを貼り付け',
   'fileViewer.cloudflareApiTokenReuseHint': '保存済みの Cloudflare API トークンが使用されます。新しいトークンを入力すると置き換えられます。',
   'fileViewer.cloudflareApiTokenRequired': '最初に Cloudflare API トークンを入力して保存してください。',
-  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. DNS Edit is only needed when binding a custom domain.',
+  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. Zone Read is required to list domains. DNS Edit is only needed when binding a custom domain.',
   'fileViewer.vercelTeamId': 'チーム ID',
   'fileViewer.vercelTeamSlug': 'チームスラッグ',
   'fileViewer.cloudflareAccountId': 'アカウント ID',

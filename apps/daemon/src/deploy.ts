@@ -14,6 +14,8 @@ export const SAVED_CLOUDFLARE_TOKEN_MASK = 'saved-cloudflare-token';
 
 const VERCEL_API = 'https://api.vercel.com';
 const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
+const CLOUDFLARE_API_PAGE_SIZE = 100;
+const CLOUDFLARE_API_MAX_PAGES = 100;
 export const CLOUDFLARE_PAGES_ASSET_UPLOAD_MAX_FILES = 100;
 export const CLOUDFLARE_PAGES_ASSET_UPLOAD_MAX_BODY_BYTES = 75 * 1024 * 1024;
 export const CLOUDFLARE_PAGES_ASSET_MAX_BYTES = 25 * 1024 * 1024;
@@ -352,20 +354,20 @@ export async function deployToVercel({ config, files, projectId }) {
 export async function listCloudflarePagesZones(config) {
   if (!config?.token) throw new DeployError('Cloudflare API token is required.', 400);
   if (!config?.accountId) throw new DeployError('Cloudflare account ID is required.', 400);
-  const params = new URLSearchParams({
-    'account.id': config.accountId,
-    status: 'active',
-    type: 'full',
-    per_page: '100',
-  });
-  const resp = await fetch(`${CLOUDFLARE_API}/zones?${params.toString()}`, {
-    headers: cloudflareHeaders(config),
-  });
-  const json = await readCloudflareJson(resp);
-  if (!resp.ok || json?.success === false) {
-    throw cloudflareError(json, resp.status, 'Cloudflare zones lookup failed.');
-  }
-  const zones = Array.isArray(json?.result) ? json.result : [];
+  const zones = await fetchCloudflarePaginatedResult(
+    config,
+    (page, perPage) => {
+      const params = new URLSearchParams({
+        'account.id': config.accountId,
+        status: 'active',
+        type: 'full',
+        page: String(page),
+        per_page: String(perPage),
+      });
+      return `${CLOUDFLARE_API}/zones?${params.toString()}`;
+    },
+    'Cloudflare zones lookup failed.',
+  );
   return {
     zones: zones
       .map((zone) => ({
@@ -604,21 +606,12 @@ async function setupCloudflarePagesCustomDomain({ config, projectId, selection, 
 async function ensureCloudflarePagesCnameRecord({ config, selection, target, marker, priorMetadata }) {
   const records = await listCloudflareDnsRecords(config, selection.zoneId, selection.hostname);
   const targetHost = normalizeHostname(target);
-  const exact = records.find((record) => (
-    String(record?.type || '').toUpperCase() === 'CNAME' &&
-    normalizeHostname(record?.name) === selection.hostname &&
-    normalizeHostname(record?.content) === targetHost
-  ));
+  const exact = findExactCloudflarePagesCname(records, selection, targetHost);
   if (exact) {
-    return {
-      dnsStatus: 'reused',
-      dnsRecordId: typeof exact.id === 'string' ? exact.id : undefined,
-      dnsOwnership: exact.comment === marker ? 'marked' : 'unmarked',
-      marker,
-    };
+    return cloudflarePagesCnameReuseResult(exact, marker);
   }
 
-  const conflicting = records.find((record) => normalizeHostname(record?.name) === selection.hostname);
+  const conflicting = findCloudflarePagesHostnameRecord(records, selection);
   if (conflicting) {
     if (canPatchCloudflarePagesCname(conflicting, selection, marker, priorMetadata)) {
       const patched = await patchCloudflareDnsRecord(config, selection.zoneId, conflicting.id, {
@@ -636,16 +629,7 @@ async function ensureCloudflarePagesCnameRecord({ config, selection, target, mar
         marker,
       };
     }
-    throw new DeployError(
-      `Cloudflare DNS already has a different record for ${selection.hostname}.`,
-      409,
-      {
-        errorCode: 'cloudflare_dns_record_conflict',
-        dnsStatus: 'conflict',
-        dnsRecordId: conflicting.id,
-        dnsOwnership: 'external',
-      },
-    );
+    throw cloudflarePagesDnsConflictError(selection, conflicting);
   }
 
   try {
@@ -664,21 +648,85 @@ async function ensureCloudflarePagesCnameRecord({ config, selection, target, mar
       marker,
     };
   } catch (err) {
-    if (!(err instanceof DeployError) || !isCloudflareCommentError(err.details || err.message)) throw err;
-    const created = await createCloudflareDnsRecord(config, selection.zoneId, {
-      type: 'CNAME',
-      name: selection.hostname,
-      content: targetHost,
-      proxied: true,
-      ttl: 1,
-    });
-    return {
-      dnsStatus: 'created',
-      dnsRecordId: created?.id,
-      dnsOwnership: 'unmarked',
+    const racedRecord = await maybeReuseCloudflarePagesCnameAfterDuplicate({
+      err,
+      config,
+      selection,
+      targetHost,
       marker,
-    };
+    });
+    if (racedRecord) return racedRecord;
+    if (!(err instanceof DeployError) || !isCloudflareCommentError(err.details || err.message)) throw err;
+    try {
+      const created = await createCloudflareDnsRecord(config, selection.zoneId, {
+        type: 'CNAME',
+        name: selection.hostname,
+        content: targetHost,
+        proxied: true,
+        ttl: 1,
+      });
+      return {
+        dnsStatus: 'created',
+        dnsRecordId: created?.id,
+        dnsOwnership: 'unmarked',
+        marker,
+      };
+    } catch (retryErr) {
+      const racedRetryRecord = await maybeReuseCloudflarePagesCnameAfterDuplicate({
+        err: retryErr,
+        config,
+        selection,
+        targetHost,
+        marker,
+      });
+      if (racedRetryRecord) return racedRetryRecord;
+      throw retryErr;
+    }
   }
+}
+
+function findExactCloudflarePagesCname(records, selection, targetHost) {
+  return records.find((record) => (
+    String(record?.type || '').toUpperCase() === 'CNAME' &&
+    normalizeHostname(record?.name) === selection.hostname &&
+    normalizeHostname(record?.content) === targetHost
+  ));
+}
+
+function findCloudflarePagesHostnameRecord(records, selection) {
+  return records.find((record) => normalizeHostname(record?.name) === selection.hostname);
+}
+
+function cloudflarePagesCnameReuseResult(record, marker) {
+  return {
+    dnsStatus: 'reused',
+    dnsRecordId: typeof record.id === 'string' ? record.id : undefined,
+    dnsOwnership: record.comment === marker ? 'marked' : 'unmarked',
+    marker,
+  };
+}
+
+function cloudflarePagesDnsConflictError(selection, conflicting) {
+  return new DeployError(
+    `Cloudflare DNS already has a different record for ${selection.hostname}.`,
+    409,
+    {
+      errorCode: 'cloudflare_dns_record_conflict',
+      dnsStatus: 'conflict',
+      dnsRecordId: conflicting.id,
+      dnsOwnership: 'external',
+    },
+  );
+}
+
+async function maybeReuseCloudflarePagesCnameAfterDuplicate({ err, config, selection, targetHost, marker }) {
+  if (!(err instanceof DeployError) || !isCloudflareAlreadyExists(err.details || err.message)) return null;
+  const racedRecords = await listCloudflareDnsRecords(config, selection.zoneId, selection.hostname);
+  const exact = findExactCloudflarePagesCname(racedRecords, selection, targetHost);
+  if (exact) return cloudflarePagesCnameReuseResult(exact, marker);
+  const conflicting = findCloudflarePagesHostnameRecord(racedRecords, selection);
+  if (conflicting) throw cloudflarePagesDnsConflictError(selection, conflicting);
+  throw err;
 }
 
 async function listCloudflareDnsRecords(config, zoneId, hostname) {
@@ -765,14 +813,17 @@ async function ensureCloudflarePagesDomain(config, hostname) {
 }
 
 async function findCloudflarePagesDomain(config, hostname) {
-  const resp = await fetch(cloudflarePagesProjectUrl(config, 'domains'), {
-    headers: cloudflareHeaders(config),
-  });
-  const json = await readCloudflareJson(resp);
-  if (!resp.ok || json?.success === false) {
-    throw cloudflareError(json, resp.status, 'Cloudflare Pages custom domain lookup failed.');
-  }
-  const domains = Array.isArray(json?.result) ? json.result : [];
+  const domains = await fetchCloudflarePaginatedResult(
+    config,
+    (page, perPage) => {
+      const params = new URLSearchParams({
+        page: String(page),
+        per_page: String(perPage),
+      });
+      return `${cloudflarePagesProjectUrl(config, 'domains')}?${params.toString()}`;
+    },
+    'Cloudflare Pages custom domain lookup failed.',
+  );
   return domains.find((domain) => normalizeHostname(domain?.name) === normalizeHostname(hostname)) || null;
 }
 
@@ -790,7 +841,7 @@ function normalizeCloudflarePagesDomainStatus(status) {
   return 'pending';
 }
 
-function aggregateCloudflarePagesStatus(pagesDev, customDomain) {
+export function aggregateCloudflarePagesStatus(pagesDev, customDomain) {
   if (!customDomain) {
     return {
       status: pagesDev.status,
@@ -811,9 +862,12 @@ function aggregateCloudflarePagesStatus(pagesDev, customDomain) {
       statusMessage: customDomain.statusMessage || 'Custom domain is still being prepared.',
     };
   }
+  const customFailureMessage = customDomain.errorMessage || customDomain.statusMessage || 'Custom domain setup failed.';
   return {
-    status: 'failed',
-    statusMessage: customDomain.errorMessage || customDomain.statusMessage || 'Custom domain setup failed.',
+    status: pagesDev.status,
+    statusMessage: pagesDev.status === 'ready'
+      ? `pages.dev is ready. ${customFailureMessage}`
+      : pagesDev.statusMessage || customFailureMessage,
   };
 }
 
@@ -1703,6 +1757,41 @@ async function readCloudflareJson(resp) {
   } catch {
     return {};
   }
+}
+
+async function fetchCloudflarePaginatedResult(config, buildUrl, fallback, options = {}) {
+  const results = [];
+  const perPage = options.perPage || CLOUDFLARE_API_PAGE_SIZE;
+  for (let page = 1; page <= CLOUDFLARE_API_MAX_PAGES; page += 1) {
+    const resp = await fetch(buildUrl(page, perPage), {
+      headers: cloudflareHeaders(config),
+    });
+    const json = await readCloudflareJson(resp);
+    if (!resp.ok || json?.success === false) {
+      throw cloudflareError(json, resp.status, fallback);
+    }
+    const pageItems = Array.isArray(json?.result) ? json.result : [];
+    results.push(...pageItems);
+    if (!shouldFetchNextCloudflarePage(json?.result_info, page, perPage, pageItems.length)) break;
+  }
+  return results;
+}
+
+function shouldFetchNextCloudflarePage(resultInfo, page, perPage, itemCount) {
+  if (itemCount <= 0) return false;
+  const totalPages = Number(resultInfo?.total_pages);
+  if (Number.isFinite(totalPages) && totalPages > 0) return page < totalPages;
+  const totalCount = Number(resultInfo?.total_count);
+  const responsePerPage = Number(resultInfo?.per_page);
+  const effectivePerPage = Number.isFinite(responsePerPage) && responsePerPage > 0
+    ? responsePerPage
+    : perPage;
+  if (Number.isFinite(totalCount) && totalCount >= 0) {
+    return page * effectivePerPage < totalCount;
+  }
+  const count = Number(resultInfo?.count);
+  if (Number.isFinite(count) && count >= 0) return count >= effectivePerPage;
+  return itemCount >= perPage;
 }
 
 async function readVercelJson(resp) {

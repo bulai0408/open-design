@@ -2857,6 +2857,7 @@ function HtmlViewer({
   const [cloudflareZonesError, setCloudflareZonesError] = useState<string | null>(null);
   const [cloudflareZoneId, setCloudflareZoneId] = useState('');
   const [cloudflareDomainPrefix, setCloudflareDomainPrefix] = useState('');
+  const deployProviderLoadSeqRef = useRef(0);
   const [inTabPresent, setInTabPresent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [boardMode, setBoardMode] = useState(false);
@@ -2974,6 +2975,8 @@ function HtmlViewer({
     providerId: WebDeployProviderId,
     options?: { fallbackToExisting?: boolean },
   ) {
+    const requestSeq = ++deployProviderLoadSeqRef.current;
+    setDeployProviderId(providerId);
     const deployments = await fetchProjectDeployments(projectId);
     const nextDeploymentsByProvider = deploymentMapForCurrentFile(deployments);
     const exactDeployment = nextDeploymentsByProvider[providerId] ?? null;
@@ -2984,22 +2987,30 @@ function HtmlViewer({
     // Use the explicit providerId for config/form so a fallback deployment from
     // another provider only fills the existing-URL display, never the form/credentials.
     const config = await fetchDeployConfig(providerId);
+    if (requestSeq !== deployProviderLoadSeqRef.current) {
+      return { config: null, currentDeployment: null };
+    }
     syncDeployFormFromConfig(providerId, config);
     setDeploymentsByProvider(nextDeploymentsByProvider);
     setDeployment(currentDeployment ?? null);
     setDeployResult(currentDeployment ?? null);
     if (providerId === CLOUDFLARE_PAGES_PROVIDER_ID && config?.configured) {
-      void loadCloudflareZones(config);
+      void loadCloudflareZones(config, { requestSeq });
     }
     return { config, currentDeployment };
   }
 
-  async function loadCloudflareZones(config: WebDeployConfigResponse | null = deployConfig) {
+  async function loadCloudflareZones(
+    config: WebDeployConfigResponse | null = deployConfig,
+    options?: { requestSeq?: number },
+  ) {
     if (!config?.configured || config.providerId !== CLOUDFLARE_PAGES_PROVIDER_ID) return;
+    const requestSeq = options?.requestSeq ?? deployProviderLoadSeqRef.current;
     setCloudflareZonesLoading(true);
     setCloudflareZonesError(null);
     try {
       const response = await fetchCloudflarePagesZones();
+      if (requestSeq !== deployProviderLoadSeqRef.current) return;
       const zones = response?.zones ?? [];
       setCloudflareZones(zones);
       const hintedZoneId = response?.cloudflarePages?.lastZoneId || config.cloudflarePages?.lastZoneId || '';
@@ -3010,10 +3021,11 @@ function HtmlViewer({
       const hintedPrefix = response?.cloudflarePages?.lastDomainPrefix || config.cloudflarePages?.lastDomainPrefix || '';
       if (hintedPrefix) setCloudflareDomainPrefix(hintedPrefix);
     } catch (err) {
+      if (requestSeq !== deployProviderLoadSeqRef.current) return;
       setCloudflareZones([]);
       setCloudflareZonesError(err instanceof Error ? err.message : t('fileViewer.cloudflareZonesLoadFailed'));
     } finally {
-      setCloudflareZonesLoading(false);
+      if (requestSeq === deployProviderLoadSeqRef.current) setCloudflareZonesLoading(false);
     }
   }
 

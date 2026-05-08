@@ -50,6 +50,14 @@ function baseFile(overrides: Partial<ProjectFile>): ProjectFile {
   };
 }
 
+function deferredResponse() {
+  let resolve!: (value: Response) => void;
+  const promise = new Promise<Response>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 describe('FileViewer SVG artifacts', () => {
   it('routes SVG artifacts to the SVG viewer instead of the generic image viewer', () => {
     const file = baseFile({
@@ -226,6 +234,7 @@ describe('FileViewer SVG artifacts', () => {
     expect(await screen.findByRole('dialog')).toBeTruthy();
     expect(screen.getByText('Account ID')).toBeTruthy();
     expect(screen.getByText(/Pages Edit is required/i)).toBeTruthy();
+    expect(screen.getByText(/Zone Read is required to list domains/i)).toBeTruthy();
     expect(screen.getByText(/DNS Edit is only needed when binding a custom domain/i)).toBeTruthy();
     expect(screen.queryByText(/Pages Read\/Write/i)).toBeNull();
     const subdomainInput = screen.getByLabelText('Subdomain prefix');
@@ -313,6 +322,86 @@ describe('FileViewer SVG artifacts', () => {
     expect(calledUrls).toContain('/api/deploy/config?providerId=cloudflare-pages');
     expect(calledUrls).not.toContain('/api/deploy/config?providerId=vercel-self');
     expect((screen.getByLabelText(/Cloudflare API token/i) as HTMLInputElement).value).toBe('saved-cloudflare-token');
+  });
+
+  it('ignores stale deploy config loads after switching providers', async () => {
+    const file = baseFile({
+      name: 'index.html',
+      path: 'index.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'index.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+    const delayedCloudflareConfig = deferredResponse();
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (url === '/api/projects/project-1/deployments') {
+        return new Response(JSON.stringify({ deployments: [] }), { status: 200 });
+      }
+      if (url === '/api/deploy/config?providerId=cloudflare-pages') {
+        return delayedCloudflareConfig.promise;
+      }
+      if (url === '/api/deploy/config?providerId=vercel-self') {
+        return new Response(JSON.stringify({
+          providerId: 'vercel-self',
+          configured: true,
+          tokenMask: 'saved-vercel-token',
+        }), { status: 200 });
+      }
+      if (url === '/api/deploy/cloudflare-pages/zones') {
+        return new Response(JSON.stringify({
+          zones: [{ id: 'zone-1', name: 'example.com', status: 'active', type: 'full' }],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        file={file}
+        liveHtml="<html><body><h1>Hello</h1></body></html>"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /share/i }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Deploy to Cloudflare Pages/i }));
+
+    const providerSelect = await screen.findByRole('combobox', { name: /Provider/i });
+    await waitFor(() => {
+      expect((providerSelect as HTMLSelectElement).value).toBe('cloudflare-pages');
+    });
+    fireEvent.change(providerSelect, { target: { value: 'vercel-self' } });
+
+    await waitFor(() => {
+      expect((providerSelect as HTMLSelectElement).value).toBe('vercel-self');
+    });
+    expect((screen.getByLabelText(/Vercel token/i) as HTMLInputElement).value).toBe('saved-vercel-token');
+
+    delayedCloudflareConfig.resolve(new Response(JSON.stringify({
+      providerId: 'cloudflare-pages',
+      configured: true,
+      tokenMask: 'saved-cloudflare-token',
+      accountId: 'account-123',
+      cloudflarePages: {
+        lastZoneId: 'zone-1',
+        lastDomainPrefix: 'demo',
+      },
+    }), { status: 200 }));
+
+    await waitFor(() => {
+      expect((providerSelect as HTMLSelectElement).value).toBe('vercel-self');
+      expect((screen.getByLabelText(/Vercel token/i) as HTMLInputElement).value).toBe('saved-vercel-token');
+    });
+    expect(screen.queryByLabelText(/Cloudflare API token/i)).toBeNull();
   });
 
   it('loads Cloudflare domains, sends the selected custom domain, and renders both links', async () => {

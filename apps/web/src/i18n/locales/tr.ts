@@ -706,7 +706,7 @@ export const tr: Dict = {
   'fileViewer.cloudflareApiTokenPlaceholder': 'Cloudflare API tokeninizi yapıştırın',
   'fileViewer.cloudflareApiTokenReuseHint': 'Kaydedilmiş Cloudflare API tokeni kullanılacak. Değiştirmek için yeni bir token girin.',
   'fileViewer.cloudflareApiTokenRequired': 'Önce bir Cloudflare API tokeni girin ve kaydedin.',
-  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. DNS Edit is only needed when binding a custom domain.',
+  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. Zone Read is required to list domains. DNS Edit is only needed when binding a custom domain.',
   'fileViewer.vercelTeamId': 'Takım ID',
   'fileViewer.vercelTeamSlug': 'Takım slug’ı',
   'fileViewer.cloudflareAccountId': 'Hesap ID',

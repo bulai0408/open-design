@@ -745,7 +745,7 @@ export const ptBR: Dict = {
   'fileViewer.cloudflareApiTokenPlaceholder': 'Cole seu token de API da Cloudflare',
   'fileViewer.cloudflareApiTokenReuseHint': 'O token de API da Cloudflare salvo será usado. Insira um novo token para substituí-lo.',
   'fileViewer.cloudflareApiTokenRequired': 'Insira e salve primeiro um token de API da Cloudflare.',
-  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. DNS Edit is only needed when binding a custom domain.',
+  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. Zone Read is required to list domains. DNS Edit is only needed when binding a custom domain.',
   'fileViewer.vercelTeamId': 'ID da equipe',
   'fileViewer.vercelTeamSlug': 'Slug da equipe',
   'fileViewer.cloudflareAccountId': 'ID da conta',

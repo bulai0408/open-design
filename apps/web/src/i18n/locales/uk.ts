@@ -746,7 +746,7 @@ export const uk: Dict = {
   'fileViewer.cloudflareApiTokenPlaceholder': 'Вставте токен API Cloudflare',
   'fileViewer.cloudflareApiTokenReuseHint': 'Збережений токен API Cloudflare буде використаний. Введіть новий токен, щоб замінити його.',
   'fileViewer.cloudflareApiTokenRequired': 'Спочатку введіть та збережіть токен API Cloudflare.',
-  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. DNS Edit is only needed when binding a custom domain.',
+  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. Zone Read is required to list domains. DNS Edit is only needed when binding a custom domain.',
   'fileViewer.vercelTeamId': 'ID команди',
   'fileViewer.vercelTeamSlug': 'Слаг команди',
   'fileViewer.cloudflareAccountId': 'ID акаунта',

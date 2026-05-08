@@ -837,7 +837,7 @@ export const fa: Dict = {
   'fileViewer.cloudflareApiTokenPlaceholder': 'توکن API کلادفلر خود را وارد کنید',
   'fileViewer.cloudflareApiTokenReuseHint': 'از توکن API کلادفلر ذخیره‌شده استفاده می‌شود. برای جایگزینی، توکن جدید وارد کنید.',
   'fileViewer.cloudflareApiTokenRequired': 'ابتدا یک توکن API کلادفلر وارد و ذخیره کنید.',
-  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. DNS Edit is only needed when binding a custom domain.',
+  'fileViewer.cloudflareApiTokenScopeHint': 'Pages Edit is required for deploys. Zone Read is required to list domains. DNS Edit is only needed when binding a custom domain.',
   'fileViewer.vercelTeamId': 'شناسه تیم',
   'fileViewer.vercelTeamSlug': 'اسلاگ تیم',
   'fileViewer.cloudflareAccountId': 'شناسه حساب',
