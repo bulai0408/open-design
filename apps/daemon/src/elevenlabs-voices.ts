@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto';
 import { resolveProviderConfig } from './media-config.js';
 
 const ELEVENLABS_DEFAULT_BASE_URL = 'https://api.elevenlabs.io';
 const ELEVENLABS_DEFAULT_VOICE_LIMIT = 12;
 const ELEVENLABS_MAX_VOICE_LIMIT = 50;
+const ELEVENLABS_VOICE_CACHE_TTL_MS = 10 * 60 * 1000;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -13,6 +15,13 @@ export interface ElevenLabsVoiceOption {
   labels?: Record<string, string>;
   previewUrl?: string;
 }
+
+type VoiceCacheEntry = {
+  expiresAt: number;
+  voices: ElevenLabsVoiceOption[];
+};
+
+const voiceOptionsCache = new Map<string, VoiceCacheEntry>();
 
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === 'object';
@@ -59,6 +68,31 @@ function normalizeVoice(value: unknown): ElevenLabsVoiceOption | null {
   };
 }
 
+function cacheCredentialFingerprint(apiKey: string): string {
+  return createHash('sha256').update(apiKey).digest('hex').slice(0, 16);
+}
+
+function voiceCacheKey(input: {
+  projectRoot: string;
+  baseUrl: string;
+  apiKey: string;
+  pageSize: number;
+}): string {
+  return [
+    input.projectRoot,
+    input.baseUrl,
+    input.pageSize,
+    cacheCredentialFingerprint(input.apiKey),
+  ].join('\0');
+}
+
+function cloneVoiceOptions(voices: ElevenLabsVoiceOption[]): ElevenLabsVoiceOption[] {
+  return voices.map((voice) => ({
+    ...voice,
+    ...(voice.labels ? { labels: { ...voice.labels } } : {}),
+  }));
+}
+
 export async function listElevenLabsVoiceOptions(
   projectRoot: string,
   options: { limit?: number } = {},
@@ -75,6 +109,18 @@ export async function listElevenLabsVoiceOptions(
     '',
   );
   const pageSize = clampLimit(options.limit);
+  const cacheKey = voiceCacheKey({
+    projectRoot,
+    baseUrl,
+    apiKey: credentials.apiKey,
+    pageSize,
+  });
+  const cached = voiceOptionsCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cloneVoiceOptions(cached.voices);
+  }
+
   const resp = await fetch(`${baseUrl}/v2/voices?page_size=${pageSize}`, {
     method: 'GET',
     headers: {
@@ -91,7 +137,12 @@ export async function listElevenLabsVoiceOptions(
   const rawVoices = isRecord(payload) && Array.isArray(payload.voices)
     ? payload.voices
     : [];
-  return rawVoices
+  const voices = rawVoices
     .map((voice) => normalizeVoice(voice))
     .filter((voice): voice is ElevenLabsVoiceOption => voice !== null);
+  voiceOptionsCache.set(cacheKey, {
+    expiresAt: now + ELEVENLABS_VOICE_CACHE_TTL_MS,
+    voices: cloneVoiceOptions(voices),
+  });
+  return voices;
 }

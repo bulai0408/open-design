@@ -102,6 +102,33 @@ describe('ElevenLabs voice options', () => {
     ]);
   });
 
+  it('caches successful voice lookups for the same provider config', async () => {
+    await writeConfig({
+      providers: {
+        elevenlabs: {
+          apiKey: 'eleven-test-key',
+          baseUrl: TEST_BASE_URL,
+        },
+      },
+    });
+    const fetchMock = vi.fn(async () => Response.json({
+      voices: [
+        {
+          voice_id: '21m00Tcm4TlvDq8ikWAM',
+          name: 'Rachel',
+          category: 'premade',
+        },
+      ],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const first = await listElevenLabsVoiceOptions(projectRoot, { limit: 12 });
+    const second = await listElevenLabsVoiceOptions(projectRoot, { limit: 12 });
+
+    expect(first).toEqual(second);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('surfaces missing ElevenLabs credentials before calling upstream', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
