@@ -607,7 +607,7 @@ Required:
   --project  Project id. Auto-resolved from OD_PROJECT_ID when invoked by the daemon.
 
 Common options:
-  --prompt "<text>"         Generation prompt.
+  --prompt "<text>"         Generation prompt. ElevenLabs SFX prompts must stay under 450 characters.
   --output <filename>       File to write under the project. Auto-named if omitted.
   --aspect 1:1|16:9|9:16|4:3|3:4
   --length <seconds>        Video length.

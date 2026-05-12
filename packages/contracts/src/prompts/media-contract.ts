@@ -57,7 +57,10 @@ stderr / exit status instead of inventing a diagnosis.
 
 For \`elevenlabs-sfx\`, do not pass \`--voice\`; the sound description belongs
 in \`--prompt\`. Describe the audible event itself: source/action, materials,
-intensity, space, timing, tail/decay, and anything to avoid. Use
+intensity, space, timing, tail/decay, and anything to avoid. Keep ElevenLabs SFX \`--prompt\` under 450 characters; target 180-320 characters so the dispatcher
+does not waste a generation attempt on provider validation. For music-like
+requests on \`elevenlabs-sfx\`, produce a short sound-effects loop or texture,
+not a full song arrangement. Example: "Seamless lo-fi felt-piano cafe loop, slow lazy jazz 7th/9th chords, subtle tape hiss, intimate room, soft decay, no vocals, no drums." Use
 \`--prompt-influence 0.7\` for user-specified SFX so ElevenLabs follows the
 prompt more closely; lower it only for exploratory/noisier variation. Add
 \`--loop\` only for seamless ambience / background / game loop audio, and

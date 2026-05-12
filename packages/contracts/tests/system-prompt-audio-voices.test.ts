@@ -18,6 +18,8 @@ describe('composeSystemPrompt — audio voice options', () => {
     expect(prompt).toContain('Describe the audible event itself');
     expect(prompt).toContain('--prompt-influence 0.7');
     expect(prompt).toContain('--loop');
+    expect(prompt).toContain('Keep ElevenLabs SFX `--prompt` under 450 characters');
+    expect(prompt).toContain('lo-fi felt-piano cafe loop');
     expect(prompt).toContain('SFX duration is capped at 30 seconds');
   });
 
