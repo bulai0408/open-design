@@ -319,12 +319,18 @@ export async function generateMedia(args: {
     surface === 'video'
       ? clampWithWarning(length, VIDEO_LENGTHS_SEC, 'length')
       : { value: undefined, warning: null };
+  const usesProviderSpecificAudioDuration =
+    def.provider === 'elevenlabs'
+    && surface === 'audio'
+    && resolvedAudioKind === 'sfx';
   const durationClamp =
-    surface === 'audio'
+    surface === 'audio' && !usesProviderSpecificAudioDuration
       ? clampWithWarning(duration, AUDIO_DURATIONS_SEC, 'duration')
       : { value: undefined, warning: null };
   const clampedLength = lengthClamp.value;
-  const clampedDuration = durationClamp.value;
+  const clampedDuration = usesProviderSpecificAudioDuration
+    ? duration
+    : durationClamp.value;
   const warnings = [lengthClamp.warning, durationClamp.warning].filter(Boolean);
 
   const dir = await ensureProject(projectsRoot, projectId);
