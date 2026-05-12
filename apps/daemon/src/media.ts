@@ -77,6 +77,8 @@ type MediaContext = {
   voice: string;
   audioKind: AudioKind | undefined;
   language: string;
+  loop: boolean;
+  promptInfluence: number | undefined;
   compositionDir: string | null;
   imageRef: ImageRef | null;
 };
@@ -253,7 +255,8 @@ function clampWithWarning(value: unknown, allowed: number[], flagName: string): 
 export async function generateMedia(args: {
   projectRoot: string; projectsRoot: string; projectId: string; surface: MediaSurface; model: string;
   prompt?: string; output?: string; aspect?: string; length?: number; duration?: number; voice?: string;
-  audioKind?: AudioKind; language?: string; compositionDir?: string; image?: string; onProgress?: ProgressFn;
+  audioKind?: AudioKind; language?: string; loop?: boolean; promptInfluence?: number;
+  compositionDir?: string; image?: string; onProgress?: ProgressFn;
 }) {
   const {
     projectRoot,
@@ -269,6 +272,8 @@ export async function generateMedia(args: {
     voice,
     audioKind,
     language,
+    loop,
+    promptInfluence,
     compositionDir,
     image,
   } = args;
@@ -359,6 +364,10 @@ export async function generateMedia(args: {
     voice: voice || '',
     audioKind: resolvedAudioKind,
     language: language || '',
+    loop: loop === true,
+    promptInfluence: typeof promptInfluence === 'number' && Number.isFinite(promptInfluence)
+      ? promptInfluence
+      : undefined,
     // Project-relative path to the directory the agent scaffolded with
     // hyperframes.json / meta.json / index.html. Only consumed by the
     // hyperframes renderer; null/empty for every other provider.
@@ -1406,10 +1415,18 @@ const ELEVENLABS_TTS_MODEL_MAP = {
 const ELEVENLABS_SFX_MODEL_MAP = {
   'elevenlabs-sfx': 'eleven_text_to_sound_v2',
 } as Record<string, string>;
+const ELEVENLABS_SFX_DEFAULT_PROMPT_INFLUENCE = 0.3;
 
 function clampElevenLabsSfxDuration(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 5;
   return Math.min(30, Math.max(0.5, value));
+}
+
+function clampElevenLabsSfxPromptInfluence(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return ELEVENLABS_SFX_DEFAULT_PROMPT_INFLUENCE;
+  }
+  return Math.min(1, Math.max(0, value));
 }
 
 async function renderElevenLabsTTS(ctx: MediaContext, credentials: ProviderConfig): Promise<RenderResult> {
@@ -1479,10 +1496,12 @@ async function renderElevenLabsSfx(ctx: MediaContext, credentials: ProviderConfi
   const wireModel = ELEVENLABS_SFX_MODEL_MAP[ctx.model] || ctx.model;
   const text = (ctx.prompt && ctx.prompt.trim()) || 'A short cinematic transition sound.';
   const durationSeconds = clampElevenLabsSfxDuration(ctx.duration);
+  const promptInfluence = clampElevenLabsSfxPromptInfluence(ctx.promptInfluence);
   const body = {
     text,
     duration_seconds: durationSeconds,
-    prompt_influence: 0.3,
+    prompt_influence: promptInfluence,
+    ...(ctx.loop ? { loop: true } : {}),
     model_id: wireModel,
   };
 
@@ -1508,7 +1527,7 @@ async function renderElevenLabsSfx(ctx: MediaContext, credentials: ProviderConfi
   }
   return {
     bytes,
-    providerNote: `elevenlabs/${wireModel} · ${durationSeconds}s · ${bytes.length} bytes`,
+    providerNote: `elevenlabs/${wireModel} · ${durationSeconds}s${ctx.loop ? ' · loop' : ''} · ${bytes.length} bytes`,
     suggestedExt: '.mp3',
   };
 }

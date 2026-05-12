@@ -78,6 +78,8 @@ type PromptTemplatePick = {
   prompt: string;
 };
 
+const SFX_AUDIO_DURATIONS_SEC = AUDIO_DURATIONS_SEC.filter((sec) => sec <= 30);
+
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
 
 type NewProjectPlatform = Exclude<ProjectPlatform, 'auto'>;
@@ -795,6 +797,9 @@ export function NewProjectPanel({
             onAudioKind={(kind) => {
               setAudioKind(kind);
               setAudioModel(DEFAULT_AUDIO_MODEL[kind]);
+              if (kind === 'sfx') {
+                setAudioDuration((duration) => Math.min(duration, SFX_AUDIO_DURATIONS_SEC.at(-1) ?? 30));
+              }
             }}
             onAudioModel={setAudioModel}
             onAudioDuration={setAudioDuration}
@@ -2023,6 +2028,9 @@ function MediaProjectOptions(props:
   }
 
   const models = supportedModels('audio', AUDIO_MODELS_BY_KIND[props.audioKind]);
+  const audioDurations = props.audioKind === 'sfx'
+    ? SFX_AUDIO_DURATIONS_SEC
+    : AUDIO_DURATIONS_SEC;
   return (
     <div className="newproj-media-options">
       <OptionCards
@@ -2044,7 +2052,7 @@ function MediaProjectOptions(props:
       <label className="newproj-label">
         <span>{t('newproj.audioDurationLabel')}</span>
         <select value={props.audioDuration} onChange={(e) => props.onAudioDuration(Number(e.target.value))}>
-          {AUDIO_DURATIONS_SEC.map((sec) => (
+          {audioDurations.map((sec) => (
             <option key={sec} value={sec}>{t('newproj.audioDurationSeconds', { n: sec })}</option>
           ))}
         </select>

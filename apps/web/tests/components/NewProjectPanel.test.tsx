@@ -469,19 +469,27 @@ describe('NewProjectPanel design system defaults', () => {
         designSystems={designSystems}
         defaultDesignSystemId="clay"
         templates={[]}
+        onDeleteTemplate={vi.fn()}
         promptTemplates={[]}
         onCreate={onCreate}
       />,
     );
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Media' }));
     fireEvent.click(screen.getByRole('tab', { name: 'Audio' }));
     expect(screen.getByRole('button', { name: 'SFX' })).toBeTruthy();
     fireEvent.change(screen.getByTestId('new-project-name'), {
       target: { value: 'Impact sound payload' },
     });
+    fireEvent.change(screen.getByLabelText('Duration'), {
+      target: { value: '120' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'SFX' }));
-    expect(screen.getByRole('button', { name: /elevenlabs-sfx/i }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('model-picker-trigger').textContent).toContain('elevenlabs-sfx');
     expect(screen.queryByPlaceholderText('Provider voice id, optional')).toBeNull();
+    const durationSelect = screen.getByLabelText('Duration') as HTMLSelectElement;
+    expect(Array.from(durationSelect.options).map((option) => option.value)).toEqual(['5', '10', '15', '30']);
+    expect(durationSelect.value).toBe('30');
 
     fireEvent.click(screen.getByTestId('create-project'));
 
@@ -493,6 +501,7 @@ describe('NewProjectPanel design system defaults', () => {
           kind: 'audio',
           audioKind: 'sfx',
           audioModel: 'elevenlabs-sfx',
+          audioDuration: 30,
         }),
       }),
     );

@@ -218,6 +218,63 @@ describe('elevenlabs media generation', () => {
     expect(bytes.equals(mp3Bytes)).toBe(true);
   });
 
+  it('passes ElevenLabs sound effects loop and prompt influence controls', async () => {
+    await writeConfig({
+      providers: {
+        elevenlabs: {
+          apiKey: 'eleven-test-key',
+          baseUrl: TEST_ELEVENLABS_BASE_URL,
+        },
+      },
+    });
+
+    const mp3Bytes = Buffer.from([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x6c, 0x6f, 0x6f, 0x70]);
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      expect(String(input)).toBe(
+        `${TEST_ELEVENLABS_BASE_URL}/v1/sound-generation?output_format=mp3_44100_128`,
+      );
+      expect(init?.method).toBe('POST');
+      expect(init?.headers).toMatchObject({
+        'xi-api-key': 'eleven-test-key',
+        'content-type': 'application/json',
+      });
+      expect(JSON.parse(String(init?.body))).toEqual({
+        text: 'Seamless rainy alley ambience loop, wet pavement drips, distant traffic, no voices.',
+        duration_seconds: 20,
+        prompt_influence: 0.72,
+        loop: true,
+        model_id: 'eleven_text_to_sound_v2',
+      });
+
+      return new Response(mp3Bytes, {
+        status: 200,
+        headers: { 'content-type': 'audio/mpeg' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await generateMedia({
+      projectRoot,
+      projectsRoot,
+      projectId: 'project-1',
+      surface: 'audio',
+      model: 'elevenlabs-sfx',
+      audioKind: 'sfx',
+      duration: 20,
+      prompt: 'Seamless rainy alley ambience loop, wet pavement drips, distant traffic, no voices.',
+      output: 'elevenlabs-sfx-loop.mp3',
+      loop: true,
+      promptInfluence: 0.72,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.providerId).toBe('elevenlabs');
+    expect(result.providerNote).toContain('loop');
+
+    const bytes = await readFile(path.join(projectsRoot, 'project-1', 'elevenlabs-sfx-loop.mp3'));
+    expect(bytes.equals(mp3Bytes)).toBe(true);
+  });
+
   it('clamps below-minimum ElevenLabs sound effects durations', async () => {
     await writeConfig({
       providers: {

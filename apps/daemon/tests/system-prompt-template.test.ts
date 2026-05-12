@@ -290,6 +290,9 @@ describe('composeSystemPrompt — metadata.promptTemplate', () => {
     expect(out).toContain('`elevenlabs-sfx`');
     expect(out).toContain('provider-specific ElevenLabs `voice_id`');
     expect(out).toContain('sound description belongs in `--prompt`');
+    expect(out).toContain('Describe the audible event itself');
+    expect(out).toContain('--prompt-influence 0.7');
+    expect(out).toContain('--loop');
     expect(out).toContain('SFX duration is capped at 30 seconds');
     expect(out).toContain('MiniMax, FishAudio, and ElevenLabs audio renderers are production integrations');
     expect(out).not.toContain('fishaudio, …) are still stubs');

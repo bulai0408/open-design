@@ -85,6 +85,8 @@ Run via your shell tool (Bash on Claude Code, exec on Codex/Gemini, etc.):
   [--aspect 1:1|16:9|9:16|4:3|3:4] \\
   [--length <seconds>]              # video only
   [--duration <seconds>]            # audio only
+  [--prompt-influence <0-1>]        # audio:sfx only; higher follows the prompt more closely
+  [--loop]                          # audio:sfx only; request a seamless loop
   [--audio-kind music|speech|sfx]   # audio only
   [--voice <provider-voice-id>]     # audio:speech only; omit to use provider default
   [--language <lang>]               # audio:speech only; language boost (e.g. Chinese,Yue for Cantonese)
@@ -265,6 +267,10 @@ substitution. Do not silently fall back.
     flag instead unless you have a real id.
     For \`elevenlabs-v3\`, \`--voice\` expects a provider-specific ElevenLabs \`voice_id\`; do not pass a natural-language voice description there.
     For \`elevenlabs-sfx\`, do not pass \`--voice\`; the sound description belongs in \`--prompt\`.
+    Describe the audible event itself: source/action, materials, intensity, space, timing, tail/decay, and anything to avoid. Good SFX prompts are literal sound briefs such as "short glass UI confirmation chime, clean attack, soft shimmer tail, no melody, no voice" or "seamless rainy alley ambience loop, distant traffic, wet pavement drips, no voices".
+    Avoid vague intent-only prompts such as "a nice transition" or "make this section feel premium" unless you translate them into concrete sound sources.
+    Use \`--prompt-influence 0.7\` for user-specified SFX so ElevenLabs follows the prompt more closely; lower it only when the user explicitly wants exploratory/noisier variation.
+    Add \`--loop\` only when the requested SFX must be seamless ambience / background / game loop audio. Mention loop intent in the prompt as well.
     SFX duration is capped at 30 seconds by the provider.
     \`language\` enables pronunciation boost for specific languages
     (e.g. \`Chinese,Yue\` for Cantonese, \`Chinese\` for Mandarin).

@@ -3,6 +3,24 @@ import { describe, expect, it } from 'vitest';
 import { composeSystemPrompt } from '../src/prompts/system.js';
 
 describe('composeSystemPrompt — audio voice options', () => {
+  it('documents ElevenLabs sound effect prompt controls for API-mode prompts', () => {
+    const prompt = composeSystemPrompt({
+      streamFormat: 'plain',
+      metadata: {
+        kind: 'audio',
+        audioKind: 'sfx',
+        audioModel: 'elevenlabs-sfx',
+        audioDuration: 10,
+      },
+    });
+
+    expect(prompt).toContain('`elevenlabs-sfx`');
+    expect(prompt).toContain('Describe the audible event itself');
+    expect(prompt).toContain('--prompt-influence 0.7');
+    expect(prompt).toContain('--loop');
+    expect(prompt).toContain('SFX duration is capped at 30 seconds');
+  });
+
   it('renders an ElevenLabs voice select form in API-mode project metadata', () => {
     const voiceOptions = Array.from({ length: 50 }, (_, index) => {
       const ordinal = index + 1;

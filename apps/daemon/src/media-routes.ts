@@ -183,6 +183,10 @@ export function registerMediaRoutes(app: Express, ctx: RegisterMediaRoutesDeps) 
         voice: req.body?.voice,
         audioKind: req.body?.audioKind,
         language: typeof req.body?.language === 'string' ? req.body.language : undefined,
+        loop: typeof req.body?.loop === 'boolean' ? req.body.loop : undefined,
+        promptInfluence: typeof req.body?.promptInfluence === 'number'
+          ? req.body.promptInfluence
+          : undefined,
         compositionDir: req.body?.compositionDir,
         image: req.body?.image,
         onProgress: (line: any) => appendTaskProgress(task, line),

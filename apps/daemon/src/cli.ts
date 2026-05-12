@@ -40,6 +40,7 @@ const MEDIA_GENERATE_STRING_FLAGS = new Set([
   'aspect',
   'length',
   'duration',
+  'prompt-influence',
   'voice',
   'audio-kind',
   'composition-dir',
@@ -50,6 +51,7 @@ const MEDIA_GENERATE_STRING_FLAGS = new Set([
 const MEDIA_GENERATE_BOOLEAN_FLAGS = new Set([
   'help',
   'h',
+  'loop',
 ]);
 
 const MCP_STRING_FLAGS = new Set([
@@ -370,6 +372,8 @@ async function runMediaGenerate(rawArgs) {
   };
   if (flags.length != null) body.length = Number(flags.length);
   if (flags.duration != null) body.duration = Number(flags.duration);
+  if (flags['prompt-influence'] != null) body.promptInfluence = Number(flags['prompt-influence']);
+  if (flags.loop === true) body.loop = true;
 
   const url = `${daemonUrl.replace(/\/$/, '')}/api/projects/${encodeURIComponent(projectId)}/media/generate`;
   let resp;
@@ -608,6 +612,8 @@ Common options:
   --aspect 1:1|16:9|9:16|4:3|3:4
   --length <seconds>        Video length.
   --duration <seconds>      Audio duration.
+  --prompt-influence <0-1>  ElevenLabs SFX prompt adherence. Higher values follow the prompt more closely.
+  --loop                    ElevenLabs SFX only: request a seamless loop.
   --voice <voice-id>        Speech / TTS voice.
   --language <lang>         Language boost for TTS (e.g. Chinese,Yue for Cantonese).
   --audio-kind music|speech|sfx

@@ -29,6 +29,8 @@ Run media generation through the dispatcher:
   [--aspect 1:1|16:9|9:16|4:3|3:4] \\
   [--length <seconds>] \\
   [--duration <seconds>] \\
+  [--prompt-influence <0-1>] \\
+  [--loop] \\
   [--audio-kind music|speech|sfx] \\
   [--voice <provider-voice-id>] \\
   [--language <lang>]
@@ -52,6 +54,15 @@ Do not emit \`<artifact>\` blocks for media. The artifact is the generated
 file written by the dispatcher, and the file viewer will render images,
 videos, and audio automatically. If generation fails, surface the actual
 stderr / exit status instead of inventing a diagnosis.
+
+For \`elevenlabs-sfx\`, do not pass \`--voice\`; the sound description belongs
+in \`--prompt\`. Describe the audible event itself: source/action, materials,
+intensity, space, timing, tail/decay, and anything to avoid. Use
+\`--prompt-influence 0.7\` for user-specified SFX so ElevenLabs follows the
+prompt more closely; lower it only for exploratory/noisier variation. Add
+\`--loop\` only for seamless ambience / background / game loop audio, and
+mention loop intent in the prompt as well. SFX duration is capped at 30 seconds
+by the provider.
 
 Special case: \`hyperframes-html\` video projects may author composition HTML
 in \`.hyperframes-cache/\`, then render through the daemon-backed dispatcher
