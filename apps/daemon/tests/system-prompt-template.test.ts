@@ -275,6 +275,24 @@ describe('composeSystemPrompt — metadata.promptTemplate', () => {
     expect(out).not.toContain('## Codex built-in imagegen override');
   });
 
+  it('documents ElevenLabs speech and SFX routing in the media contract', () => {
+    const out = composeSystemPrompt({
+      metadata: {
+        kind: 'audio',
+        audioKind: 'speech',
+        audioModel: 'elevenlabs-v3',
+        audioDuration: 10,
+        voice: '21m00Tcm4TlvDq8ikWAM',
+      },
+    });
+
+    expect(out).toContain('`elevenlabs-v3`');
+    expect(out).toContain('`elevenlabs-sfx`');
+    expect(out).toContain('provider-specific ElevenLabs `voice_id`');
+    expect(out).toContain('sound description belongs in `--prompt`');
+    expect(out).toContain('SFX duration is capped at 30 seconds');
+  });
+
   it('does not add the Codex imagegen override for non-gpt-image models', () => {
     const out = composeSystemPrompt({
       agentId: 'codex',

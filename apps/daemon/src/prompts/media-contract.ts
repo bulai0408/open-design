@@ -263,6 +263,9 @@ substitution. Do not silently fall back.
     (example: \`male-qn-qingse\`). Do not pass natural-language voice
     descriptions like "warm Mandarin narrator" as \`--voice\`; omit the
     flag instead unless you have a real id.
+    For \`elevenlabs-v3\`, \`--voice\` expects a provider-specific ElevenLabs \`voice_id\`; do not pass a natural-language voice description there.
+    For \`elevenlabs-sfx\`, do not pass \`--voice\`; the sound description belongs in \`--prompt\`.
+    SFX duration is capped at 30 seconds by the provider.
     \`language\` enables pronunciation boost for specific languages
     (e.g. \`Chinese,Yue\` for Cantonese, \`Chinese\` for Mandarin).
 2. **One discovery turn before generating.** Even with metadata defaults
