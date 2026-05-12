@@ -36,6 +36,7 @@ import { DECK_FRAMEWORK_DIRECTIVE } from './deck-framework.js';
 import { MEDIA_GENERATION_CONTRACT } from './media-contract.js';
 
 export const BASE_SYSTEM_PROMPT = OFFICIAL_DESIGNER_PROMPT;
+const ELEVENLABS_VOICE_PROMPT_OPTION_LIMIT = 100;
 
 export interface AudioVoiceOption {
   name: string;
@@ -370,8 +371,8 @@ function renderMetadataBlock(
       lines.push(
         '- **ElevenLabs voice options**: Ask the user to choose from a dropdown select. The visible labels are voice descriptions; the selected value must be the exact `voice_id` passed to `--voice`. Do not ask the user to type an id.',
       );
-      if (voiceOptions.length > 12) {
-        lines.push(`- **ElevenLabs voice options**: showing the first 12 of ${voiceOptions.length} available voices.`);
+      if (voiceOptions.length > ELEVENLABS_VOICE_PROMPT_OPTION_LIMIT) {
+        lines.push(`- **ElevenLabs voice options**: showing the first ${ELEVENLABS_VOICE_PROMPT_OPTION_LIMIT} of ${voiceOptions.length} available voices.`);
       }
       lines.push('');
       lines.push('<question-form id="elevenlabs-voice" title="Choose an ElevenLabs voice">');
@@ -493,7 +494,7 @@ function renderElevenLabsVoiceQuestionForm(voiceOptions: AudioVoiceOption[]): {
   }>;
   submitLabel: string;
 } {
-  const options = voiceOptions.slice(0, 12).map((option) => ({
+  const options = voiceOptions.slice(0, ELEVENLABS_VOICE_PROMPT_OPTION_LIMIT).map((option) => ({
     label: formatElevenLabsVoiceLabel(option),
     value: option.voiceId,
   }));

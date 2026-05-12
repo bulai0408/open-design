@@ -301,10 +301,12 @@ substitution. Do not silently fall back.
 
 ### Detecting and surfacing provider errors
 
-Today the dispatcher ships two real provider integrations: \`openai\`
-(image, with Azure OpenAI auto-detected from the configured base URL)
-and \`volcengine\` (Doubao Seedance video / Seedream image). Other
-providers (suno-v5, kling, fishaudio, …) are still stubs.
+Today the dispatcher ships real provider integrations for OpenAI
+(image and speech, with Azure OpenAI auto-detected from the configured
+base URL), Volcengine (Doubao Seedance video / Seedream image), Grok
+image/video, Nano Banana image, HyperFrames video, and the MiniMax, FishAudio, and ElevenLabs audio renderers are production integrations.
+Models whose provider path has no renderer still return a configured
+stub/error signal as described below.
 
 The dispatcher tags every outcome explicitly. Treat the failure
 signals below as hard errors and surface them verbatim to the user —
@@ -340,8 +342,7 @@ do **not** narrate a stub as if it were the final result.
    provider call failed (\`providerError\` non-null) — surface that
    distinction in your reply.
 
-A few surfaces (audio, some long-tail image/video providers) are still
-intentional stubs. In that case you can narrate the placeholder as
-expected, but still mention to the user that the real provider
-integration hasn't landed.
+Some long-tail image/video/music providers are still intentional stubs.
+In that case you can narrate the placeholder as expected, but still
+mention to the user that the real provider integration hasn't landed.
 `;

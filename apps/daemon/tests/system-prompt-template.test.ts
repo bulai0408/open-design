@@ -291,9 +291,28 @@ describe('composeSystemPrompt — metadata.promptTemplate', () => {
     expect(out).toContain('provider-specific ElevenLabs `voice_id`');
     expect(out).toContain('sound description belongs in `--prompt`');
     expect(out).toContain('SFX duration is capped at 30 seconds');
+    expect(out).toContain('MiniMax, FishAudio, and ElevenLabs audio renderers are production integrations');
+    expect(out).not.toContain('fishaudio, …) are still stubs');
   });
 
   it('surfaces ElevenLabs voice options for project discovery when no voice was preselected', () => {
+    const voiceOptions = Array.from({ length: 50 }, (_, index) => {
+      const ordinal = index + 1;
+      return {
+        name: ordinal === 1 ? 'Rachel' : ordinal === 2 ? 'Adam' : `Voice ${ordinal}`,
+        voiceId: ordinal === 1
+          ? '21m00Tcm4TlvDq8ikWAM'
+          : ordinal === 2
+            ? 'pNInz6obpgDQGcFmaJgB'
+            : `voice-${ordinal}`,
+        category: 'premade',
+        labels: ordinal === 1
+          ? { accent: 'american', gender: 'female' }
+          : ordinal === 2
+            ? { accent: 'american', gender: 'male' }
+            : { language: ordinal === 50 ? 'mandarin' : 'english' },
+      };
+    });
     const out = composeSystemPrompt({
       metadata: {
         kind: 'audio',
@@ -301,20 +320,7 @@ describe('composeSystemPrompt — metadata.promptTemplate', () => {
         audioModel: 'elevenlabs-v3',
         audioDuration: 10,
       },
-      audioVoiceOptions: [
-        {
-          name: 'Rachel',
-          voiceId: '21m00Tcm4TlvDq8ikWAM',
-          category: 'premade',
-          labels: { accent: 'american', gender: 'female' },
-        },
-        {
-          name: 'Adam',
-          voiceId: 'pNInz6obpgDQGcFmaJgB',
-          category: 'premade',
-          labels: { accent: 'american', gender: 'male' },
-        },
-      ],
+      audioVoiceOptions: voiceOptions,
     });
 
     expect(out).toContain('ElevenLabs voice options');
@@ -323,6 +329,9 @@ describe('composeSystemPrompt — metadata.promptTemplate', () => {
     expect(out).toContain('"label": "Rachel — american · female"');
     expect(out).toContain('"value": "21m00Tcm4TlvDq8ikWAM"');
     expect(out).toContain('"label": "Adam — american · male"');
+    expect(out).toContain('"label": "Voice 50 — mandarin"');
+    expect(out).toContain('"value": "voice-50"');
+    expect(out).not.toContain('showing the first 12');
   });
 
   it('does not add the Codex imagegen override for non-gpt-image models', () => {

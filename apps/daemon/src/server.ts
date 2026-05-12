@@ -3001,7 +3001,7 @@ export async function startServer({
       !metadata?.voice
     ) {
       try {
-        audioVoiceOptions = await listElevenLabsVoiceOptions(PROJECT_ROOT, { limit: 12 });
+        audioVoiceOptions = await listElevenLabsVoiceOptions(PROJECT_ROOT, { limit: 100 });
       } catch (err) {
         console.warn(
           '[elevenlabs] voice option lookup failed:',

@@ -38,7 +38,7 @@ function normalizeVoice(value: unknown): AudioVoiceOption | null {
 export async function fetchElevenLabsVoiceOptions(
   signal?: AbortSignal,
 ): Promise<AudioVoiceOption[]> {
-  const response = await fetch('/api/media/providers/elevenlabs/voices?limit=12', {
+  const response = await fetch('/api/media/providers/elevenlabs/voices?limit=100', {
     signal,
   });
   if (!response.ok) return [];

@@ -1985,6 +1985,7 @@ function MediaProjectOptions(props:
         label={t('newproj.audioKindLabel')}
         options={[
           { value: 'speech' as const, title: t('newproj.audioKindSpeech') },
+          { value: 'sfx' as const, title: t('newproj.audioKindSfx') },
         ]}
         value={props.audioKind}
         onChange={props.onAudioKind}
@@ -2274,7 +2275,9 @@ function buildMetadata(input: {
       audioKind: input.audioKind,
       audioModel: input.audioModel,
       audioDuration: input.audioDuration,
-      voice: input.voice.trim() || undefined,
+      ...(input.audioKind === 'speech' && input.voice.trim()
+        ? { voice: input.voice.trim() }
+        : {}),
       ...inspirations,
     };
   }

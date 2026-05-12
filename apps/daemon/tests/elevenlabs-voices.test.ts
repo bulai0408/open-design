@@ -56,7 +56,7 @@ describe('ElevenLabs voice options', () => {
       },
     });
     const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
-      expect(String(input)).toBe(`${TEST_BASE_URL}/v2/voices?page_size=12`);
+      expect(String(input)).toBe(`${TEST_BASE_URL}/v2/voices?page_size=100`);
       expect(init?.method).toBe('GET');
       expect(init?.headers).toMatchObject({
         'xi-api-key': 'eleven-test-key',
@@ -85,7 +85,7 @@ describe('ElevenLabs voice options', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(listElevenLabsVoiceOptions(projectRoot, { limit: 12 })).resolves.toEqual([
+    await expect(listElevenLabsVoiceOptions(projectRoot, { limit: 100 })).resolves.toEqual([
       {
         voiceId: '21m00Tcm4TlvDq8ikWAM',
         name: 'Rachel',
@@ -122,8 +122,8 @@ describe('ElevenLabs voice options', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const first = await listElevenLabsVoiceOptions(projectRoot, { limit: 12 });
-    const second = await listElevenLabsVoiceOptions(projectRoot, { limit: 12 });
+    const first = await listElevenLabsVoiceOptions(projectRoot, { limit: 100 });
+    const second = await listElevenLabsVoiceOptions(projectRoot, { limit: 100 });
 
     expect(first).toEqual(second);
     expect(fetchMock).toHaveBeenCalledTimes(1);

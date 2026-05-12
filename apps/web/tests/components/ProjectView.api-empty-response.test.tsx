@@ -378,7 +378,7 @@ describe('ProjectView API empty response handling', () => {
   it('injects ElevenLabs voice options into API-mode audio project prompts', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === '/api/media/providers/elevenlabs/voices?limit=12') {
+      if (url === '/api/media/providers/elevenlabs/voices?limit=100') {
         return Response.json({
           voices: [
             {
@@ -430,7 +430,7 @@ describe('ProjectView API empty response handling', () => {
     expect(capturedSystemPrompt).toContain('"label": "Rachel — american · female"');
     expect(capturedSystemPrompt).toContain('"value": "21m00Tcm4TlvDq8ikWAM"');
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/media/providers/elevenlabs/voices?limit=12',
+      '/api/media/providers/elevenlabs/voices?limit=100',
       expect.any(Object),
     );
   });

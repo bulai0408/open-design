@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { resolveProviderConfig } from './media-config.js';
 
 const ELEVENLABS_DEFAULT_BASE_URL = 'https://api.elevenlabs.io';
-const ELEVENLABS_DEFAULT_VOICE_LIMIT = 12;
-const ELEVENLABS_MAX_VOICE_LIMIT = 50;
+const ELEVENLABS_DEFAULT_VOICE_LIMIT = 100;
+const ELEVENLABS_MAX_VOICE_LIMIT = 100;
 const ELEVENLABS_VOICE_CACHE_TTL_MS = 10 * 60 * 1000;
 
 type JsonRecord = Record<string, unknown>;

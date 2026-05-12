@@ -450,6 +450,44 @@ describe('NewProjectPanel design system defaults', () => {
     );
   });
 
+  it('exposes sound effects audio projects and switches to the ElevenLabs SFX model', () => {
+    const onCreate = vi.fn();
+    render(
+      <NewProjectPanel
+        skills={skills}
+        designSystems={designSystems}
+        defaultDesignSystemId="clay"
+        templates={[]}
+        promptTemplates={[]}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Audio' }));
+    expect(screen.getByRole('button', { name: 'SFX' })).toBeTruthy();
+    fireEvent.change(screen.getByTestId('new-project-name'), {
+      target: { value: 'Impact sound payload' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'SFX' }));
+    expect(screen.getByRole('button', { name: /elevenlabs-sfx/i }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByPlaceholderText('Provider voice id, optional')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('create-project'));
+
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Impact sound payload',
+        designSystemId: null,
+        metadata: expect.objectContaining({
+          kind: 'audio',
+          audioKind: 'sfx',
+          audioModel: 'elevenlabs-sfx',
+        }),
+      }),
+    );
+    expect(onCreate.mock.calls[0]?.[0].metadata).not.toHaveProperty('voice');
+  });
+
   it('pins skillId to hyperframes when the video model is hyperframes-html, regardless of skill discovery order', () => {
     // Reproduces PR #866 mrcfps's reported regression: when daemon `readdir()`
     // returns video skills in an order that puts `video-shortform` ahead of
