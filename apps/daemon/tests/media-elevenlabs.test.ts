@@ -107,4 +107,59 @@ describe('elevenlabs media generation', () => {
     const bytes = await readFile(path.join(projectsRoot, 'project-1', 'elevenlabs-speech.mp3'));
     expect(bytes.equals(mp3Bytes)).toBe(true);
   });
+
+  it('renders ElevenLabs sound effects', async () => {
+    await writeConfig({
+      providers: {
+        elevenlabs: {
+          apiKey: 'eleven-test-key',
+          baseUrl: TEST_ELEVENLABS_BASE_URL,
+        },
+      },
+    });
+
+    const mp3Bytes = Buffer.from([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x73, 0x66, 0x78]);
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      expect(String(input)).toBe(
+        `${TEST_ELEVENLABS_BASE_URL}/v1/sound-generation?output_format=mp3_44100_128`,
+      );
+      expect(init?.method).toBe('POST');
+      expect(init?.headers).toMatchObject({
+        'xi-api-key': 'eleven-test-key',
+        'content-type': 'application/json',
+      });
+      expect(JSON.parse(String(init?.body))).toEqual({
+        text: 'A cinematic whoosh between sections.',
+        duration_seconds: 30,
+        prompt_influence: 0.3,
+        model_id: 'eleven_text_to_sound_v2',
+      });
+
+      return new Response(mp3Bytes, {
+        status: 200,
+        headers: { 'content-type': 'audio/mpeg' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await generateMedia({
+      projectRoot,
+      projectsRoot,
+      projectId: 'project-1',
+      surface: 'audio',
+      model: 'elevenlabs-sfx',
+      audioKind: 'sfx',
+      duration: 120,
+      prompt: 'A cinematic whoosh between sections.',
+      output: 'elevenlabs-sfx.mp3',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.providerId).toBe('elevenlabs');
+    expect(result.providerNote).toContain('elevenlabs/eleven_text_to_sound_v2');
+    expect(result.providerNote).toContain('30s');
+
+    const bytes = await readFile(path.join(projectsRoot, 'project-1', 'elevenlabs-sfx.mp3'));
+    expect(bytes.equals(mp3Bytes)).toBe(true);
+  });
 });

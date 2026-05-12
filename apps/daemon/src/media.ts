@@ -427,6 +427,15 @@ export async function generateMedia(args: {
       bytes = result.bytes;
       providerNote = result.providerNote;
       suggestedExt = result.suggestedExt;
+    } else if (
+      def.provider === 'elevenlabs'
+      && surface === 'audio'
+      && ctx.audioKind === 'sfx'
+    ) {
+      const result = await renderElevenLabsSfx(ctx, credentials);
+      bytes = result.bytes;
+      providerNote = result.providerNote;
+      suggestedExt = result.suggestedExt;
     } else if (def.provider === 'hyperframes' && surface === 'video') {
       // HyperFrames is templated by the agent (it reads the vendored
       // skill at skills/hyperframes/SKILL.md and writes a composition
@@ -1388,6 +1397,15 @@ const ELEVENLABS_TTS_MODEL_MAP = {
   'elevenlabs-v3': 'eleven_v3',
 } as Record<string, string>;
 
+const ELEVENLABS_SFX_MODEL_MAP = {
+  'elevenlabs-sfx': 'eleven_text_to_sound_v2',
+} as Record<string, string>;
+
+function clampElevenLabsSfxDuration(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 5;
+  return Math.min(30, Math.max(0.5, value));
+}
+
 async function renderElevenLabsTTS(ctx: MediaContext, credentials: ProviderConfig): Promise<RenderResult> {
   if (!credentials.apiKey) {
     throw new Error(
@@ -1437,6 +1455,54 @@ async function renderElevenLabsTTS(ctx: MediaContext, credentials: ProviderConfi
   return {
     bytes,
     providerNote: `elevenlabs/${wireModel} · ${voiceId} · ${bytes.length} bytes`,
+    suggestedExt: '.mp3',
+  };
+}
+
+async function renderElevenLabsSfx(ctx: MediaContext, credentials: ProviderConfig): Promise<RenderResult> {
+  if (!credentials.apiKey) {
+    throw new Error(
+      'no ElevenLabs API key - configure it in Settings or set OD_ELEVENLABS_API_KEY',
+    );
+  }
+
+  const baseUrl = (credentials.baseUrl || ELEVENLABS_DEFAULT_BASE_URL).replace(
+    /\/$/,
+    '',
+  );
+  const wireModel = ELEVENLABS_SFX_MODEL_MAP[ctx.model] || ctx.model;
+  const text = (ctx.prompt && ctx.prompt.trim()) || 'A short cinematic transition sound.';
+  const durationSeconds = clampElevenLabsSfxDuration(ctx.duration);
+  const body = {
+    text,
+    duration_seconds: durationSeconds,
+    prompt_influence: 0.3,
+    model_id: wireModel,
+  };
+
+  const resp = await fetch(
+    `${baseUrl}/v1/sound-generation?output_format=mp3_44100_128`,
+    {
+      method: 'POST',
+      headers: {
+        'xi-api-key': credentials.apiKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`elevenlabs sfx ${resp.status}: ${truncate(errText, 240)}`);
+  }
+  const arr = await resp.arrayBuffer();
+  const bytes = Buffer.from(arr);
+  if (bytes.length === 0) {
+    throw new Error('elevenlabs sfx returned zero bytes');
+  }
+  return {
+    bytes,
+    providerNote: `elevenlabs/${wireModel} · ${durationSeconds}s · ${bytes.length} bytes`,
     suggestedExt: '.mp3',
   };
 }
