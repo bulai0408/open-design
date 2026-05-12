@@ -275,6 +275,34 @@ describe('elevenlabs media generation', () => {
     expect(bytes.equals(mp3Bytes)).toBe(true);
   });
 
+  it('rejects overlong ElevenLabs sound effects prompts before provider calls', async () => {
+    await writeConfig({
+      providers: {
+        elevenlabs: {
+          apiKey: 'eleven-test-key',
+          baseUrl: TEST_ELEVENLABS_BASE_URL,
+        },
+      },
+    });
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(generateMedia({
+      projectRoot,
+      projectsRoot,
+      projectId: 'project-1',
+      surface: 'audio',
+      model: 'elevenlabs-sfx',
+      audioKind: 'sfx',
+      duration: 10,
+      prompt: 'p'.repeat(451),
+      output: 'elevenlabs-sfx-too-long.mp3',
+    })).rejects.toThrow('ElevenLabs SFX prompt exceeds 450 characters (451)');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('clamps below-minimum ElevenLabs sound effects durations', async () => {
     await writeConfig({
       providers: {

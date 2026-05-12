@@ -1415,6 +1415,7 @@ const ELEVENLABS_TTS_MODEL_MAP = {
 const ELEVENLABS_SFX_MODEL_MAP = {
   'elevenlabs-sfx': 'eleven_text_to_sound_v2',
 } as Record<string, string>;
+const ELEVENLABS_SFX_MAX_PROMPT_CHARS = 450;
 const ELEVENLABS_SFX_DEFAULT_PROMPT_INFLUENCE = 0.3;
 
 function clampElevenLabsSfxDuration(value: unknown): number {
@@ -1427,6 +1428,15 @@ function clampElevenLabsSfxPromptInfluence(value: unknown): number {
     return ELEVENLABS_SFX_DEFAULT_PROMPT_INFLUENCE;
   }
   return Math.min(1, Math.max(0, value));
+}
+
+function assertElevenLabsSfxPromptLength(text: string) {
+  const promptChars = Array.from(text).length;
+  if (promptChars > ELEVENLABS_SFX_MAX_PROMPT_CHARS) {
+    throw new Error(
+      `ElevenLabs SFX prompt exceeds ${ELEVENLABS_SFX_MAX_PROMPT_CHARS} characters (${promptChars}). Shorten --prompt before retrying.`,
+    );
+  }
 }
 
 async function renderElevenLabsTTS(ctx: MediaContext, credentials: ProviderConfig): Promise<RenderResult> {
@@ -1495,6 +1505,7 @@ async function renderElevenLabsSfx(ctx: MediaContext, credentials: ProviderConfi
   );
   const wireModel = ELEVENLABS_SFX_MODEL_MAP[ctx.model] || ctx.model;
   const text = (ctx.prompt && ctx.prompt.trim()) || 'A short cinematic transition sound.';
+  assertElevenLabsSfxPromptLength(text);
   const durationSeconds = clampElevenLabsSfxDuration(ctx.duration);
   const promptInfluence = clampElevenLabsSfxPromptInfluence(ctx.promptInfluence);
   const body = {
