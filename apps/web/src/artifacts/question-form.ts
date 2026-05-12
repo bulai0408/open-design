@@ -58,14 +58,11 @@ export interface FormOption {
   description?: string;
 }
 
-export type FormOptionInput = string | FormOption;
-
 export interface FormQuestion {
   id: string;
   label: string;
   type: QuestionType;
-  /** Strings work as both label and value; object options split display label from submitted value. */
-  options?: FormOptionInput[];
+  options?: FormOption[];
   placeholder?: string;
   required?: boolean;
   help?: string;
@@ -90,16 +87,6 @@ export type FormSegment =
 
 const OPEN_RE = /<question-form\b([^>]*)>/i;
 const CLOSE_TAG = '</question-form>';
-
-type JsonRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is JsonRecord {
-  return value !== null && typeof value === 'object';
-}
-
-function readString(value: unknown): string {
-  return typeof value === 'string' && value.trim() ? value.trim() : '';
-}
 
 export function splitOnQuestionForms(input: string): FormSegment[] {
   const out: FormSegment[] = [];
@@ -178,9 +165,7 @@ function tryParseForm(body: string, attrs: Record<string, string>): QuestionForm
         : `q${i + 1}`;
     const label = typeof qo.label === 'string' ? qo.label : id;
     const type = normalizeType(qo.type);
-    const options = Array.isArray(qo.options)
-      ? qo.options.map((o) => parseOption(o)).filter((o): o is FormOptionInput => o !== null)
-      : undefined;
+    const options = parseOptions(qo.options);
     const placeholder = typeof qo.placeholder === 'string' ? qo.placeholder : undefined;
     const help = typeof qo.help === 'string' ? qo.help : undefined;
     const required = qo.required === true;
@@ -191,14 +176,7 @@ function tryParseForm(body: string, attrs: Record<string, string>): QuestionForm
         ? qo.maxSelections
         : undefined;
     const cards = parseDirectionCards(qo.cards);
-    const defaultValue =
-      typeof qo.defaultValue === 'string'
-        ? qo.defaultValue
-        : Array.isArray(qo.defaultValue)
-          ? qo.defaultValue.filter((v): v is string => typeof v === 'string')
-          : typeof qo.default === 'string'
-            ? qo.default
-            : undefined;
+    const defaultValue = parseDefaultValue(qo, options);
     questions.push({
       id,
       label,
@@ -227,23 +205,6 @@ function tryParseForm(body: string, attrs: Record<string, string>): QuestionForm
   };
 }
 
-function parseOption(value: unknown): FormOptionInput | null {
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return trimmed ? trimmed : null;
-  }
-  if (!isRecord(value)) return null;
-  const label = readString(value.label);
-  const optionValue = readString(value.value);
-  const description = readString(value.description);
-  if (!label && !optionValue) return null;
-  return {
-    label: label || optionValue,
-    value: optionValue || label,
-    ...(description ? { description } : {}),
-  };
-}
-
 function normalizeType(raw: unknown): QuestionType {
   if (typeof raw !== 'string') return 'text';
   const lower = raw.toLowerCase().trim();
@@ -259,6 +220,57 @@ function normalizeType(raw: unknown): QuestionType {
   )
     return 'direction-cards';
   return 'text';
+}
+
+function parseOptions(raw: unknown): FormOption[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const options = raw
+    .map(parseOption)
+    .filter((option): option is FormOption => option !== null);
+  return options.length > 0 ? options : undefined;
+}
+
+function parseOption(raw: unknown): FormOption | null {
+  if (typeof raw === 'string') {
+    const label = raw.trim();
+    return label.length > 0 ? { label, value: label } : null;
+  }
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const label = typeof obj.label === 'string' ? obj.label.trim() : '';
+  if (label.length === 0) return null;
+  const value =
+    typeof obj.value === 'string' && obj.value.trim().length > 0
+      ? obj.value.trim()
+      : label;
+  const description =
+    typeof obj.description === 'string' && obj.description.trim().length > 0
+      ? obj.description.trim()
+      : undefined;
+  return {
+    label,
+    value,
+    ...(description ? { description } : {}),
+  };
+}
+
+function parseDefaultValue(
+  question: Record<string, unknown>,
+  options: FormOption[] | undefined,
+): string | string[] | undefined {
+  const raw =
+    typeof question.defaultValue === 'string' || Array.isArray(question.defaultValue)
+      ? question.defaultValue
+      : typeof question.default === 'string'
+        ? question.default
+        : undefined;
+  if (typeof raw === 'string') return formOptionValueForLabel({ options }, raw);
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => formOptionValueForLabel({ options }, value));
+  }
+  return undefined;
 }
 
 function parseDirectionCards(raw: unknown): DirectionCard[] | undefined {
@@ -287,60 +299,6 @@ function parseDirectionCards(raw: unknown): DirectionCard[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
-export function normalizeFormOption(option: FormOptionInput): FormOption | null {
-  if (typeof option === 'string') {
-    const trimmed = option.trim();
-    return trimmed ? { label: trimmed, value: trimmed } : null;
-  }
-  const label = readString(option.label);
-  const value = readString(option.value);
-  if (!label && !value) return null;
-  const description = readString(option.description);
-  return {
-    label: label || value,
-    value: value || label,
-    ...(description ? { description } : {}),
-  };
-}
-
-export function normalizeFormOptions(
-  options: FormOptionInput[] | undefined,
-): FormOption[] | undefined {
-  if (!Array.isArray(options)) return undefined;
-  const normalized = options
-    .map((option) => normalizeFormOption(option))
-    .filter((option): option is FormOption => option !== null);
-  return normalized.length > 0 ? normalized : undefined;
-}
-
-export function describeFormOption(option: FormOptionInput): string {
-  const normalized = normalizeFormOption(option);
-  if (!normalized) return '';
-  return normalized.description
-    ? `${normalized.label} — ${normalized.description}`
-    : normalized.label;
-}
-
-export function canonicalizeFormAnswerValue(
-  options: FormOptionInput[] | undefined,
-  raw: string,
-): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return '';
-  const normalized = normalizeFormOptions(options);
-  if (!normalized) return trimmed;
-  const lower = trimmed.toLowerCase();
-  for (const option of normalized) {
-    const label = option.label.trim();
-    const description = option.description?.trim() ?? '';
-    const display = description ? `${label} — ${description}` : label;
-    if (option.value === trimmed) return option.value;
-    if (label.toLowerCase() === lower) return option.value;
-    if (display.toLowerCase() === lower) return option.value;
-  }
-  return trimmed;
-}
-
 /**
  * Format a finished set of answers into a prose user message that the
  * agent can read on its next turn. The shape is stable enough that the
@@ -357,17 +315,40 @@ export function formatFormAnswers(
     const v = answers[q.id];
     let display: string;
     if (Array.isArray(v)) {
-      const selected = v
-        .map((entry) => canonicalizeFormAnswerValue(q.options, entry))
-        .filter((entry) => entry.trim().length > 0);
-      display = selected.length > 0 ? selected.join(', ') : '(skipped)';
+      display = v.length > 0 ? v.map((value) => formOptionDisplayForValue(q, value)).join(', ') : '(skipped)';
     } else if (typeof v === 'string') {
-      const selected = canonicalizeFormAnswerValue(q.options, v);
-      display = selected.trim().length > 0 ? selected : '(skipped)';
-    } else {
-      display = '(skipped)';
+      display = v.trim().length > 0 ? formOptionDisplayForValue(q, v.trim()) : '(skipped)';
     }
+    else display = '(skipped)';
     lines.push(`- ${q.label}: ${display}`);
   }
   return lines.join('\n');
+}
+
+function formOptionDisplayForValue(
+  question: Pick<FormQuestion, 'options'>,
+  value: string,
+): string {
+  const match = question.options?.find((option) => option.value === value || option.label === value);
+  if (!match) return value;
+  if (match.value === match.label) return match.label;
+  return `${match.label} [value: ${match.value}]`;
+}
+
+export function formOptionLabelForValue(
+  question: Pick<FormQuestion, 'options'>,
+  value: string,
+): string {
+  const match = question.options?.find((option) => option.value === value || option.label === value);
+  return match?.label ?? value;
+}
+
+export function formOptionValueForLabel(
+  question: Pick<FormQuestion, 'options'>,
+  labelOrValue: string,
+): string {
+  const match = question.options?.find(
+    (option) => option.value === labelOrValue || option.label === labelOrValue,
+  );
+  return match?.value ?? labelOrValue;
 }

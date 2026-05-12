@@ -26,7 +26,8 @@ import {
   detectAgents,
   getAgentDef,
   isKnownModel,
-  resolveAgentBin,
+  applyAgentLaunchEnv,
+  resolveAgentLaunch,
   sanitizeCustomModel,
   spawnEnvForAgent,
 } from './agents.js';
@@ -3594,7 +3595,8 @@ export async function startServer({
       configuredAgentEnv = {};
     }
 
-    const resolvedBin = resolveAgentBin(agentId, configuredAgentEnv);
+    const agentLaunch = resolveAgentLaunch(def, configuredAgentEnv);
+    const resolvedBin = agentLaunch.selectedPath;
 
     const args = def.buildArgs(
       composed,
@@ -3616,7 +3618,7 @@ export async function startServer({
     // doesn't have to special-case it.
     const cmdShimBudgetError = checkWindowsCmdShimCommandLineBudget(
       def,
-      resolvedBin,
+      agentLaunch.launchPath ?? resolvedBin,
       args,
     );
     if (cmdShimBudgetError) {
@@ -3643,7 +3645,7 @@ export async function startServer({
     // users hit a generic `spawn ENAMETOOLONG`.
     const directExeBudgetError = checkWindowsDirectExeCommandLineBudget(
       def,
-      resolvedBin,
+      agentLaunch.launchPath ?? resolvedBin,
       args,
     );
     if (directExeBudgetError) {
@@ -3735,7 +3737,7 @@ export async function startServer({
     // pointing at /api/agents instead of silently falling back to
     // spawn(def.bin) — that fallback re-introduces the exact ENOENT symptom
     // from issue #10.
-    if (!resolvedBin) {
+    if (!resolvedBin || !agentLaunch.launchPath) {
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();
       send('error', createSseErrorPayload(
@@ -3791,7 +3793,7 @@ export async function startServer({
         def.promptViaStdin || def.streamFormat === 'acp-json-rpc'
           ? 'pipe'
           : 'ignore';
-      const env = {
+      const env = applyAgentLaunchEnv({
         ...spawnEnvForAgent(
           def.id,
           {
@@ -3801,10 +3803,10 @@ export async function startServer({
           configuredAgentEnv,
         ),
         ...odMediaEnv,
-      };
+      }, agentLaunch);
       spawnedAgentEnv = env;
       const invocation = createCommandInvocation({
-        command: resolvedBin,
+        command: agentLaunch.launchPath,
         args,
         env,
       });
@@ -4200,9 +4202,27 @@ export async function startServer({
         ));
         return design.runs.finish(run, 'failed', code, signal);
       }
+      // ACP agents that don't shut down on stdin.end() (e.g. Devin for
+      // Terminal) are forced to exit via SIGTERM from attachAcpSession after
+      // a clean prompt completion. Without an override, the chat run would
+      // be marked `failed` because `code === 0` fails (code is null on a
+      // signal exit). `completedSuccessfully()` reports whether the ACP
+      // session resolved without a fatal error or abort.
+      //
+      // Scope the override narrowly to the exact forced-shutdown shape this
+      // PR introduces: code is null AND signal is SIGTERM AND the ACP
+      // session reported clean completion. Any other post-response failure
+      // (non-zero exit code, SIGKILL, SIGSEGV, etc.) still propagates as
+      // `failed`, preserving the existing close-status behavior for genuine
+      // post-response process problems.
+      const acpCleanCompletion =
+        typeof acpSession?.completedSuccessfully === 'function' &&
+        acpSession.completedSuccessfully();
+      const acpForcedShutdown =
+        code === null && signal === 'SIGTERM' && acpCleanCompletion;
       const status = run.cancelRequested
         ? 'canceled'
-        : code === 0
+        : code === 0 || acpForcedShutdown
           ? 'succeeded'
           : 'failed';
       if (status === 'failed') {

@@ -21,9 +21,9 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  applyAgentLaunchEnv,
   getAgentDef,
-  inspectAgentExecutableResolution,
-  resolveAgentBin,
+  resolveAgentLaunch,
   spawnEnvForAgent,
 } from './agents.js';
 import { createCommandInvocation } from '@open-design/platform';
@@ -892,7 +892,10 @@ export function createAgentSink(): AgentSink {
 
 interface AgentSpawnHandle {
   child: ReturnType<typeof spawn>;
-  acpSession?: { hasFatalError?: () => boolean } | null;
+  acpSession?: {
+    hasFatalError?: () => boolean;
+    completedSuccessfully?: () => boolean;
+  } | null;
 }
 
 function attachAgentStreamHandlers(
@@ -904,7 +907,10 @@ function attachAgentStreamHandlers(
   send: (event: string, payload: unknown) => void,
   appendRawStdout?: (chunk: string) => void,
 ): AgentSpawnHandle {
-  let acpSession: { hasFatalError?: () => boolean } | null = null;
+  let acpSession: {
+    hasFatalError?: () => boolean;
+    completedSuccessfully?: () => boolean;
+  } | null = null;
   child.stdout?.setEncoding('utf8');
   child.stderr?.setEncoding('utf8');
   if (def.streamFormat === 'claude-stream-json') {
@@ -997,12 +1003,9 @@ async function testAgentConnectionInternal(
     validateAgentCliEnv(input.agentCliEnv),
     input.agentId,
   );
-  const executableResolution = inspectAgentExecutableResolution(
-    def,
-    configuredAgentEnv,
-  );
-  const resolvedBin = resolveAgentBin(input.agentId, configuredAgentEnv);
-  if (!resolvedBin) {
+  const executableResolution = resolveAgentLaunch(def, configuredAgentEnv);
+  const resolvedBin = executableResolution.selectedPath;
+  if (!resolvedBin || !executableResolution.launchPath) {
     return {
       ok: false,
       kind: 'agent_not_installed',
@@ -1122,16 +1125,16 @@ async function testAgentConnectionInternal(
     }
     const stdinMode =
       def.promptViaStdin || def.streamFormat === 'acp-json-rpc' ? 'pipe' : 'ignore';
-    const env = spawnEnvForAgent(
+    const env = applyAgentLaunchEnv(spawnEnvForAgent(
       input.agentId,
       {
         ...process.env,
         ...(def.env || {}),
       },
       configuredAgentEnv,
-    );
+    ), executableResolution);
     const invocation = createCommandInvocation({
-      command: resolvedBin,
+      command: executableResolution.launchPath,
       args,
       env,
     });
@@ -1170,11 +1173,11 @@ async function testAgentConnectionInternal(
         const latencyMs = Date.now() - start;
         const detail = redactSecrets(winner.error.message);
         const guidance = redactSecrets(
-          codexExecutableGuidance(
+          `${codexExecutableGuidance(
             input.agentId,
             executableResolution.configuredOverridePath,
             executableResolution.pathResolvedPath,
-          ),
+          )}${executableResolution.diagnostic ? ` ${executableResolution.diagnostic}` : ''}`,
         );
         const errnoCode = (winner.error as NodeJS.ErrnoException).code;
         const isMissing = errnoCode === 'ENOENT';
@@ -1193,7 +1196,28 @@ async function testAgentConnectionInternal(
 
       const latencyMs = Date.now() - start;
       const buffered = sink.getText().trim();
-      const exitedCleanly = winner.code === 0 && !winner.signal;
+      // ACP agents that don't shut down on stdin.end() (e.g. Devin for
+      // Terminal) are now SIGTERM'd from attachAcpSession after a clean
+      // prompt completion, which sets `winner.signal === 'SIGTERM'`. For
+      // that exact forced-shutdown shape we trust the ACP-level success
+      // signal so connection tests don't report `agent_spawn_failed`
+      // despite a healthy assistant response (see #1265 / #1286).
+      //
+      // Scope the override narrowly: only `code === null` AND
+      // `signal === 'SIGTERM'` AND `acpCleanCompletion` count as a clean
+      // forced shutdown. Any other post-response process failure (non-zero
+      // exit code, SIGKILL, SIGSEGV, etc.) still falls through to
+      // `agent_spawn_failed`, preserving the existing connection-test
+      // failure behavior for genuine post-response problems.
+      const acpCleanCompletion =
+        typeof acpSession?.completedSuccessfully === 'function' &&
+        acpSession.completedSuccessfully();
+      const acpForcedShutdown =
+        winner.code === null &&
+        winner.signal === 'SIGTERM' &&
+        acpCleanCompletion;
+      const exitedCleanly =
+        (winner.code === 0 && !winner.signal) || acpForcedShutdown;
       if (buffered) {
         const rawSample = truncateSample(buffered);
         if (rawSample && isLikelyModelErrorText(rawSample)) {
@@ -1236,11 +1260,11 @@ async function testAgentConnectionInternal(
           .join(' · '),
       );
       const guidance = redactSecrets(
-        codexExecutableGuidance(
+        `${codexExecutableGuidance(
           input.agentId,
           executableResolution.configuredOverridePath,
           executableResolution.pathResolvedPath,
-        ),
+        )}${executableResolution.diagnostic ? ` ${executableResolution.diagnostic}` : ''}`,
       );
       const label = buffered ? 'exit_failed' : 'no_text';
       console.warn(
@@ -1367,11 +1391,15 @@ export async function testAgentConnection(
   const configuredAgentEnv = agentCliEnvForAgent(validatedPrefs, input.agentId);
   const def = getAgentDef(input.agentId);
   const executableResolution = def
-    ? inspectAgentExecutableResolution(def, configuredAgentEnv)
+    ? resolveAgentLaunch(def, configuredAgentEnv)
     : {
         configuredOverridePath: null,
         pathResolvedPath: null,
         selectedPath: null,
+        launchPath: null,
+        launchKind: 'selected' as const,
+        childPathPrepend: [],
+        diagnostic: null,
       };
   if (
     input.agentId === 'codex' &&
@@ -1382,7 +1410,7 @@ export async function testAgentConnection(
       return {
         ...primaryResult,
         configuredExecutablePath: executableResolution.configuredOverridePath,
-        usedExecutablePath: executableResolution.configuredOverridePath,
+        usedExecutablePath: executableResolution.launchPath ?? executableResolution.configuredOverridePath,
         usedExecutableSource: 'configured',
         ...(executableResolution.pathResolvedPath
           ? { detectedExecutablePath: executableResolution.pathResolvedPath }
@@ -1399,7 +1427,7 @@ export async function testAgentConnection(
         ...primaryResult,
         configuredExecutablePath: configuredCodexBin,
         detectedExecutablePath: executableResolution.pathResolvedPath,
-        usedExecutablePath: executableResolution.pathResolvedPath,
+        usedExecutablePath: executableResolution.launchPath ?? executableResolution.pathResolvedPath,
         usedExecutableSource: 'fallback_invalid',
         detail: redactSecrets(
           codexInvalidConfiguredPathFallbackDetail(
@@ -1433,7 +1461,7 @@ export async function testAgentConnection(
     ...fallbackResult,
     configuredExecutablePath: executableResolution.configuredOverridePath,
     detectedExecutablePath: executableResolution.pathResolvedPath,
-    usedExecutablePath: executableResolution.pathResolvedPath,
+    usedExecutablePath: executableResolution.launchPath ?? executableResolution.pathResolvedPath,
     usedExecutableSource: 'fallback_failed',
     detail: redactSecrets(
       codexExecutableFallbackSuccessDetail(
