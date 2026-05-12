@@ -1,7 +1,13 @@
 import { useMemo, useState } from 'react';
 import { useT } from '../i18n';
-import type { DirectionCard, QuestionForm } from '../artifacts/question-form';
-import { formatFormAnswers } from '../artifacts/question-form';
+import {
+  canonicalizeFormAnswerValue,
+  describeFormOption,
+  formatFormAnswers,
+  normalizeFormOptions,
+  type DirectionCard,
+  type QuestionForm,
+} from '../artifacts/question-form';
 
 interface Props {
   form: QuestionForm;
@@ -90,6 +96,7 @@ export function QuestionFormView({ form, interactive, submittedAnswers, onSubmit
       <div className="question-form-body">
         {form.questions.map((q) => {
           const value = currentAnswers[q.id];
+          const options = normalizeFormOptions(q.options) ?? [];
           return (
             <div key={q.id} className="qf-field">
               <label className="qf-label">
@@ -99,49 +106,49 @@ export function QuestionFormView({ form, interactive, submittedAnswers, onSubmit
                 ) : null}
               </label>
               {q.help ? <div className="qf-help">{q.help}</div> : null}
-              {q.type === 'radio' && q.options ? (
+              {q.type === 'radio' && options.length > 0 ? (
                 <div className="qf-options">
-                  {q.options.map((opt) => (
-                    <label key={opt} className={`qf-chip${value === opt ? ' qf-chip-on' : ''}`}>
+                  {options.map((opt) => (
+                    <label key={opt.value} className={`qf-chip${value === opt.value ? ' qf-chip-on' : ''}`}>
                       <input
                         type="radio"
                         name={`${form.id}-${q.id}`}
-                        value={opt}
-                        checked={value === opt}
+                        value={opt.value}
+                        checked={value === opt.value}
                         disabled={locked}
-                        onChange={() => update(q.id, opt)}
+                        onChange={() => update(q.id, opt.value)}
                       />
-                      <span>{opt}</span>
+                      <span>{describeFormOption(opt)}</span>
                     </label>
                   ))}
                 </div>
               ) : null}
-              {q.type === 'checkbox' && q.options ? (
+              {q.type === 'checkbox' && options.length > 0 ? (
                 <div className="qf-options">
-                  {q.options.map((opt) => {
+                  {options.map((opt) => {
                     const arr = Array.isArray(value) ? value : [];
-                    const on = arr.includes(opt);
+                    const on = arr.includes(opt.value);
                     const maxed =
                       q.maxSelections !== undefined && !on && arr.length >= q.maxSelections;
                     return (
                       <label
-                        key={opt}
+                        key={opt.value}
                         className={`qf-chip${on ? ' qf-chip-on' : ''}${maxed ? ' qf-chip-disabled' : ''}`}
                       >
                         <input
                           type="checkbox"
-                          value={opt}
+                          value={opt.value}
                           checked={on}
                           disabled={locked || maxed}
-                          onChange={() => toggleCheckbox(q.id, opt, q.maxSelections)}
+                          onChange={() => toggleCheckbox(q.id, opt.value, q.maxSelections)}
                         />
-                        <span>{opt}</span>
+                        <span>{describeFormOption(opt)}</span>
                       </label>
                     );
                   })}
                 </div>
               ) : null}
-              {q.type === 'select' && q.options ? (
+              {q.type === 'select' && options.length > 0 ? (
                 <select
                   className="qf-select"
                   value={typeof value === 'string' ? value : ''}
@@ -149,11 +156,11 @@ export function QuestionFormView({ form, interactive, submittedAnswers, onSubmit
                   onChange={(e) => update(q.id, e.target.value)}
                 >
                   <option value="" disabled>
-                    {t('qf.choose')}
+                    {q.placeholder ?? t('qf.choose')}
                   </option>
-                  {q.options.map((opt) => (
-                    <option key={opt} value={opt}>
-                      {opt}
+                  {options.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {describeFormOption(opt)}
                     </option>
                   ))}
                 </select>
@@ -291,11 +298,11 @@ function buildInitialState(
   const out: Record<string, string | string[]> = {};
   for (const q of form.questions) {
     if (submitted && submitted[q.id] !== undefined) {
-      out[q.id] = submitted[q.id]!;
+      out[q.id] = canonicalizeQuestionValue(q, submitted[q.id]!);
       continue;
     }
     if (q.defaultValue !== undefined) {
-      out[q.id] = q.defaultValue;
+      out[q.id] = canonicalizeQuestionValue(q, q.defaultValue);
       continue;
     }
     if (q.type === 'checkbox') {
@@ -305,6 +312,16 @@ function buildInitialState(
     }
   }
   return out;
+}
+
+function canonicalizeQuestionValue(
+  q: QuestionForm['questions'][number],
+  value: string | string[],
+): string | string[] {
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalizeFormAnswerValue(q.options, entry));
+  }
+  return canonicalizeFormAnswerValue(q.options, value);
 }
 
 /**
@@ -339,10 +356,13 @@ export function parseSubmittedAnswers(
     if (q.type === 'checkbox') {
       answers[id] = value
         .split(',')
-        .map((s) => s.trim())
+        .map((s) => canonicalizeFormAnswerValue(q.options, s))
         .filter((s) => s.length > 0 && s.toLowerCase() !== '(skipped)');
     } else {
-      answers[id] = value.toLowerCase() === '(skipped)' ? '' : value;
+      answers[id] =
+        value.toLowerCase() === '(skipped)'
+          ? ''
+          : canonicalizeFormAnswerValue(q.options, value);
     }
   }
   return Object.keys(answers).length > 0 ? answers : null;

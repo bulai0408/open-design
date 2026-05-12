@@ -19,6 +19,7 @@ import {
   reattachDaemonRun,
   streamViaDaemon,
 } from '../providers/daemon';
+import { fetchElevenLabsVoiceOptions } from '../providers/elevenlabs-voices';
 import {
   deletePreviewComment,
   fetchPreviewComments,
@@ -34,6 +35,7 @@ import {
 import { useProjectFileEvents, type ProjectEvent } from '../providers/project-events';
 import {
   composeSystemPrompt,
+  type AudioVoiceOption,
   type MemorySystemPromptResponse,
   type ResearchOptions,
 } from '@open-design/contracts';
@@ -213,6 +215,14 @@ function appendLiveArtifactEventItem(
 
 export function projectSplitClassName(workspaceFocused: boolean): string {
   return workspaceFocused ? 'split split-focus' : 'split';
+}
+
+function shouldFetchElevenLabsVoiceOptions(project: Project): boolean {
+  const metadata = project.metadata;
+  return metadata?.kind === 'audio'
+    && metadata.audioKind === 'speech'
+    && metadata.audioModel === 'elevenlabs-v3'
+    && !metadata.voice;
 }
 
 function projectEventToAgentEvent(evt: ProjectEvent): LiveArtifactEventItem['event'] | null {
@@ -852,6 +862,16 @@ export function ProjectView({
     } catch {
       // Ignore; memory injection is best-effort.
     }
+    let audioVoiceOptions: AudioVoiceOption[] | undefined;
+    if (shouldFetchElevenLabsVoiceOptions(project)) {
+      try {
+        audioVoiceOptions = await fetchElevenLabsVoiceOptions();
+      } catch {
+        // Voice choices are a discovery aid only. If the daemon is offline,
+        // misconfigured, or ElevenLabs rejects the lookup, the agent can
+        // still ask for a custom voice id and render with the provider default.
+      }
+    }
     return composeSystemPrompt({
       skillBody,
       skillName,
@@ -861,6 +881,7 @@ export function ProjectView({
       memoryBody,
       metadata: project.metadata,
       template,
+      audioVoiceOptions,
       streamFormat: config.mode === 'api' ? 'plain' : undefined,
     });
   }, [

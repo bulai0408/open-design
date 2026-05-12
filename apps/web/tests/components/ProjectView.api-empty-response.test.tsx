@@ -181,10 +181,10 @@ const project: Project = {
   updatedAt: 1,
 };
 
-function renderProjectView() {
+function renderProjectView(renderProject: Project = project) {
   return render(
     <ProjectView
-      project={project}
+      project={renderProject}
       routeFileName={null}
       config={config}
       agents={[] as AgentInfo[]}
@@ -220,6 +220,7 @@ describe('ProjectView API empty response handling', () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('marks an empty API completion as a soft no-output state instead of succeeded', async () => {
@@ -372,6 +373,66 @@ describe('ProjectView API empty response handling', () => {
     await waitFor(() => expect(mockedWriteProjectTextFile).toHaveBeenCalled());
     expect(screen.queryByText(/provider ended the request/i)).toBeNull();
     expect(screen.queryByText('empty_response:deepseek-chat')).toBeNull();
+  });
+
+  it('injects ElevenLabs voice options into API-mode audio project prompts', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/media/providers/elevenlabs/voices?limit=12') {
+        return Response.json({
+          voices: [
+            {
+              name: 'Rachel',
+              voiceId: '21m00Tcm4TlvDq8ikWAM',
+              category: 'premade',
+              labels: { accent: 'american', gender: 'female' },
+            },
+          ],
+        });
+      }
+      if (url === '/api/memory/system-prompt') {
+        return Response.json({ body: '' });
+      }
+      if (url === '/api/memory/extract') {
+        return Response.json({ changed: [], attemptedLLM: false });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    let capturedSystemPrompt = '';
+    mockedStreamMessage.mockImplementation(async (
+      _cfg: AppConfig,
+      system: string,
+      _history: ChatMessage[],
+      _signal: AbortSignal,
+      handlers: StreamHandlers,
+    ) => {
+      capturedSystemPrompt = system;
+      handlers.onDelta('hello');
+      handlers.onDone('hello');
+    });
+
+    renderProjectView({
+      ...project,
+      metadata: {
+        kind: 'audio',
+        audioKind: 'speech',
+        audioModel: 'elevenlabs-v3',
+        audioDuration: 10,
+      },
+    });
+
+    await sendTestPrompt();
+
+    await waitFor(() => expect(capturedSystemPrompt).toContain('ElevenLabs voice options'));
+    expect(capturedSystemPrompt).toContain('<question-form id="elevenlabs-voice" title="Choose an ElevenLabs voice">');
+    expect(capturedSystemPrompt).toContain('"type": "select"');
+    expect(capturedSystemPrompt).toContain('"label": "Rachel — american · female"');
+    expect(capturedSystemPrompt).toContain('"value": "21m00Tcm4TlvDq8ikWAM"');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/media/providers/elevenlabs/voices?limit=12',
+      expect.any(Object),
+    );
   });
 });
 

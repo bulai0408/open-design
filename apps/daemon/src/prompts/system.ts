@@ -79,6 +79,12 @@ type ProjectMetadata = {
   } | null;
 };
 type ProjectTemplate = { name: string; description?: string | null; files: Array<{ name: string; content: string }> };
+type AudioVoiceOption = {
+  name: string;
+  voiceId: string;
+  category?: string | null;
+  labels?: Record<string, string> | null;
+};
 
 export const BASE_SYSTEM_PROMPT = OFFICIAL_DESIGNER_PROMPT;
 
@@ -121,6 +127,10 @@ export interface ComposeInput {
   // Snapshot of HTML files that the agent should treat as a starting
   // reference rather than a fixed deliverable.
   template?: ProjectTemplate | undefined;
+  // Provider voice choices fetched by the daemon/web before composing the
+  // prompt. Used for ElevenLabs speech discovery so the agent can render
+  // a select question-form instead of asking the user to paste raw ids.
+  audioVoiceOptions?: AudioVoiceOption[] | undefined;
   // When present and enabled, the Critique Theater protocol addendum is
   // concatenated to the end of the composed prompt. Omitting this field
   // (or passing cfg.enabled === false) preserves legacy behavior unchanged.
@@ -156,6 +166,7 @@ export function composeSystemPrompt({
   memoryBody,
   metadata,
   template,
+  audioVoiceOptions,
   critique,
   critiqueBrand,
   critiqueSkill,
@@ -216,7 +227,7 @@ export function composeSystemPrompt({
     );
   }
 
-  const metaBlock = renderMetadataBlock(metadata, template);
+  const metaBlock = renderMetadataBlock(metadata, template, audioVoiceOptions);
   if (metaBlock) parts.push(metaBlock);
 
   // Decks have a load-bearing framework (nav, counter, scroll JS, print
@@ -442,6 +453,7 @@ Do not silently fall back.`;
 function renderMetadataBlock(
   metadata: ProjectMetadata | undefined,
   template: ProjectTemplate | undefined,
+  audioVoiceOptions: AudioVoiceOption[] | undefined,
 ): string {
   if (!metadata) return '';
   const lines: string[] = [];
@@ -590,6 +602,21 @@ function renderMetadataBlock(
     } else if (metadata.audioKind === 'speech') {
       lines.push('- **voice**: (unknown — ask: voice id / accent / pacing)');
     }
+    const voiceOptions = shouldRenderElevenLabsVoiceOptions(metadata, audioVoiceOptions)
+      ? audioVoiceOptions ?? []
+      : [];
+    if (voiceOptions.length > 0) {
+      lines.push(
+        '- **ElevenLabs voice options**: Ask the user to choose from a dropdown select. The visible labels are voice descriptions; the selected value must be the exact `voice_id` passed to `--voice`. Do not ask the user to type an id.',
+      );
+      if (voiceOptions.length > 12) {
+        lines.push(`- **ElevenLabs voice options**: showing the first 12 of ${voiceOptions.length} available voices.`);
+      }
+      lines.push('');
+      lines.push('<question-form id="elevenlabs-voice" title="Choose an ElevenLabs voice">');
+      lines.push(JSON.stringify(renderElevenLabsVoiceQuestionForm(voiceOptions), null, 2));
+      lines.push('</question-form>');
+    }
     lines.push('');
     lines.push(
       'This is an **audio** project. Lock the content intent first, then dispatch via the **media generation contract** using `"$OD_NODE_BIN" "$OD_BIN" media generate --surface audio --audio-kind <kind> --model <audioModel> --duration <seconds>` and add `--voice <voice-id>` for speech when you have a provider-specific voice id. Do NOT emit `<artifact>` HTML.',
@@ -677,6 +704,65 @@ function renderMetadataBlock(
   }
 
   return lines.join('\n');
+}
+
+function shouldRenderElevenLabsVoiceOptions(
+  metadata: ProjectMetadata,
+  audioVoiceOptions: AudioVoiceOption[] | undefined,
+): boolean {
+  return metadata.kind === 'audio'
+    && metadata.audioKind === 'speech'
+    && metadata.audioModel === 'elevenlabs-v3'
+    && !metadata.voice
+    && Array.isArray(audioVoiceOptions)
+    && audioVoiceOptions.length > 0;
+}
+
+function renderElevenLabsVoiceQuestionForm(voiceOptions: AudioVoiceOption[]): {
+  description: string;
+  questions: Array<{
+    id: string;
+    label: string;
+    type: 'select';
+    required: boolean;
+    placeholder: string;
+    help: string;
+    options: Array<{ label: string; value: string }>;
+  }>;
+  submitLabel: string;
+} {
+  const options = voiceOptions.slice(0, 12).map((option) => ({
+    label: formatElevenLabsVoiceLabel(option),
+    value: option.voiceId,
+  }));
+  return {
+    description:
+      'Pick a voice by description. The selected answer will be the exact voice_id passed to the renderer.',
+    questions: [
+      {
+        id: 'voice',
+        label: 'Voice',
+        type: 'select',
+        required: true,
+        placeholder: 'Choose a voice',
+        help: 'Select a voice description; the answer submits the matching Voice ID.',
+        options,
+      },
+    ],
+    submitLabel: 'Use voice',
+  };
+}
+
+function formatElevenLabsVoiceLabel(option: AudioVoiceOption): string {
+  const labels = option.labels && typeof option.labels === 'object'
+    ? Object.values(option.labels)
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter(Boolean)
+    : [];
+  const bits = [...labels];
+  if (bits.length > 0) return `${option.name} — ${bits.join(' · ')}`;
+  const category = typeof option.category === 'string' ? option.category.trim() : '';
+  return category ? `${option.name} — ${category}` : option.name;
 }
 
 /**

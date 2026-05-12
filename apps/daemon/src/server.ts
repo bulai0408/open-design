@@ -96,6 +96,7 @@ import { loadCraftSections } from './craft.js';
 import { stageActiveSkill } from './cwd-aliases.js';
 import { buildDesktopPdfExportInput } from './pdf-export.js';
 import { generateMedia } from './media.js';
+import { listElevenLabsVoiceOptions } from './elevenlabs-voices.js';
 import { searchResearch, ResearchError } from './research/index.js';
 import { renderResearchCommandContract } from './prompts/research-contract.js';
 import {
@@ -2738,6 +2739,7 @@ export async function startServer({
     getLiveMediaTask: (taskId) => getLiveMediaTask(db, taskId),
     mediaTaskSnapshot,
     listMediaTasksByProject,
+    listElevenLabsVoiceOptions,
   };
   const appConfigDeps = { readAppConfig, writeAppConfig };
   const orbitDeps = { orbitService };
@@ -2991,6 +2993,22 @@ export async function startServer({
       metadata?.kind === 'template' && typeof metadata.templateId === 'string'
         ? (getTemplate(db, metadata.templateId) ?? undefined)
         : undefined;
+    let audioVoiceOptions = [];
+    if (
+      metadata?.kind === 'audio' &&
+      metadata?.audioKind === 'speech' &&
+      metadata?.audioModel === 'elevenlabs-v3' &&
+      !metadata?.voice
+    ) {
+      try {
+        audioVoiceOptions = await listElevenLabsVoiceOptions(PROJECT_ROOT, { limit: 12 });
+      } catch (err) {
+        console.warn(
+          '[elevenlabs] voice option lookup failed:',
+          err && err.message ? err.message : err,
+        );
+      }
+    }
 
     // Thread the critique config plus the active design-system / skill data
     // into the composer when critique is enabled. Without this the spawned
@@ -3050,6 +3068,7 @@ export async function startServer({
       memoryBody,
       metadata,
       template,
+      audioVoiceOptions,
       critique: critiqueShouldRun ? critiqueCfg : undefined,
       critiqueBrand: critiqueShouldRun ? critiqueBrand : undefined,
       critiqueSkill: critiqueShouldRun ? critiqueSkill : undefined,

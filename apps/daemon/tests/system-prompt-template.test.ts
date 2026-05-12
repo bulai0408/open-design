@@ -293,6 +293,38 @@ describe('composeSystemPrompt — metadata.promptTemplate', () => {
     expect(out).toContain('SFX duration is capped at 30 seconds');
   });
 
+  it('surfaces ElevenLabs voice options for project discovery when no voice was preselected', () => {
+    const out = composeSystemPrompt({
+      metadata: {
+        kind: 'audio',
+        audioKind: 'speech',
+        audioModel: 'elevenlabs-v3',
+        audioDuration: 10,
+      },
+      audioVoiceOptions: [
+        {
+          name: 'Rachel',
+          voiceId: '21m00Tcm4TlvDq8ikWAM',
+          category: 'premade',
+          labels: { accent: 'american', gender: 'female' },
+        },
+        {
+          name: 'Adam',
+          voiceId: 'pNInz6obpgDQGcFmaJgB',
+          category: 'premade',
+          labels: { accent: 'american', gender: 'male' },
+        },
+      ],
+    });
+
+    expect(out).toContain('ElevenLabs voice options');
+    expect(out).toContain('<question-form id="elevenlabs-voice" title="Choose an ElevenLabs voice">');
+    expect(out).toContain('"type": "select"');
+    expect(out).toContain('"label": "Rachel — american · female"');
+    expect(out).toContain('"value": "21m00Tcm4TlvDq8ikWAM"');
+    expect(out).toContain('"label": "Adam — american · male"');
+  });
+
   it('does not add the Codex imagegen override for non-gpt-image models', () => {
     const out = composeSystemPrompt({
       agentId: 'codex',
