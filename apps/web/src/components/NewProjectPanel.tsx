@@ -2022,7 +2022,7 @@ export function supportedModels(surface: 'image' | 'video' | 'audio', models: Me
   const supportedProviders: Record<'image' | 'video' | 'audio', Set<string>> = {
     image: new Set(['openai', 'volcengine', 'grok', 'nanobanana']),
     video: new Set(['volcengine', 'hyperframes', 'grok']),
-    audio: new Set(['minimax', 'fishaudio']),
+    audio: new Set(['minimax', 'fishaudio', 'elevenlabs']),
   };
   return models.filter((model) => {
     const provider = findProvider(model.provider);
