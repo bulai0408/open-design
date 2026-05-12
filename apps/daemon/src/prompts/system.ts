@@ -149,6 +149,10 @@ export interface ComposeInput {
   // prompt. Used for ElevenLabs speech discovery so the agent can render
   // a select question-form instead of asking the user to paste raw ids.
   audioVoiceOptions?: AudioVoiceOption[] | undefined;
+  // When voice discovery fails, surface the error reason so the agent
+  // can tell the user why the dropdown is unavailable instead of
+  // pretending there were simply no voices.
+  audioVoiceOptionsError?: string | undefined;
   // When present and enabled, the Critique Theater protocol addendum is
   // concatenated to the end of the composed prompt. Omitting this field
   // (or passing cfg.enabled === false) preserves legacy behavior unchanged.
@@ -187,6 +191,7 @@ export function composeSystemPrompt({
   metadata,
   template,
   audioVoiceOptions,
+  audioVoiceOptionsError,
   critique,
   critiqueBrand,
   critiqueSkill,
@@ -268,7 +273,7 @@ export function composeSystemPrompt({
     );
   }
 
-  const metaBlock = renderMetadataBlock(metadata, template, audioVoiceOptions);
+  const metaBlock = renderMetadataBlock(metadata, template, audioVoiceOptions, audioVoiceOptionsError);
   if (metaBlock) parts.push(metaBlock);
 
   // Decks have a load-bearing framework (nav, counter, scroll JS, print
@@ -495,6 +500,7 @@ function renderMetadataBlock(
   metadata: ProjectMetadata | undefined,
   template: ProjectTemplate | undefined,
   audioVoiceOptions: AudioVoiceOption[] | undefined,
+  audioVoiceOptionsError: string | undefined,
 ): string {
   if (!metadata) return '';
   const lines: string[] = [];
@@ -657,6 +663,10 @@ function renderMetadataBlock(
       lines.push('<question-form id="elevenlabs-voice" title="Choose an ElevenLabs voice">');
       lines.push(JSON.stringify(renderElevenLabsVoiceQuestionForm(voiceOptions), null, 2));
       lines.push('</question-form>');
+    } else if (typeof audioVoiceOptionsError === 'string' && audioVoiceOptionsError.trim().length > 0) {
+      lines.push(
+        `- **ElevenLabs voice options**: unavailable because ${audioVoiceOptionsError.trim()}. Tell the user the voice list could not be loaded; ask them to retry the lookup or paste a voice id manually.`,
+      );
     }
     if (metadata.audioKind === 'sfx') {
       lines.push(

@@ -120,6 +120,7 @@ vi.mock('../../src/components/ChatPane', () => ({
   ChatPane: ({
     messages,
     onSend,
+    error,
   }: {
     messages: ChatMessage[];
     onSend: (
@@ -127,8 +128,10 @@ vi.mock('../../src/components/ChatPane', () => ({
       attachments: ChatAttachment[],
       commentAttachments: ChatCommentAttachment[],
     ) => void;
+    error?: string | null;
   }) => (
     <div>
+      {error ? <div>{error}</div> : null}
       <button type="button" onClick={() => onSend('Create a login page', [], chatPaneMockState.commentAttachments)}>
         send
       </button>
@@ -429,6 +432,63 @@ describe('ProjectView API empty response handling', () => {
     expect(capturedSystemPrompt).toContain('"type": "select"');
     expect(capturedSystemPrompt).toContain('"label": "Rachel — american · female"');
     expect(capturedSystemPrompt).toContain('"value": "21m00Tcm4TlvDq8ikWAM"');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/media/providers/elevenlabs/voices?limit=100',
+      expect.any(Object),
+    );
+  });
+
+  it('surfaces ElevenLabs voice lookup failures in API-mode audio project prompts', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/media/providers/elevenlabs/voices?limit=100') {
+        return new Response(JSON.stringify({
+          error: 'upstream temporarily unavailable',
+        }), {
+          status: 502,
+          statusText: 'Bad Gateway',
+          headers: {
+            'content-type': 'application/json',
+          },
+        });
+      }
+      if (url === '/api/memory/system-prompt') {
+        return Response.json({ body: '' });
+      }
+      if (url === '/api/memory/extract') {
+        return Response.json({ changed: [], attemptedLLM: false });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    let capturedSystemPrompt = '';
+    mockedStreamMessage.mockImplementation(async (
+      _cfg: AppConfig,
+      system: string,
+      _history: ChatMessage[],
+      _signal: AbortSignal,
+      handlers: StreamHandlers,
+    ) => {
+      capturedSystemPrompt = system;
+      handlers.onDelta('hello');
+      handlers.onDone('hello');
+    });
+
+    renderProjectView({
+      ...project,
+      metadata: {
+        kind: 'audio',
+        audioKind: 'speech',
+        audioModel: 'elevenlabs-v3',
+        audioDuration: 10,
+      },
+    });
+
+    await sendTestPrompt();
+
+    await waitFor(() => expect(capturedSystemPrompt).toContain('ElevenLabs voice options'));
+    expect(capturedSystemPrompt).toContain('voice list could not be loaded');
+    expect(screen.getByText(/ElevenLabs voice list could not be loaded/i)).toBeTruthy();
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/media/providers/elevenlabs/voices?limit=100',
       expect.any(Object),

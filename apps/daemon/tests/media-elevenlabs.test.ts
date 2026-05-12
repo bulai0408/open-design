@@ -108,6 +108,34 @@ describe('elevenlabs media generation', () => {
     expect(bytes.equals(mp3Bytes)).toBe(true);
   });
 
+  it('rejects blank ElevenLabs speech prompts before provider calls', async () => {
+    await writeConfig({
+      providers: {
+        elevenlabs: {
+          apiKey: 'eleven-test-key',
+          baseUrl: TEST_ELEVENLABS_BASE_URL,
+        },
+      },
+    });
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(generateMedia({
+      projectRoot,
+      projectsRoot,
+      projectId: 'project-1',
+      surface: 'audio',
+      model: 'elevenlabs-v3',
+      audioKind: 'speech',
+      voice: 'voice-123',
+      prompt: '   ',
+      output: 'elevenlabs-speech-empty.mp3',
+    })).rejects.toThrow('ElevenLabs TTS prompt must not be empty');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('renders ElevenLabs sound effects', async () => {
     await writeConfig({
       providers: {
@@ -273,6 +301,34 @@ describe('elevenlabs media generation', () => {
 
     const bytes = await readFile(path.join(projectsRoot, 'project-1', 'elevenlabs-sfx-loop.mp3'));
     expect(bytes.equals(mp3Bytes)).toBe(true);
+  });
+
+  it('rejects blank ElevenLabs sound effect prompts before provider calls', async () => {
+    await writeConfig({
+      providers: {
+        elevenlabs: {
+          apiKey: 'eleven-test-key',
+          baseUrl: TEST_ELEVENLABS_BASE_URL,
+        },
+      },
+    });
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(generateMedia({
+      projectRoot,
+      projectsRoot,
+      projectId: 'project-1',
+      surface: 'audio',
+      model: 'elevenlabs-sfx',
+      audioKind: 'sfx',
+      duration: 10,
+      prompt: '   ',
+      output: 'elevenlabs-sfx-empty.mp3',
+    })).rejects.toThrow('ElevenLabs SFX prompt must not be empty');
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects overlong ElevenLabs sound effects prompts before provider calls', async () => {

@@ -3025,6 +3025,7 @@ export async function startServer({
         ? (getTemplate(db, metadata.templateId) ?? undefined)
         : undefined;
     let audioVoiceOptions = [];
+    let audioVoiceOptionsError;
     if (
       metadata?.kind === 'audio' &&
       metadata?.audioKind === 'speech' &&
@@ -3034,10 +3035,8 @@ export async function startServer({
       try {
         audioVoiceOptions = await listElevenLabsVoiceOptions(PROJECT_ROOT, { limit: 100 });
       } catch (err) {
-        console.warn(
-          '[elevenlabs] voice option lookup failed:',
-          err && err.message ? err.message : err,
-        );
+        audioVoiceOptionsError = err && err.message ? err.message : String(err);
+        console.warn('[elevenlabs] voice option lookup failed:', audioVoiceOptionsError);
       }
     }
 
@@ -3102,6 +3101,7 @@ export async function startServer({
       metadata,
       template,
       audioVoiceOptions,
+      audioVoiceOptionsError,
       critique: critiqueShouldRun ? critiqueCfg : undefined,
       critiqueBrand: critiqueShouldRun ? critiqueBrand : undefined,
       critiqueSkill: critiqueShouldRun ? critiqueSkill : undefined,

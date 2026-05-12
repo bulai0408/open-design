@@ -20,6 +20,37 @@ function readLabels(value: unknown): Record<string, string> | undefined {
   return Object.keys(labels).length > 0 ? labels : undefined;
 }
 
+async function readLookupErrorDetail(response: Response): Promise<string> {
+  const contentType = response.headers.get('content-type') ?? '';
+  if (contentType.includes('json')) {
+    try {
+      const payload = await response.clone().json() as unknown;
+      if (isRecord(payload)) {
+        const message = readString(payload.error)
+          || readString(payload.message)
+          || readString(payload.detail);
+        if (message) return message;
+      }
+    } catch {
+      // Fall through to the raw body text below.
+    }
+  }
+
+  try {
+    return readString(await response.text());
+  } catch {
+    return '';
+  }
+}
+
+function formatLookupError(response: Response, detail: string): string {
+  const statusText = readString(response.statusText);
+  const statusLabel = statusText ? `${response.status} ${statusText}` : String(response.status);
+  return detail
+    ? `ElevenLabs voice list could not be loaded (${statusLabel}): ${detail}`
+    : `ElevenLabs voice list could not be loaded (${statusLabel})`;
+}
+
 function normalizeVoice(value: unknown): AudioVoiceOption | null {
   if (!isRecord(value)) return null;
   const voiceId = readString(value.voiceId);
@@ -41,7 +72,10 @@ export async function fetchElevenLabsVoiceOptions(
   const response = await fetch('/api/media/providers/elevenlabs/voices?limit=100', {
     signal,
   });
-  if (!response.ok) return [];
+  if (!response.ok) {
+    const detail = await readLookupErrorDetail(response);
+    throw new Error(formatLookupError(response, detail));
+  }
   const payload = await response.json() as unknown;
   const rawVoices = isRecord(payload) && Array.isArray(payload.voices)
     ? payload.voices

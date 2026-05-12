@@ -79,6 +79,10 @@ export interface ComposeInput {
   // render a select question-form instead of asking the user to paste
   // raw ids.
   audioVoiceOptions?: AudioVoiceOption[] | undefined;
+  // When voice discovery fails, surface the error reason so the agent
+  // can tell the user why the dropdown is unavailable instead of
+  // pretending there were simply no voices.
+  audioVoiceOptionsError?: string | undefined;
   // When set to 'plain', suppresses tool_calls so API/BYOK-mode models
   // only emit <artifact> blocks (they cannot execute tools).
   streamFormat?: string | undefined;
@@ -94,6 +98,7 @@ export function composeSystemPrompt({
   metadata,
   template,
   audioVoiceOptions,
+  audioVoiceOptionsError,
   streamFormat,
 }: ComposeInput): string {
   // Discovery + philosophy goes FIRST so its hard rules ("emit a form on
@@ -147,7 +152,7 @@ export function composeSystemPrompt({
     );
   }
 
-  const metaBlock = renderMetadataBlock(metadata, template, audioVoiceOptions);
+  const metaBlock = renderMetadataBlock(metadata, template, audioVoiceOptions, audioVoiceOptionsError);
   if (metaBlock) parts.push(metaBlock);
 
   // Decks have a load-bearing framework (nav, counter, scroll JS, print
@@ -224,6 +229,7 @@ function renderMetadataBlock(
   metadata: ProjectMetadata | undefined,
   template: ProjectTemplate | undefined,
   audioVoiceOptions: AudioVoiceOption[] | undefined,
+  audioVoiceOptionsError: string | undefined,
 ): string {
   if (!metadata) return '';
   const lines: string[] = [];
@@ -378,6 +384,10 @@ function renderMetadataBlock(
       lines.push('<question-form id="elevenlabs-voice" title="Choose an ElevenLabs voice">');
       lines.push(JSON.stringify(renderElevenLabsVoiceQuestionForm(voiceOptions), null, 2));
       lines.push('</question-form>');
+    } else if (typeof audioVoiceOptionsError === 'string' && audioVoiceOptionsError.trim().length > 0) {
+      lines.push(
+        `- **ElevenLabs voice options**: unavailable because ${audioVoiceOptionsError.trim()}. Tell the user the voice list could not be loaded; ask them to retry the lookup or paste a voice id manually.`,
+      );
     }
     if (metadata.audioKind === 'sfx') {
       lines.push(

@@ -1430,6 +1430,14 @@ function clampElevenLabsSfxPromptInfluence(value: unknown): number {
   return Math.min(1, Math.max(0, value));
 }
 
+function requireElevenLabsPrompt(text: string, kind: 'TTS' | 'SFX'): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error(`ElevenLabs ${kind} prompt must not be empty. Pass --prompt before retrying.`);
+  }
+  return trimmed;
+}
+
 function assertElevenLabsSfxPromptLength(text: string) {
   const promptChars = Array.from(text).length;
   if (promptChars > ELEVENLABS_SFX_MAX_PROMPT_CHARS) {
@@ -1451,7 +1459,7 @@ async function renderElevenLabsTTS(ctx: MediaContext, credentials: ProviderConfi
     '',
   );
   const wireModel = ELEVENLABS_TTS_MODEL_MAP[ctx.model] || ctx.model;
-  const text = (ctx.prompt && ctx.prompt.trim()) || 'This is a test.';
+  const text = requireElevenLabsPrompt(ctx.prompt ?? '', 'TTS');
   const voiceId = (ctx.voice && ctx.voice.trim()) || ELEVENLABS_DEFAULT_VOICE_ID;
   const body = {
     text,
@@ -1504,7 +1512,7 @@ async function renderElevenLabsSfx(ctx: MediaContext, credentials: ProviderConfi
     '',
   );
   const wireModel = ELEVENLABS_SFX_MODEL_MAP[ctx.model] || ctx.model;
-  const text = (ctx.prompt && ctx.prompt.trim()) || 'A short cinematic transition sound.';
+  const text = requireElevenLabsPrompt(ctx.prompt ?? '', 'SFX');
   assertElevenLabsSfxPromptLength(text);
   const durationSeconds = clampElevenLabsSfxDuration(ctx.duration);
   const promptInfluence = clampElevenLabsSfxPromptInfluence(ctx.promptInfluence);

@@ -55,4 +55,22 @@ describe('composeSystemPrompt — audio voice options', () => {
     expect(prompt).not.toContain('showing the first 12');
     expect(prompt).toContain('selected value must be the exact `voice_id`');
   });
+
+  it('surfaces ElevenLabs voice lookup failures in the prompt', () => {
+    const prompt = composeSystemPrompt({
+      streamFormat: 'plain',
+      metadata: {
+        kind: 'audio',
+        audioKind: 'speech',
+        audioModel: 'elevenlabs-v3',
+        audioDuration: 10,
+      },
+      audioVoiceOptionsError: 'ElevenLabs voice list could not be loaded (502): upstream temporarily unavailable',
+    } as Parameters<typeof composeSystemPrompt>[0]);
+
+    expect(prompt).toContain('ElevenLabs voice options');
+    expect(prompt).toContain('voice list could not be loaded');
+    expect(prompt).toContain('retry the lookup or paste a voice id manually');
+    expect(prompt).not.toContain('<question-form id="elevenlabs-voice"');
+  });
 });

@@ -338,6 +338,7 @@ export function ProjectView({
   const [attachedComments, setAttachedComments] = useState<PreviewComment[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [audioVoiceOptionsError, setAudioVoiceOptionsError] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   const [filesRefresh, setFilesRefresh] = useState(0);
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
@@ -456,6 +457,7 @@ export function ProjectView({
     setAttachedComments([]);
     setStreaming(false);
     setError(null);
+    setAudioVoiceOptionsError(null);
     setArtifact(null);
     savedArtifactRef.current = null;
     pendingWritesRef.current.clear();
@@ -864,14 +866,20 @@ export function ProjectView({
       // Ignore; memory injection is best-effort.
     }
     let audioVoiceOptions: AudioVoiceOption[] | undefined;
+    let audioVoiceOptionsLookupError: string | undefined;
     if (shouldFetchElevenLabsVoiceOptions(project)) {
       try {
         audioVoiceOptions = await fetchElevenLabsVoiceOptions();
-      } catch {
-        // Voice choices are a discovery aid only. If the daemon is offline,
-        // misconfigured, or ElevenLabs rejects the lookup, the agent can
-        // still ask for a custom voice id and render with the provider default.
+        setAudioVoiceOptionsError(null);
+      } catch (err) {
+        const message = err instanceof Error
+          ? err.message
+          : 'ElevenLabs voice list could not be loaded.';
+        audioVoiceOptionsLookupError = message;
+        setAudioVoiceOptionsError(message);
       }
+    } else {
+      setAudioVoiceOptionsError(null);
     }
     return composeSystemPrompt({
       skillBody,
@@ -883,6 +891,7 @@ export function ProjectView({
       metadata: project.metadata,
       template,
       audioVoiceOptions,
+      audioVoiceOptionsError: audioVoiceOptionsLookupError,
       streamFormat: config.mode === 'api' ? 'plain' : undefined,
     });
   }, [
@@ -2456,7 +2465,7 @@ export function ProjectView({
               messages={messages}
               streaming={currentConversationStreaming}
               sendDisabled={currentConversationSendDisabled}
-              error={conversationLoadError ?? error}
+              error={conversationLoadError ?? error ?? audioVoiceOptionsError}
               projectId={project.id}
               projectFiles={projectFiles}
               projectFileNames={projectFileNames}

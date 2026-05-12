@@ -339,6 +339,23 @@ describe('composeSystemPrompt — metadata.promptTemplate', () => {
     expect(out).not.toContain('showing the first 12');
   });
 
+  it('surfaces ElevenLabs voice lookup failures for project discovery', () => {
+    const out = composeSystemPrompt({
+      metadata: {
+        kind: 'audio',
+        audioKind: 'speech',
+        audioModel: 'elevenlabs-v3',
+        audioDuration: 10,
+      },
+      audioVoiceOptionsError: 'ElevenLabs voice list could not be loaded (502): upstream temporarily unavailable',
+    } as Parameters<typeof composeSystemPrompt>[0]);
+
+    expect(out).toContain('ElevenLabs voice options');
+    expect(out).toContain('voice list could not be loaded');
+    expect(out).toContain('retry the lookup or paste a voice id manually');
+    expect(out).not.toContain('<question-form id="elevenlabs-voice"');
+  });
+
   it('does not add the Codex imagegen override for non-gpt-image models', () => {
     const out = composeSystemPrompt({
       agentId: 'codex',
