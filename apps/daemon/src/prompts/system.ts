@@ -38,6 +38,48 @@ import { renderPanelPrompt } from './panel.js';
 import { defaultCritiqueConfig, type CritiqueConfig } from '@open-design/contracts/critique';
 
 const ELEVENLABS_VOICE_PROMPT_OPTION_LIMIT = 100;
+const ELEVENLABS_VOICE_OPTIONS_PROMPT_PREFIX = 'ElevenLabs voice list could not be loaded';
+const PROMPT_SAFE_HTTP_STATUS_LABELS: Record<string, string> = {
+  '400': 'Bad Request',
+  '401': 'Unauthorized',
+  '403': 'Forbidden',
+  '404': 'Not Found',
+  '429': 'Too Many Requests',
+  '500': 'Internal Server Error',
+  '502': 'Bad Gateway',
+  '503': 'Service Unavailable',
+  '504': 'Gateway Timeout',
+};
+
+function normalizePromptText(value: string): string {
+  return value
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function formatElevenLabsVoiceOptionsErrorForPrompt(
+  error: string | undefined,
+): string | undefined {
+  const trimmed = normalizePromptText(error ?? '');
+  if (!trimmed) return undefined;
+
+  if (/no ElevenLabs API key/i.test(trimmed)) {
+    return `${ELEVENLABS_VOICE_OPTIONS_PROMPT_PREFIX} because the ElevenLabs API key is missing. Tell the user to configure it in Settings or paste a voice id manually.`;
+  }
+
+  const statusMatch = trimmed.match(
+    /(?:\((\d{3})(?:\s+([^)]+))?\)|\b(\d{3})(?:\s+([A-Za-z][A-Za-z -]{0,40}))?\b)/,
+  );
+  if (statusMatch) {
+    const statusCode = statusMatch[1] ?? statusMatch[3];
+    const statusText = statusCode ? PROMPT_SAFE_HTTP_STATUS_LABELS[statusCode] ?? '' : '';
+    const suffix = statusText ? ` ${statusText}` : '';
+    return `${ELEVENLABS_VOICE_OPTIONS_PROMPT_PREFIX} (${statusCode}${suffix}). Tell the user to retry the lookup or paste a voice id manually.`;
+  }
+
+  return `${ELEVENLABS_VOICE_OPTIONS_PROMPT_PREFIX}. Tell the user to retry the lookup or paste a voice id manually.`;
+}
 
 type ProjectMetadata = {
   kind?: string;
@@ -663,10 +705,13 @@ function renderMetadataBlock(
       lines.push('<question-form id="elevenlabs-voice" title="Choose an ElevenLabs voice">');
       lines.push(JSON.stringify(renderElevenLabsVoiceQuestionForm(voiceOptions), null, 2));
       lines.push('</question-form>');
-    } else if (typeof audioVoiceOptionsError === 'string' && audioVoiceOptionsError.trim().length > 0) {
-      lines.push(
-        `- **ElevenLabs voice options**: unavailable because ${audioVoiceOptionsError.trim()}. Tell the user the voice list could not be loaded; ask them to retry the lookup or paste a voice id manually.`,
-      );
+    } else {
+      const audioVoiceOptionsPromptError = formatElevenLabsVoiceOptionsErrorForPrompt(audioVoiceOptionsError);
+      if (audioVoiceOptionsPromptError) {
+        lines.push(
+          `- **ElevenLabs voice options**: ${audioVoiceOptionsPromptError}`,
+        );
+      }
     }
     if (metadata.audioKind === 'sfx') {
       lines.push(
