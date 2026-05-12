@@ -619,6 +619,7 @@ export interface Dict {
   'newproj.tabLiveArtifact': string;
   'newproj.tabDeck': string;
   'newproj.tabTemplate': string;
+  'newproj.tabMedia': string;
   'newproj.tabOther': string;
   'newproj.titlePrototype': string;
   'newproj.titleLiveArtifact': string;
@@ -627,6 +628,7 @@ export interface Dict {
   'newproj.titleImage': string;
   'newproj.titleVideo': string;
   'newproj.titleAudio': string;
+  'newproj.titleMedia': string;
   'newproj.titleOther': string;
   'newproj.namePlaceholder': string;
   'newproj.fidelityLabel': string;
@@ -677,9 +679,12 @@ export interface Dict {
   'newproj.surfaceVideo': string;
   'newproj.surfaceAudio': string;
   'newproj.modelLabel': string;
+  'newproj.modelSearch': string;
+  'newproj.modelEmpty': string;
+  'newproj.modelRecommended': string;
+  'newproj.modelMissingTitle': string;
+  'newproj.modelMissingSub': string;
   'newproj.aspectLabel': string;
-  'newproj.imageStyleLabel': string;
-  'newproj.imageStylePlaceholder': string;
   'newproj.videoLengthLabel': string;
   'newproj.videoLengthSeconds': string;
   'newproj.audioKindLabel': string;
@@ -761,6 +766,22 @@ export interface Dict {
   'designs.viewKanban': string;
   'designs.kanbanEmptyColumn': string;
   'designs.deleteAria': string;
+  'designs.menuMore': string;
+  'designs.menuRename': string;
+  'designs.menuDelete': string;
+  'designs.renamePrompt': string;
+  'designs.selectMode': string;
+  'designs.cancelSelect': string;
+  'designs.deleteSelected': string;
+  'designs.selectedCount': string;
+  'designs.deleteSelectedConfirm': string;
+  'designs.tagPrototype': string;
+  'designs.tagLiveArtifact': string;
+  'designs.tagSlide': string;
+  'designs.tagMedia': string;
+  'designs.renameTitle': string;
+  'designs.renameSave': string;
+  'designs.renameCancel': string;
 
   // Examples tab
   'examples.typeLabel': string;

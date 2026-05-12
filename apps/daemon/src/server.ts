@@ -37,7 +37,7 @@ import { installFromTarget, uninstallById, sanitizeRepoName } from './library-in
 import { buildWindowsFolderDialogCommand, parseFolderDialogStdout } from './native-folder-dialog.js';
 import { listCodexPets, readCodexPetSpritesheet } from './codex-pets.js';
 import { syncCommunityPets } from './community-pets-sync.js';
-import { listDesignSystems, readDesignSystem } from './design-systems.js';
+import { listDesignSystems, readDesignSystem, readDesignSystemAssets } from './design-systems.js';
 import {
   composeMemoryBody,
   deleteMemoryEntry,
@@ -185,6 +185,8 @@ import {
   insertRoutine,
   insertRoutineRun,
   insertTemplate,
+  findTemplateByNameAndProject,
+  updateTemplate,
   listProjectsAwaitingInput,
   listConversations,
   listDeployments,
@@ -2671,7 +2673,7 @@ export async function startServer({
     updatePreviewCommentStatus,
     deletePreviewComment,
   };
-  const templateDeps = { getTemplate, listTemplates, deleteTemplate, insertTemplate };
+  const templateDeps = { getTemplate, listTemplates, deleteTemplate, insertTemplate, findTemplateByNameAndProject, updateTemplate };
   const projectStatusDeps = {
     listLatestProjectRunStatuses,
     listProjectsAwaitingInput,
@@ -2884,6 +2886,8 @@ export async function startServer({
     paths: pathDeps,
     projectStore: projectStoreDeps,
     exports: projectExportDeps,
+    projectFiles: projectFileDeps,
+    validation: validationDeps,
   });
   registerProjectFileRoutes(app, {
     db,
@@ -2979,6 +2983,15 @@ export async function startServer({
 
     let designSystemBody;
     let designSystemTitle;
+    // Compiled (tokens.css + components.html) form of the active brand.
+    // Gated by `OD_DESIGN_TOKEN_CHANNEL` while the experiment is in the
+    // smoke-test phase: flag-off keeps the daemon byte-equivalent to the
+    // pre-PR-C path; flag-on appends the tokens contract + reference
+    // fixture to the system prompt for any brand that ships those files
+    // (today: `default` and `kami`; every other brand falls through
+    // silently because the files are absent).
+    let designSystemTokensCss;
+    let designSystemFixtureHtml;
     if (effectiveDesignSystemId) {
       const systems = await listAllDesignSystems();
       const summary = systems.find((s) => s.id === effectiveDesignSystemId);
@@ -2987,6 +3000,23 @@ export async function startServer({
         (await readDesignSystem(DESIGN_SYSTEMS_DIR, effectiveDesignSystemId)) ??
         (await readDesignSystem(USER_DESIGN_SYSTEMS_DIR, effectiveDesignSystemId)) ??
         undefined;
+      if (process.env.OD_DESIGN_TOKEN_CHANNEL === '1') {
+        // Try built-in dir first, then user-installed dir, mirroring the
+        // DESIGN.md fallback chain above. Any individual file may be
+        // missing (e.g. tokens.css present, components.html absent); the
+        // composer gates each block independently.
+        const builtIn = await readDesignSystemAssets(DESIGN_SYSTEMS_DIR, effectiveDesignSystemId);
+        const installed = builtIn.tokensCss && builtIn.fixtureHtml
+          ? builtIn
+          : {
+              tokensCss: builtIn.tokensCss
+                ?? (await readDesignSystemAssets(USER_DESIGN_SYSTEMS_DIR, effectiveDesignSystemId)).tokensCss,
+              fixtureHtml: builtIn.fixtureHtml
+                ?? (await readDesignSystemAssets(USER_DESIGN_SYSTEMS_DIR, effectiveDesignSystemId)).fixtureHtml,
+            };
+        designSystemTokensCss = installed.tokensCss;
+        designSystemFixtureHtml = installed.fixtureHtml;
+      }
     }
 
     const template =
@@ -3063,6 +3093,8 @@ export async function startServer({
       skillMode,
       designSystemBody,
       designSystemTitle,
+      designSystemTokensCss,
+      designSystemFixtureHtml,
       craftBody,
       craftSections,
       memoryBody,

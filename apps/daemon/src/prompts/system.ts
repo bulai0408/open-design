@@ -107,6 +107,22 @@ export interface ComposeInput {
     | undefined;
   designSystemBody?: string | undefined;
   designSystemTitle?: string | undefined;
+  // Compiled (machine-readable) form of the active brand's design system,
+  // shipped as sibling files to DESIGN.md when available. Both fields are
+  // optional and only injected when the daemon is running with the
+  // `OD_DESIGN_TOKEN_CHANNEL` env flag enabled (today's experimental
+  // gate). When present they are appended AFTER the DESIGN.md block so
+  // prose still sets the high-level voice and the structured form
+  // disambiguates token names + worked component shapes.
+  //
+  // - `designSystemTokensCss`    — verbatim `tokens.css` :root contract
+  //                                that the agent pastes into the
+  //                                artifact's <style>.
+  // - `designSystemFixtureHtml`  — verbatim `components.html` reference
+  //                                fixture demonstrating button / card /
+  //                                type-scale shapes wired to the tokens.
+  designSystemTokensCss?: string | undefined;
+  designSystemFixtureHtml?: string | undefined;
   // Craft references the active skill opted into via `od.craft.requires`.
   // The daemon resolves the slug list to file contents and concatenates
   // them with section headers; we inject them between the DESIGN.md and
@@ -163,6 +179,8 @@ export function composeSystemPrompt({
   skillMode,
   designSystemBody,
   designSystemTitle,
+  designSystemTokensCss,
+  designSystemFixtureHtml,
   craftBody,
   craftSections,
   memoryBody,
@@ -209,6 +227,27 @@ export function composeSystemPrompt({
   if (designSystemBody && designSystemBody.trim().length > 0) {
     parts.push(
       `\n\n## Active design system${designSystemTitle ? ` — ${designSystemTitle}` : ''}\n\nTreat the following DESIGN.md as authoritative for color, typography, spacing, and component rules. Do not invent tokens outside this palette. When you copy the active skill's seed template, bind these tokens into its \`:root\` block before generating any layout.\n\n${designSystemBody.trim()}`,
+    );
+  }
+
+  // Structured (compiled) form of the active brand. The DESIGN.md above
+  // sets voice and intent; the tokens.css block below is the SAME
+  // contract in machine-readable form — names + values the agent pastes
+  // verbatim instead of re-deriving from prose. The components.html
+  // fixture grounds the token vocabulary in worked component shapes
+  // (button / card / type roles) so the agent can copy fragments
+  // directly. Both blocks are individually gated: missing files (today,
+  // every brand except `default` and `kami`) skip silently, preserving
+  // the legacy DESIGN.md-only behaviour for the other ~138 brands.
+  if (designSystemTokensCss && designSystemTokensCss.trim().length > 0) {
+    parts.push(
+      `\n\n## Active design system tokens${designSystemTitle ? ` — ${designSystemTitle}` : ''}\n\nThe block below is this brand's tokens.css contract — every \`:root\` custom property and any scoped override (e.g. \`:root[lang=...]\`) the brand defines. **Paste the unscoped \`:root { ... }\` block verbatim into the artifact's first \`<style>\`** so every \`var(--*)\` reference resolves at runtime.\n\nDo not invent new tokens. Do not redefine these values. Do not write raw hex outside this :root block. The DESIGN.md above is prose; this is the binding contract.\n\n\`\`\`css\n${designSystemTokensCss.trim()}\n\`\`\``,
+    );
+  }
+
+  if (designSystemFixtureHtml && designSystemFixtureHtml.trim().length > 0) {
+    parts.push(
+      `\n\n## Reference fixture${designSystemTitle ? ` — ${designSystemTitle}` : ''}\n\nA self-contained worked artifact in this design system. Match its component shapes (button structure, card structure, type-scale rhythm, focus ring, spacing cadence) when generating new artifacts. Copying fragments is encouraged as long as you keep the \`var(--*)\` references intact — they are already wired to the tokens above.\n\n\`\`\`html\n${designSystemFixtureHtml.trim()}\n\`\`\``,
     );
   }
 

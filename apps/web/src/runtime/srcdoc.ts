@@ -832,11 +832,48 @@ function injectSelectionBridge(
   document.addEventListener('click', function(ev){
     if (!pickerActive()) return;
     var el = closestTarget(ev);
-    if (!el) return;
+    if (el) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      var payload = targetFrom(el, commentEnabled && mode === 'picker' && !inspectEnabled);
+      if (payload) window.parent.postMessage(payload, '*');
+      return;
+    }
+    // Free-pin fallback (comment mode only). Lets users drop a comment
+    // at a click location even when the artifact has no data-od-id
+    // annotations. Skipped for pod mode (drawing) and inspect mode
+    // (needs a real selector for live overrides).
+    if (!canUseDomFallback() || mode === 'pod') return;
+    // Skip clicks on interactive elements so links / buttons / inputs
+    // keep their native behavior; pin only on inert surfaces.
+    var t = ev.target;
+    var walk = t && t.nodeType === 1 ? t : null;
+    while (walk && walk !== document.documentElement) {
+      var tag = walk.tagName;
+      if (tag === 'A' || tag === 'BUTTON' || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'LABEL') return;
+      if (walk.isContentEditable) return;
+      walk = walk.parentElement;
+    }
     ev.preventDefault();
     ev.stopPropagation();
-    var payload = targetFrom(el, commentEnabled && mode === 'picker' && !inspectEnabled);
-    if (payload) window.parent.postMessage(payload, '*');
+    // Store viewport coordinates to match regular getBoundingClientRect()
+    // element targets; the host overlay renders this position directly.
+    var pinX = Math.round(ev.clientX);
+    var pinY = Math.round(ev.clientY);
+    var pinId = 'pin-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
+    window.parent.postMessage({
+      type: 'od:comment-target',
+      elementId: pinId,
+      // Synthetic selector / label so daemon upsert validation (which
+      // requires both to be non-empty) accepts the saved free-pin.
+      selector: '[data-od-pin="' + pinId + '"]',
+      label: 'pin',
+      text: '',
+      position: { x: pinX - 12, y: pinY - 12, width: 24, height: 24 },
+      htmlHint: '',
+      style: null,
+      freePin: true
+    }, '*');
   }, true);
   // Pod drawing — only active in comment mode with the 'pod' tool.
   document.addEventListener('pointerdown', function(ev){

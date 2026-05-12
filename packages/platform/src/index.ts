@@ -524,6 +524,10 @@ export function wellKnownUserToolchainBins(
       root: join(home, ".local", "share", "fnm", "node-versions"),
       segments: ["installation", "bin"],
     },
+    {
+      root: join(home, ".fnm", "node-versions"),
+      segments: ["installation", "bin"],
+    },
   ]) {
     for (const dir of existingChildBinDirs(installRoot.root, installRoot.segments)) {
       dirs.push(dir);

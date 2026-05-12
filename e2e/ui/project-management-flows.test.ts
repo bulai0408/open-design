@@ -123,10 +123,12 @@ test('new project tabs switch visible form sections and preserve drafts', async 
   await expect(page.locator('.newproj-title')).toContainText('New prototype');
   await expect(page.getByTestId('new-project-name')).toHaveValue('Prototype draft survives');
 
-  // Playwright auto-scrolls the tab into view; the explicit scroll-arrow
-  // button was removed when the newproj tabs adopted the folder-tab pattern.
-  await page.getByTestId('new-project-tab-image').click();
-  await expect(page.getByTestId('new-project-tab-image')).toHaveAttribute('aria-selected', 'true');
+  // Playwright auto-scrolls the tab into view; the consolidated media flow
+  // keeps image/video/audio as inner segmented surfaces.
+  await page.getByTestId('new-project-tab-media').click();
+  await expect(page.getByTestId('new-project-tab-media')).toHaveAttribute('aria-selected', 'true');
+  await page.getByTestId('new-project-media-surface-image').click();
+  await expect(page.getByTestId('new-project-media-surface-image')).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('.newproj-title')).toContainText('New image');
   await expect(page.getByTestId('design-system-picker')).toHaveCount(0);
   await expect(page.getByText('Model', { exact: true })).toBeVisible();
@@ -251,20 +253,25 @@ test('home design card deletion supports cancel and confirm flows', async ({ pag
   const designCard = homeDesignCard(page, projectName);
   await expect(designCard).toBeVisible();
 
-  page.once('dialog', async (dialog) => {
-    expect(dialog.message()).toContain(projectName);
-    await dialog.dismiss();
-  });
+  // Cancel flow: open the overflow menu, choose Delete, then dismiss the confirm modal.
   await designCard.hover();
-  await designCard.getByRole('button', { name: new RegExp(`delete project ${escapeRegExp(projectName)}`, 'i') }).click();
+  await designCard.getByRole('button', { name: /more actions/i }).click();
+  await page.getByRole('menuitem', { name: /^delete$/i }).click();
+  const confirmDialog = page.locator('.modal-confirm');
+  await expect(confirmDialog).toBeVisible();
+  await expect(confirmDialog).toContainText(projectName);
+  await confirmDialog.getByRole('button', { name: /^cancel$/i }).click();
+  await expect(confirmDialog).toHaveCount(0);
   await expect(designCard).toBeVisible();
 
-  page.once('dialog', async (dialog) => {
-    expect(dialog.message()).toContain(projectName);
-    await dialog.accept();
-  });
+  // Confirm flow: same trigger, this time accept the confirm modal.
   await designCard.hover();
-  await designCard.getByRole('button', { name: new RegExp(`delete project ${escapeRegExp(projectName)}`, 'i') }).click();
+  await designCard.getByRole('button', { name: /more actions/i }).click();
+  await page.getByRole('menuitem', { name: /^delete$/i }).click();
+  const confirmDialog2 = page.locator('.modal-confirm');
+  await expect(confirmDialog2).toBeVisible();
+  await expect(confirmDialog2).toContainText(projectName);
+  await confirmDialog2.getByRole('button', { name: /^delete$/i }).click();
   await expect(homeDesignCard(page, projectName)).toHaveCount(0);
 
   const response = await page.request.get(`/api/projects/${projectId}`);
@@ -422,8 +429,8 @@ async function createProject(
 async function expectWorkspaceReady(page: Page) {
   await expect(page).toHaveURL(/\/projects\//);
   await expect(page.getByTestId('chat-composer')).toBeVisible();
+  await expect(page.getByTestId('chat-composer-input')).toBeVisible();
   await expect(page.getByTestId('file-workspace')).toBeVisible();
-  await expect(page.getByText('Start a conversation')).toBeVisible();
 }
 
 async function renameProjectTitle(

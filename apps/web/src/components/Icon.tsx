@@ -30,6 +30,7 @@ type IconName =
   | 'link'
   | 'mic'
   | 'minus'
+  | 'more-horizontal'
   | 'orbit'
   | 'pencil'
   | 'plus'
@@ -288,6 +289,14 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
       return (
         <svg {...common}>
           <path d="M5 12h14" />
+        </svg>
+      );
+    case 'more-horizontal':
+      return (
+        <svg {...common}>
+          <circle cx="5" cy="12" r="1.4" />
+          <circle cx="12" cy="12" r="1.4" />
+          <circle cx="19" cy="12" r="1.4" />
         </svg>
       );
     case 'orbit':

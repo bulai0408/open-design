@@ -57,10 +57,12 @@ import type {
   ProjectFile,
 } from '../types';
 import { Icon } from './Icon';
+import { Toast } from './Toast';
 import { PaletteTweaks, type PaletteId } from './PaletteTweaks';
 import { PreviewDrawOverlay } from './PreviewDrawOverlay';
 import {
   buildBoardCommentAttachments,
+  commentsToAttachments,
   liveSnapshotForComment,
   overlayBoundsFromSnapshot,
   selectionKindLabel,
@@ -1673,6 +1675,7 @@ function BoardComposerPopover({
   const pendingCount = notes.length + (draft.trim() ? 1 : 0);
   const podMembers = target.podMembers ?? [];
   const titleId = useId();
+  const isFreePin = target.elementId.startsWith('pin-');
   return (
     <div
       className="comment-popover"
@@ -1689,12 +1692,26 @@ function BoardComposerPopover({
     >
       <div className="comment-popover-head">
         <div title={target.elementId}>
-          <strong id={titleId}>{target.elementId}</strong>
-          <span>{target.label}</span>
-          <span>{selectionKindLabel(target.selectionKind, target.memberCount)}</span>
+          {isFreePin ? (
+            <>
+              <strong id={titleId}>Pin</strong>
+              <span>at {target.position.x + 12}, {target.position.y + 12}</span>
+            </>
+          ) : (
+            <>
+              <strong id={titleId}>{target.label || target.elementId}</strong>
+              <span>{selectionKindLabel(target.selectionKind, target.memberCount)}</span>
+            </>
+          )}
         </div>
-        <button type="button" className="ghost" onClick={onClose} title={t('common.close')}>
-          {t('common.close')}
+        <button
+          type="button"
+          className="comment-popover-close"
+          onClick={onClose}
+          title={t('common.close')}
+          aria-label={t('common.close')}
+        >
+          <Icon name="close" size={12} />
         </button>
       </div>
       {podMembers.length > 0 ? (
@@ -1731,39 +1748,162 @@ function BoardComposerPopover({
       />
       <div className="comment-popover-actions">
         {existing ? (
-          <button type="button" className="comment-popover-remove" onClick={() => onRemove(existing.id)}>
-            {t('chat.comments.remove')}
-          </button>
-        ) : <span />}
-        <button
-          type="button"
-          className="ghost"
-          disabled={!draft.trim()}
-          onClick={onAddDraft}
-        >
-          Add note
-        </button>
-        {target.selectionKind === 'pod' ? null : (
           <button
             type="button"
-            className="ghost"
-            disabled={!draft.trim()}
-            onClick={() => void onSaveComment()}
+            className="comment-popover-remove"
+            onClick={() => onRemove(existing.id)}
+            title={t('chat.comments.remove')}
           >
-            Save comment
+            {t('chat.comments.remove')}
           </button>
-        )}
-        <button
-          type="button"
-          className="primary"
-          data-testid="comment-add-send"
-          disabled={pendingCount === 0 || sending}
-          onClick={() => void onSendBatch()}
-        >
-          {sending ? 'Sending...' : 'Send to chat'}
-        </button>
+        ) : null}
+        <div className="comment-popover-actions-end">
+          {target.selectionKind === 'pod' ? (
+            <button
+              type="button"
+              className="ghost"
+              data-testid="comment-popover-add-note"
+              disabled={!draft.trim()}
+              onClick={onAddDraft}
+            >
+              Add note
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="ghost"
+              data-testid="comment-popover-save"
+              disabled={!draft.trim()}
+              onClick={() => void onSaveComment()}
+            >
+              Comment
+            </button>
+          )}
+          <button
+            type="button"
+            className="primary"
+            data-testid="comment-add-send"
+            disabled={pendingCount === 0 || sending}
+            onClick={() => void onSendBatch()}
+          >
+            {sending ? 'Sending…' : 'Send to Claude'}
+          </button>
+        </div>
       </div>
     </div>
+  );
+}
+
+function formatCommentTime(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return 'just now';
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks}w ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+function commentDisplayLabel(comment: PreviewComment): string {
+  if (comment.elementId.startsWith('pin-')) return 'Pin';
+  return comment.label || comment.elementId;
+}
+
+function commentAvatarInitial(comment: PreviewComment): string {
+  const seed = comment.label || comment.elementId || '?';
+  return seed.charAt(0).toUpperCase();
+}
+
+function CommentSidePanel({
+  comments,
+  selectedIds,
+  onToggleSelect,
+  onClearSelection,
+  onReply,
+  onSendSelected,
+  sending,
+  t,
+}: {
+  comments: PreviewComment[];
+  selectedIds: Set<string>;
+  onToggleSelect: (commentId: string) => void;
+  onClearSelection: () => void;
+  onReply: (comment: PreviewComment) => void;
+  onSendSelected: () => void | Promise<void>;
+  sending: boolean;
+  t: TranslateFn;
+}) {
+  const sorted = [...comments].sort((a, b) => b.createdAt - a.createdAt);
+  const visibleSelectedIds = new Set(comments.filter((comment) => selectedIds.has(comment.id)).map((comment) => comment.id));
+  const selectedCount = visibleSelectedIds.size;
+  return (
+    <aside className="comment-side-panel" data-testid="comment-side-panel" aria-label={t('chat.tabComments')}>
+      <div className="comment-side-list">
+        {sorted.length === 0 ? (
+          <div className="comment-side-empty">
+            {t('chat.comments.emptySaved')}
+          </div>
+        ) : sorted.map((comment) => {
+          const selected = visibleSelectedIds.has(comment.id);
+          return (
+            <div
+              key={comment.id}
+              className={`comment-side-item${selected ? ' selected' : ''}`}
+              data-testid="comment-side-item"
+            >
+              <div className="comment-side-item-head">
+                <span className="comment-side-author">
+                  <span className="comment-side-avatar" aria-hidden>
+                    {commentAvatarInitial(comment)}
+                  </span>
+                  <strong>{commentDisplayLabel(comment)}</strong>
+                </span>
+                <span className="comment-side-time">{formatCommentTime(comment.createdAt)}</span>
+                <button
+                  type="button"
+                  className={`comment-side-check${selected ? ' checked' : ''}`}
+                  aria-label={selected ? 'Deselect' : 'Select'}
+                  aria-pressed={selected}
+                  onClick={() => onToggleSelect(comment.id)}
+                >
+                  {selected ? <Icon name="check" size={11} /> : null}
+                </button>
+              </div>
+              <div className="comment-side-body">{comment.note}</div>
+              <button
+                type="button"
+                className="comment-side-reply"
+                data-testid="comment-side-edit"
+                onClick={() => onReply(comment)}
+              >
+                Edit
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {selectedCount > 0 ? (
+        <div className="comment-side-selectbar" data-testid="comment-side-selectbar">
+          <span className="comment-side-selectcount">{selectedCount} selected</span>
+          <button type="button" className="ghost" onClick={onClearSelection}>
+            Clear
+          </button>
+          <button
+            type="button"
+            className="primary"
+            data-testid="comment-side-send-claude"
+            disabled={sending}
+            onClick={() => void onSendSelected()}
+          >
+            {sending ? 'Sending…' : 'Send to Claude'}
+          </button>
+        </div>
+      ) : null}
+    </aside>
   );
 }
 
@@ -3263,6 +3403,8 @@ function HtmlViewer({
   const [inspectError, setInspectError] = useState<string | null>(null);
   const [queuedBoardNotes, setQueuedBoardNotes] = useState<string[]>([]);
   const [sendingBoardBatch, setSendingBoardBatch] = useState(false);
+  const [commentSavedToast, setCommentSavedToast] = useState<string | null>(null);
+  const [selectedSideCommentIds, setSelectedSideCommentIds] = useState<Set<string>>(() => new Set());
   const [strokePoints, setStrokePoints] = useState<StrokePoint[]>([]);
   const previewStateKey = `${projectId}:${file.name}`;
   const previewScale = zoom / 100;
@@ -4415,13 +4557,15 @@ function HtmlViewer({
 
   async function savePersistentComment() {
     if (!activeCommentTarget || !commentDraft.trim() || !onSavePreviewComment) return;
+    const isFreePin = activeCommentTarget.elementId.startsWith('pin-');
     const saved = await onSavePreviewComment(
       targetFromSnapshot(activeCommentTarget),
       commentDraft.trim(),
       false,
     );
     if (saved) {
-      setCommentDraft('');
+      clearBoardComposer();
+      setCommentSavedToast(isFreePin ? 'Pin saved' : 'Comment saved');
     }
   }
 
@@ -4430,6 +4574,9 @@ function HtmlViewer({
   const exportTitle = file.name.replace(/\.html?$/i, '') || file.name;
   const canPptx = canShare && Boolean(onExportAsPptx) && !streaming;
   const boardAvailable = source !== null;
+  const visibleSideComments = previewComments.filter(
+    (comment) => comment.filePath === file.name && comment.status === 'open',
+  );
   const activeDeployment = deployResult || deployment;
   const activeDeployedUrl = activeDeployment?.url?.trim() || '';
   const activeDeploymentDelayed = activeDeployment?.status === 'link-delayed';
@@ -4625,9 +4772,9 @@ function HtmlViewer({
           </div>
           <button
             type="button"
-            className={`viewer-toggle${boardMode ? ' active' : ''}`}
+            className={`viewer-action viewer-comment-toggle${boardMode ? ' active' : ''}`}
             data-testid="board-mode-toggle"
-            title={t('fileViewer.tweaks')}
+            title="Comment"
             aria-pressed={boardMode}
             disabled={!boardAvailable}
             onClick={() => {
@@ -4640,9 +4787,8 @@ function HtmlViewer({
               activateBoard(boardTool);
             }}
           >
-            <Icon name="tweaks" size={13} />
-            <span>{t('fileViewer.tweaks')}</span>
-            <span className="switch" aria-hidden />
+            <Icon name="comment" size={13} />
+            <span>Comment</span>
           </button>
           {boardMode ? (
             <>
@@ -5057,6 +5203,15 @@ function HtmlViewer({
                 }}
               />
             ) : null}
+            {commentSavedToast ? (
+              <div className="comment-toast-anchor">
+                <Toast
+                  message={commentSavedToast}
+                  ttlMs={2200}
+                  onDismiss={() => setCommentSavedToast(null)}
+                />
+              </div>
+            ) : null}
             {boardMode && activeCommentTarget ? (
               <BoardComposerPopover
                 target={activeCommentTarget}
@@ -5075,6 +5230,60 @@ function HtmlViewer({
                   if (!onRemovePreviewComment) return;
                   await onRemovePreviewComment(commentId);
                   clearBoardComposer();
+                }}
+                sending={sendingBoardBatch || streaming}
+                t={t}
+              />
+            ) : null}
+            {boardMode ? (
+              <CommentSidePanel
+                comments={visibleSideComments}
+                selectedIds={selectedSideCommentIds}
+                onToggleSelect={(commentId) => {
+                  setSelectedSideCommentIds((current) => {
+                    const next = new Set(current);
+                    if (next.has(commentId)) next.delete(commentId);
+                    else next.add(commentId);
+                    return next;
+                  });
+                }}
+                onClearSelection={() => setSelectedSideCommentIds(new Set())}
+                onReply={(comment) => {
+                  // Reply == edit on a flat-thread model: prefill the
+                  // popover with the existing note so the user sees and
+                  // mutates the current text. Save runs through the
+                  // same upsert path; matching project/conv/file/element
+                  // updates note in place rather than creating a new row.
+                  const snapshot = liveSnapshotForComment(comment, liveCommentTargets) ?? {
+                    filePath: comment.filePath,
+                    elementId: comment.elementId,
+                    selector: comment.selector,
+                    label: comment.label,
+                    text: comment.text,
+                    position: comment.position,
+                    htmlHint: comment.htmlHint,
+                    selectionKind: comment.selectionKind ?? 'element',
+                    memberCount: comment.memberCount,
+                    podMembers: comment.podMembers,
+                  };
+                  setActiveCommentTarget(snapshot);
+                  setHoveredCommentTarget(snapshot);
+                  setCommentDraft(comment.note);
+                  setQueuedBoardNotes([]);
+                }}
+                onSendSelected={async () => {
+                  if (!onSendBoardCommentAttachments) return;
+                  const selected = visibleSideComments.filter(
+                    (comment) => selectedSideCommentIds.has(comment.id),
+                  );
+                  if (selected.length === 0) return;
+                  setSendingBoardBatch(true);
+                  try {
+                    await onSendBoardCommentAttachments(commentsToAttachments(selected));
+                    setSelectedSideCommentIds(new Set());
+                  } finally {
+                    setSendingBoardBatch(false);
+                  }
                 }}
                 sending={sendingBoardBatch || streaming}
                 t={t}
