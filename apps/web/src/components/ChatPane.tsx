@@ -329,6 +329,12 @@ interface Props {
   byokImageModel?: string;
   onChangeByokImageModel?: (model: string) => void;
   composerFooterAccessory?: ReactNode;
+  // Forwarded straight to the chat composer's mid-chat design-system
+  // switcher. ProjectView owns the project record so the parent is the
+  // natural place to mirror the new `designSystemId` after a PATCH lands.
+  currentDesignSystemId?: string | null;
+  onActiveDesignSystemChange?: (designSystemId: string | null) => void;
+  onShowToast?: (message: string) => void;
 }
 
 type Tab = 'chat' | 'comments';
@@ -405,6 +411,9 @@ export function ChatPane({
   byokImageModel,
   onChangeByokImageModel,
   composerFooterAccessory,
+  currentDesignSystemId,
+  onActiveDesignSystemChange,
+  onShowToast,
 }: Props) {
   const t = useT();
   const analytics = useAnalytics();
@@ -1320,6 +1329,9 @@ export function ChatPane({
             onProjectSkillChange={onProjectSkillChange}
             pinnedPluginId={activePluginSnapshot?.pluginId ?? null}
             footerAccessory={composerFooterAccessory}
+            currentDesignSystemId={currentDesignSystemId}
+            onActiveDesignSystemChange={onActiveDesignSystemChange}
+            onShowToast={onShowToast}
           />
         </>
       ) : null}
