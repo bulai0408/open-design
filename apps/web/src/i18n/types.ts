@@ -1798,6 +1798,7 @@ export interface Dict {
   'chat.importDesignSystemActive': string;
   'chat.importDesignSystemSwitched': string;
   'chat.importDesignSystemFailed': string;
+  'chat.importDesignSystemLoadFailed': string;
   'chat.mentionTabsAria': string;
   'chat.mentionTabAll': string;
   'chat.mentionTabPlugins': string;

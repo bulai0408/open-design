@@ -1487,6 +1487,7 @@ export const en: Dict = {
   'chat.importDesignSystemActive': 'Active',
   'chat.importDesignSystemSwitched': 'Design system switched to {title}',
   'chat.importDesignSystemFailed': "Couldn't switch design system. Please try again.",
+  'chat.importDesignSystemLoadFailed': "Couldn't load design systems.",
   'chat.mentionTabsAria': 'Mention surfaces',
   'chat.mentionTabAll': 'All',
   'chat.mentionTabPlugins': 'Plugins',

@@ -1478,6 +1478,7 @@ export const zhCN: Dict = {
   'chat.importDesignSystemActive': '当前',
   'chat.importDesignSystemSwitched': '已切换设计体系为 {title}',
   'chat.importDesignSystemFailed': '切换设计体系失败，请重试。',
+  'chat.importDesignSystemLoadFailed': '无法加载设计体系。',
   'chat.mentionTabsAria': '提及来源',
   'chat.mentionTabAll': '全部',
   'chat.mentionTabPlugins': '插件',

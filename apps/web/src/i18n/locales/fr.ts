@@ -1419,6 +1419,7 @@ export const fr: Dict = {
   'chat.importDesignSystemActive': 'Actif',
   'chat.importDesignSystemSwitched': 'Design system basculé sur {title}',
   'chat.importDesignSystemFailed': "Impossible de changer de design system. Veuillez réessayer.",
+  'chat.importDesignSystemLoadFailed': 'Impossible de charger les design systems.',
   'chat.linkedFolderRemoveAria': 'Supprimer le dossier lié {path}',
   'chat.linkedFolderNotFound': 'Le dossier n\'existe pas',
   'chat.linkedFolderAlready': 'Ce dossier est déjà lié',

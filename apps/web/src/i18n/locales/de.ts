@@ -771,6 +771,7 @@ export const de: Dict = {
   'chat.importDesignSystemActive': 'Aktiv',
   'chat.importDesignSystemSwitched': 'Designsystem zu {title} gewechselt',
   'chat.importDesignSystemFailed': "Designsystem konnte nicht gewechselt werden. Bitte erneut versuchen.",
+  'chat.importDesignSystemLoadFailed': 'Designsysteme konnten nicht geladen werden.',
   'chat.linkedFolderRemoveAria': 'Verknüpften Ordner {path} entfernen',
   'chat.linkedFolderNotFound': 'Ordner existiert nicht',
   'chat.linkedFolderAlready': 'Dieser Ordner ist bereits verknüpft',

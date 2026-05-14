@@ -996,6 +996,7 @@ export const id: Dict = {
   'chat.importDesignSystemActive': 'Aktif',
   'chat.importDesignSystemSwitched': 'Design system beralih ke {title}',
   'chat.importDesignSystemFailed': "Tidak dapat mengganti design system. Silakan coba lagi.",
+  'chat.importDesignSystemLoadFailed': 'Tidak dapat memuat sistem desain.',
   'chat.linkedFolderRemoveAria': 'Hapus folder tertaut {path}',
   'chat.linkedFolderNotFound': 'Folder tidak ada',
   'chat.linkedFolderAlready': 'Folder ini sudah tertaut',

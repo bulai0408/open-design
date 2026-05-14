@@ -12,7 +12,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatComposer } from '../../src/components/ChatComposer';
-import { fetchDesignSystems } from '../../src/providers/registry';
+import { fetchDesignSystemsResult } from '../../src/providers/registry';
 
 vi.mock('../../src/providers/registry', async () => {
   const actual = await vi.importActual<typeof import('../../src/providers/registry')>(
@@ -20,11 +20,11 @@ vi.mock('../../src/providers/registry', async () => {
   );
   return {
     ...actual,
-    fetchDesignSystems: vi.fn(),
+    fetchDesignSystemsResult: vi.fn(),
   };
 });
 
-const mockedFetchDesignSystems = vi.mocked(fetchDesignSystems);
+const mockedFetchDesignSystemsResult = vi.mocked(fetchDesignSystemsResult);
 
 const FAKE_DESIGN_SYSTEMS = [
   {
@@ -72,7 +72,7 @@ async function openImportTab(): Promise<void> {
 
 describe('ChatComposer mid-chat design-system switcher', () => {
   it('opens the design-system picker from the Import menu and PATCHes the project on select', async () => {
-    mockedFetchDesignSystems.mockResolvedValue(FAKE_DESIGN_SYSTEMS);
+    mockedFetchDesignSystemsResult.mockResolvedValue({ ok: true, designSystems: FAKE_DESIGN_SYSTEMS });
     const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
       const url = typeof input === 'string' ? input : (input as URL | Request).toString();
       if (url.startsWith('/api/projects/')) {
@@ -116,7 +116,7 @@ describe('ChatComposer mid-chat design-system switcher', () => {
     fireEvent.click(dsEntry);
 
     // Picker mounts and asks for the list.
-    await waitFor(() => expect(mockedFetchDesignSystems).toHaveBeenCalled());
+    await waitFor(() => expect(mockedFetchDesignSystemsResult).toHaveBeenCalled());
     expect(screen.getByTestId('composer-ds-picker')).toBeTruthy();
 
     const item = await screen.findByTestId('composer-ds-picker-item-nexu-soft-tech');
@@ -139,7 +139,7 @@ describe('ChatComposer mid-chat design-system switcher', () => {
   });
 
   it('emits a failure toast and keeps the picker open when the PATCH fails', async () => {
-    mockedFetchDesignSystems.mockResolvedValue(FAKE_DESIGN_SYSTEMS);
+    mockedFetchDesignSystemsResult.mockResolvedValue({ ok: true, designSystems: FAKE_DESIGN_SYSTEMS });
     vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
       const url = typeof input === 'string' ? input : (input as URL | Request).toString();
       if (url.startsWith('/api/projects/')) {
@@ -181,7 +181,7 @@ describe('ChatComposer mid-chat design-system switcher', () => {
   });
 
   it('keeps the design-system row disabled when no project is active', async () => {
-    mockedFetchDesignSystems.mockResolvedValue(FAKE_DESIGN_SYSTEMS);
+    mockedFetchDesignSystemsResult.mockResolvedValue({ ok: true, designSystems: FAKE_DESIGN_SYSTEMS });
     render(
       <ChatComposer
         projectId={null}
@@ -199,8 +199,52 @@ describe('ChatComposer mid-chat design-system switcher', () => {
     expect(screen.queryByTestId('composer-ds-picker')).toBeNull();
   });
 
+  it('renders an inline load-failure state when the registry fetch fails', async () => {
+    // `fetchDesignSystems()` previously collapsed a 500 / network failure
+    // into an empty array, so the picker rendered as "no systems available"
+    // and hid broken integrations. The picker now consumes the
+    // discriminated `fetchDesignSystemsResult` instead — assert that the
+    // failure branch renders the explicit alert and suppresses the catalog
+    // rows so reviewers see "couldn't load" instead of a misleading empty
+    // state.
+    mockedFetchDesignSystemsResult.mockResolvedValue({ ok: false });
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () => {
+      return new Response('{}', { status: 200 });
+    });
+    const onShowToast = vi.fn();
+
+    render(
+      <ChatComposer
+        projectId="project-1"
+        projectFiles={[]}
+        streaming={false}
+        onEnsureProject={async () => 'project-1'}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        currentDesignSystemId="nexu-soft-tech"
+        onShowToast={onShowToast}
+      />,
+    );
+
+    await openImportTab();
+    fireEvent.click(await screen.findByTestId('composer-import-design-systems'));
+
+    const errorBanner = await screen.findByTestId('composer-ds-picker-load-error');
+    expect(errorBanner.textContent).toBe("Couldn't load design systems.");
+    expect(errorBanner.getAttribute('role')).toBe('alert');
+    // Catalog rows must not render — otherwise a broken integration would
+    // still look like a working empty registry.
+    expect(screen.queryByTestId('composer-ds-picker-item-nexu-soft-tech')).toBeNull();
+    expect(screen.queryByTestId('composer-ds-picker-item-editorial-mono')).toBeNull();
+    // No PATCH happens, no toast, no parent notify.
+    expect(
+      fetchSpy.mock.calls.filter(([u]) => String(u).startsWith('/api/projects/')),
+    ).toHaveLength(0);
+    expect(onShowToast).not.toHaveBeenCalled();
+  });
+
   it("doesn't PATCH when the user picks the current design system", async () => {
-    mockedFetchDesignSystems.mockResolvedValue(FAKE_DESIGN_SYSTEMS);
+    mockedFetchDesignSystemsResult.mockResolvedValue({ ok: true, designSystems: FAKE_DESIGN_SYSTEMS });
     const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () => {
       return new Response('{}', { status: 200 });
     });

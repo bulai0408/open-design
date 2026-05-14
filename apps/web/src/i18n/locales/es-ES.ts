@@ -772,6 +772,7 @@ export const esES: Dict = {
   'chat.importDesignSystemActive': 'Activo',
   'chat.importDesignSystemSwitched': 'Sistema de diseño cambiado a {title}',
   'chat.importDesignSystemFailed': "No se pudo cambiar el sistema de diseño. Vuelve a intentarlo.",
+  'chat.importDesignSystemLoadFailed': 'No se pudieron cargar los sistemas de diseño.',
   'chat.linkedFolderRemoveAria': 'Eliminar carpeta vinculada {path}',
   'chat.linkedFolderNotFound': 'La carpeta no existe',
   'chat.linkedFolderAlready': 'Esta carpeta ya está vinculada',

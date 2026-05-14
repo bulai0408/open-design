@@ -883,6 +883,7 @@ export const ko: Dict = {
   'chat.importDesignSystemActive': '현재',
   'chat.importDesignSystemSwitched': '디자인 시스템을 {title}(으)로 전환했습니다',
   'chat.importDesignSystemFailed': "디자인 시스템을 전환할 수 없습니다. 다시 시도해주세요.",
+  'chat.importDesignSystemLoadFailed': '디자인 시스템을 불러올 수 없습니다.',
   'chat.linkedFolderRemoveAria': '연결된 폴더 {path} 제거',
   'chat.linkedFolderNotFound': '폴더가 존재하지 않습니다',
   'chat.linkedFolderAlready': '이미 연결된 폴더입니다',

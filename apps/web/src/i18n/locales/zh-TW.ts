@@ -1078,6 +1078,7 @@ export const zhTW: Dict = {
   'chat.importDesignSystemActive': '目前',
   'chat.importDesignSystemSwitched': '已切換設計系統為 {title}',
   'chat.importDesignSystemFailed': "切換設計系統失敗，請重試。",
+  'chat.importDesignSystemLoadFailed': '無法載入設計體系。',
   'chat.mentionTabsAria': '提及來源',
   'chat.mentionTabAll': '全部',
   'chat.mentionTabPlugins': '外掛',

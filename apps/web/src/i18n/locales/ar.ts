@@ -883,6 +883,7 @@ export const ar: Dict = {
   'chat.importDesignSystemActive': 'نشط',
   'chat.importDesignSystemSwitched': 'تم تبديل نظام التصميم إلى {title}',
   'chat.importDesignSystemFailed': "تعذر تبديل نظام التصميم. حاول مرة أخرى.",
+  'chat.importDesignSystemLoadFailed': 'تعذّر تحميل أنظمة التصميم.',
   'chat.linkedFolderRemoveAria': 'إزالة المجلد المرتبط {path}',
   'chat.linkedFolderNotFound': 'المجلد غير موجود',
   'chat.linkedFolderAlready': 'هذا المجلد مرتبط بالفعل',

@@ -770,6 +770,7 @@ export const ja: Dict = {
   'chat.importDesignSystemActive': '現在',
   'chat.importDesignSystemSwitched': 'デザインシステムを {title} に切り替えました',
   'chat.importDesignSystemFailed': "デザインシステムを切り替えられませんでした。もう一度お試しください。",
+  'chat.importDesignSystemLoadFailed': 'デザインシステムを読み込めませんでした。',
   'chat.linkedFolderRemoveAria': 'リンクされたフォルダー {path} を削除',
   'chat.linkedFolderNotFound': 'フォルダーが存在しません',
   'chat.linkedFolderAlready': 'このフォルダーは既にリンクされています',

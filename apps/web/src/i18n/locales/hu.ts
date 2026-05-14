@@ -883,6 +883,7 @@ export const hu: Dict = {
   'chat.importDesignSystemActive': 'Aktív',
   'chat.importDesignSystemSwitched': 'Designrendszer átállítva: {title}',
   'chat.importDesignSystemFailed': "Nem sikerült váltani a designrendszert. Próbáld újra.",
+  'chat.importDesignSystemLoadFailed': 'Nem sikerült betölteni a designrendszereket.',
   'chat.linkedFolderRemoveAria': 'Hozzákapcsolt mappa eltávolítása {path}',
   'chat.linkedFolderNotFound': 'A mappa nem létezik',
   'chat.linkedFolderAlready': 'Ez a mappa már hozzá van kapcsolva',

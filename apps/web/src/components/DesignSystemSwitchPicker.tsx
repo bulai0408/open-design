@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { fetchDesignSystems } from '../providers/registry';
+import { fetchDesignSystemsResult } from '../providers/registry';
 import type { DesignSystemSummary } from '../types';
 import type { Dict } from '../i18n/types';
 import { Icon } from './Icon';
@@ -29,13 +29,24 @@ export function DesignSystemSwitchPicker({
   onBack,
 }: Props) {
   const [items, setItems] = useState<DesignSystemSummary[] | null>(null);
+  const [loadError, setLoadError] = useState(false);
   const [query, setQuery] = useState('');
   const [pendingId, setPendingId] = useState<string | null | 'none'>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void fetchDesignSystems().then((list) => {
-      if (!cancelled) setItems(list);
+    void fetchDesignSystemsResult().then((result) => {
+      if (cancelled) return;
+      if (result.ok) {
+        setItems(result.designSystems);
+      } else {
+        // Surface the failure explicitly instead of collapsing it into an
+        // empty catalog — `fetchDesignSystems()` returns `[]` on both "no
+        // systems registered" and "network/HTTP failed", and rendering
+        // those identically hides broken integrations.
+        setItems([]);
+        setLoadError(true);
+      }
     });
     return () => {
       cancelled = true;
@@ -128,6 +139,14 @@ export function DesignSystemSwitchPicker({
         ) : null}
         {items === null ? (
           <div className="composer-ds-picker-empty">{t('common.loading')}</div>
+        ) : loadError ? (
+          <div
+            className="composer-ds-picker-empty composer-ds-picker-error"
+            role="alert"
+            data-testid="composer-ds-picker-load-error"
+          >
+            {t('chat.importDesignSystemLoadFailed')}
+          </div>
         ) : groups.length === 0 && !showNoneRow ? (
           <div className="composer-ds-picker-empty">
             {t('chat.importDesignSystemEmpty', { query })}

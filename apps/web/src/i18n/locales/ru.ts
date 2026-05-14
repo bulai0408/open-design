@@ -904,6 +904,7 @@ export const ru: Dict = {
   'chat.importDesignSystemActive': 'Активна',
   'chat.importDesignSystemSwitched': 'Дизайн-система переключена на {title}',
   'chat.importDesignSystemFailed': "Не удалось сменить дизайн-систему. Попробуйте снова.",
+  'chat.importDesignSystemLoadFailed': 'Не удалось загрузить дизайн-системы.',
   'chat.linkedFolderRemoveAria': 'Удалить связанную папку {path}',
   'chat.linkedFolderNotFound': 'Папка не существует',
   'chat.linkedFolderAlready': 'Эта папка уже связана',

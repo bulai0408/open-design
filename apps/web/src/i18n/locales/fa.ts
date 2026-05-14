@@ -905,6 +905,7 @@ export const fa: Dict = {
   'chat.importDesignSystemActive': 'فعال',
   'chat.importDesignSystemSwitched': 'سیستم طراحی به {title} تغییر کرد',
   'chat.importDesignSystemFailed': "تغییر سیستم طراحی ناموفق بود. لطفاً دوباره تلاش کنید.",
+  'chat.importDesignSystemLoadFailed': 'بارگذاری سیستم‌های طراحی ممکن نشد.',
   'chat.linkedFolderRemoveAria': 'حذف پوشه لینک شده {path}',
   'chat.linkedFolderNotFound': 'پوشه وجود ندارد',
   'chat.linkedFolderAlready': 'این پوشه قبلاً لینک شده است',

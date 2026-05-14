@@ -838,6 +838,7 @@ export const th: Dict = {
   'chat.importDesignSystemActive': 'ใช้งานอยู่',
   'chat.importDesignSystemSwitched': 'สลับระบบดีไซน์ไปเป็น {title}',
   'chat.importDesignSystemFailed': "ไม่สามารถสลับระบบดีไซน์ได้ โปรดลองอีกครั้ง",
+  'chat.importDesignSystemLoadFailed': 'ไม่สามารถโหลดระบบการออกแบบได้',
   'chat.linkedFolderRemoveAria': 'ลบโฟลเดอร์ที่ลิงก์ {path}',
   'chat.linkedFolderNotFound': 'หาโฟลเดอร์ไม่เจอ',
   'chat.linkedFolderAlready': 'ลิงก์ไว้แล้ว',

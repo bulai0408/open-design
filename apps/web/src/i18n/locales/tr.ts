@@ -872,6 +872,7 @@ export const tr: Dict = {
   'chat.importDesignSystemActive': 'Etkin',
   'chat.importDesignSystemSwitched': 'Tasarım sistemi {title} olarak değiştirildi',
   'chat.importDesignSystemFailed': "Tasarım sistemi değiştirilemedi. Lütfen tekrar deneyin.",
+  'chat.importDesignSystemLoadFailed': 'Tasarım sistemleri yüklenemedi.',
   'chat.linkedFolderRemoveAria': 'Bağlantılı klasörü kaldır {path}',
   'chat.linkedFolderNotFound': 'Klasör mevcut değil',
   'chat.linkedFolderAlready': 'Bu klasör zaten bağlantılı',

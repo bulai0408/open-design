@@ -904,6 +904,7 @@ export const ptBR: Dict = {
   'chat.importDesignSystemActive': 'Ativo',
   'chat.importDesignSystemSwitched': 'Design system alterado para {title}',
   'chat.importDesignSystemFailed': "Não foi possível mudar o design system. Tente novamente.",
+  'chat.importDesignSystemLoadFailed': 'Não foi possível carregar os sistemas de design.',
   'chat.linkedFolderRemoveAria': 'Remover pasta vinculada {path}',
   'chat.linkedFolderNotFound': 'A pasta não existe',
   'chat.linkedFolderAlready': 'Esta pasta já está vinculada',
