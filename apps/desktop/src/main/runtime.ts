@@ -7,6 +7,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import type { DesktopExportPdfInput, DesktopExportPdfResult } from "@open-design/sidecar-proto";
 
 import { createElectronPdfTarget, exportPdfFromHtml, savePrintReadyDocumentAsPdf } from "./pdf-export.js";
+import type { PrintReadyPdfOptions } from "./pdf-export.js";
 
 /**
  * Result of validating a candidate path before exposing it to a
@@ -716,6 +717,18 @@ function attachDownloadSaveAsDialog(window: BrowserWindow): void {
   });
 }
 
+function parsePrintReadyPdfOptions(value: unknown): PrintReadyPdfOptions {
+  if (value == null) return {};
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid print payload: expected options object");
+  }
+  const deck = (value as { deck?: unknown }).deck;
+  if (deck !== undefined && typeof deck !== "boolean") {
+    throw new Error("Invalid print payload: expected deck option to be boolean");
+  }
+  return deck === true ? { deck: true } : {};
+}
+
 export async function createDesktopRuntime(options: DesktopRuntimeOptions): Promise<DesktopRuntime> {
   const preloadPath = join(dirname(fileURLToPath(import.meta.url)), "preload.cjs");
 
@@ -871,11 +884,12 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
   attachDownloadSaveAsDialog(window);
 
   ipcMain.removeHandler('od:print-pdf');
-  ipcMain.handle('od:print-pdf', async (_event, html: unknown, nonce: unknown): Promise<void> => {
+  ipcMain.handle('od:print-pdf', async (_event, html: unknown, nonce: unknown, options: unknown): Promise<void> => {
     if (typeof html !== 'string') {
       throw new Error('Invalid print payload: expected HTML string');
     }
     const printNonce = typeof nonce === 'string' ? nonce : '';
+    const printOptions = parsePrintReadyPdfOptions(options);
     // Issue #1774: the renderer's `printPdf()` bridge runs the direct
     // Save-as-PDF flow (showSaveDialog -> printToPDF -> write), never
     // `webContents.print()` — the printer-first OS dialog. The renderer
@@ -883,7 +897,12 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
     // rejection: it shows a "Print failed" alert. A resolved call —
     // including a user-canceled Save dialog — is silent, matching the
     // pre-#1774 behavior where canceling the OS dialog was a no-op.
-    const result = await savePrintReadyDocumentAsPdf(html, printNonce, createElectronPdfTarget());
+    const result = await savePrintReadyDocumentAsPdf(
+      html,
+      printNonce,
+      createElectronPdfTarget(),
+      printOptions,
+    );
     if (!result.ok) {
       throw new Error(result.error ?? 'PDF export failed');
     }

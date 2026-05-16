@@ -24,23 +24,33 @@ import {
 type StubOptions = {
   savePath?: string | null;
   pdfBytes?: Uint8Array;
-  failOn?: 'load' | 'waitUntilReady' | 'printToPdf' | 'write';
+  measuredPageSize?: { height: number; width: number };
+  failOn?: 'load' | 'waitUntilReady' | 'measurePageSize' | 'printToPdf' | 'write';
+};
+
+type PrintToPdfCallOptions = {
+  margins: { bottom: number; left: number; right: number; top: number };
+  pageSize: { height: number; width: number };
+  preferCSSPageSize: boolean;
+  printBackground: boolean;
 };
 
 function createStubTarget(options: StubOptions = {}): {
   target: PrintReadyPdfTarget;
   calls: string[];
+  printedWith: Array<PrintToPdfCallOptions | undefined>;
   written: Array<{ filePath: string; data: Uint8Array }>;
   promptedWith: string[];
 } {
   const calls: string[] = [];
+  const printedWith: Array<PrintToPdfCallOptions | undefined> = [];
   const written: Array<{ filePath: string; data: Uint8Array }> = [];
   const promptedWith: string[] = [];
   const pdfBytes = options.pdfBytes ?? new Uint8Array([1, 2, 3]);
   const failAt = (step: StubOptions['failOn']) => {
     if (options.failOn === step) throw new Error(`${step} failed`);
   };
-  const target: PrintReadyPdfTarget = {
+  const target = {
     async promptSavePath(defaultFilename) {
       calls.push('promptSavePath');
       promptedWith.push(defaultFilename);
@@ -54,8 +64,14 @@ function createStubTarget(options: StubOptions = {}): {
       calls.push('waitUntilReady');
       failAt('waitUntilReady');
     },
-    async printToPdf() {
+    async measurePageSize() {
+      calls.push('measurePageSize');
+      failAt('measurePageSize');
+      return options.measuredPageSize ?? { height: 9, width: 16 };
+    },
+    async printToPdf(printOptions?: PrintToPdfCallOptions) {
       calls.push('printToPdf');
+      printedWith.push(printOptions);
       failAt('printToPdf');
       return pdfBytes;
     },
@@ -67,8 +83,8 @@ function createStubTarget(options: StubOptions = {}): {
     dispose() {
       calls.push('dispose');
     },
-  };
-  return { target, calls, written, promptedWith };
+  } satisfies PrintReadyPdfTarget;
+  return { target, calls, printedWith, written, promptedWith };
 }
 
 describe('savePrintReadyDocumentAsPdf', () => {
@@ -94,9 +110,45 @@ describe('savePrintReadyDocumentAsPdf', () => {
       'promptSavePath',
       'load',
       'waitUntilReady',
+      'measurePageSize',
       'printToPdf',
       'write',
       'dispose',
+    ]);
+  });
+
+  test('renders with CSS page size preference, zero margins, and inferred page size by default', async () => {
+    const { target, printedWith } = createStubTarget({
+      measuredPageSize: { height: 11, width: 8.5 },
+    });
+
+    await savePrintReadyDocumentAsPdf('<html></html>', 'nonce-options', target);
+
+    expect(printedWith).toEqual([
+      {
+        margins: { bottom: 0, left: 0, right: 0, top: 0 },
+        pageSize: { height: 11, width: 8.5 },
+        preferCSSPageSize: true,
+        printBackground: true,
+      },
+    ]);
+  });
+
+  test('renders deck exports as one 1920x1080 slide per PDF page', async () => {
+    const { target, calls, printedWith } = createStubTarget({
+      measuredPageSize: { height: 11, width: 8.5 },
+    });
+
+    await savePrintReadyDocumentAsPdf('<html></html>', 'nonce-deck', target, { deck: true });
+
+    expect(calls).not.toContain('measurePageSize');
+    expect(printedWith).toEqual([
+      {
+        margins: { bottom: 0, left: 0, right: 0, top: 0 },
+        pageSize: { height: 7.5, width: 13.333333 },
+        preferCSSPageSize: true,
+        printBackground: true,
+      },
     ]);
   });
 
@@ -118,7 +170,14 @@ describe('savePrintReadyDocumentAsPdf', () => {
     expect(result).toEqual({ ok: false, error: 'printToPdf failed' });
     expect(written).toEqual([]);
     // The render target is still torn down even though rendering threw.
-    expect(calls).toEqual(['promptSavePath', 'load', 'waitUntilReady', 'printToPdf', 'dispose']);
+    expect(calls).toEqual([
+      'promptSavePath',
+      'load',
+      'waitUntilReady',
+      'measurePageSize',
+      'printToPdf',
+      'dispose',
+    ]);
   });
 
   test('seeds the Save dialog with a filename derived from the document', async () => {

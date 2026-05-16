@@ -8,6 +8,17 @@ type PageSize = { height: number; width: number };
 const DECK_PAGE_SIZE: PageSize = { width: 13.333333, height: 7.5 };
 const MAX_PAGE_INCHES = 200;
 
+export type PrintReadyPdfOptions = {
+  deck?: boolean;
+};
+
+type PrintToPdfOptions = {
+  margins: { bottom: number; left: number; right: number; top: number };
+  pageSize: PageSize;
+  preferCSSPageSize: boolean;
+  printBackground: boolean;
+};
+
 const DECK_PRINT_CSS = `
 @media print {
   @page { size: 1920px 1080px; margin: 0; }
@@ -69,12 +80,7 @@ export async function exportPdfFromHtml(input: DesktopExportPdfInput): Promise<D
     await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(buildPrintableDocument(input))}`);
     await waitForPrintableContent(window);
     const pageSize = input.deck ? DECK_PAGE_SIZE : await inferPageSize(window);
-    const pdf = await window.webContents.printToPDF({
-      margins: { bottom: 0, left: 0, right: 0, top: 0 },
-      pageSize,
-      preferCSSPageSize: true,
-      printBackground: true,
-    });
+    const pdf = await window.webContents.printToPDF(printToPdfOptions(pageSize));
     await writeFile(save.filePath, pdf);
     return { ok: true, path: save.filePath };
   } catch (error) {
@@ -86,9 +92,9 @@ export async function exportPdfFromHtml(input: DesktopExportPdfInput): Promise<D
 
 /**
  * Default Save-dialog filename for a print-ready document. The
- * renderer's `printPdf()` bridge sends only the document and a nonce —
- * no title — but `buildSandboxedPreviewDocument` stamps the export
- * title into the wrapper's <title>, so we recover it from there.
+ * renderer's `printPdf()` bridge sends the document, nonce, and print
+ * options — no title — but `buildSandboxedPreviewDocument` stamps the
+ * export title into the wrapper's <title>, so we recover it from there.
  * Falls back to `artifact.pdf` when no usable title is present.
  */
 export function pdfFilenameFromDocument(html: string): string {
@@ -112,11 +118,13 @@ export type PrintReadyPdfTarget = {
   /** Native "Save PDF" dialog. Resolves the chosen path, or null on cancel. */
   promptSavePath: (defaultFilename: string) => Promise<string | null>;
   /** Load the print-ready document into a hidden render surface. */
-  load: (html: string) => Promise<void>;
+  load: (html: string, options: PrintReadyPdfOptions) => Promise<void>;
   /** Resolve once the document signals print-readiness for `nonce`. */
   waitUntilReady: (nonce: string) => Promise<void>;
+  /** Measure non-deck content so dialogless PDFs do not fall back to Letter. */
+  measurePageSize: () => Promise<PageSize>;
   /** Render the loaded document to PDF bytes (Electron printToPDF). */
-  printToPdf: () => Promise<Uint8Array>;
+  printToPdf: (options: PrintToPdfOptions) => Promise<Uint8Array>;
   /** Write the PDF bytes to `filePath`. */
   write: (filePath: string, data: Uint8Array) => Promise<void>;
   /** Tear down the render surface. Always invoked, including on cancel/error. */
@@ -144,6 +152,7 @@ export async function savePrintReadyDocumentAsPdf(
   html: string,
   nonce: string,
   target: PrintReadyPdfTarget,
+  options: PrintReadyPdfOptions = {},
 ): Promise<DesktopExportPdfResult> {
   const savePath = await target.promptSavePath(pdfFilenameFromDocument(html));
   if (savePath == null) {
@@ -151,9 +160,10 @@ export async function savePrintReadyDocumentAsPdf(
     return { canceled: true, ok: true };
   }
   try {
-    await target.load(html);
+    await target.load(html, options);
     await target.waitUntilReady(nonce);
-    const pdf = await target.printToPdf();
+    const pageSize = options.deck ? DECK_PAGE_SIZE : await target.measurePageSize();
+    const pdf = await target.printToPdf(printToPdfOptions(pageSize));
     await target.write(savePath, pdf);
     return { ok: true, path: savePath };
   } catch (error) {
@@ -182,16 +192,16 @@ export function createElectronPdfTarget(): PrintReadyPdfTarget {
       });
       return save.canceled || !save.filePath ? null : save.filePath;
     },
-    async load(html) {
+    async load(html, options) {
       const printWindow = new BrowserWindow({
-        height: 600,
+        height: options.deck ? 1080 : 900,
         show: false,
         webPreferences: {
           contextIsolation: true,
           nodeIntegration: false,
           sandbox: true,
         },
-        width: 800,
+        width: options.deck ? 1920 : 1440,
       });
       window = printWindow;
       printWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -202,13 +212,16 @@ export function createElectronPdfTarget(): PrintReadyPdfTarget {
       if (!window) throw new Error("PDF render window has not been loaded");
       await waitForPrintReadyHandshake(window.webContents, nonce);
     },
-    async printToPdf() {
+    async measurePageSize() {
+      if (!window) throw new Error("PDF render window has not been loaded");
+      return inferPageSize(window);
+    },
+    async printToPdf(options) {
       if (!window) throw new Error("PDF render window has not been loaded");
       // printToPDF() is the dialogless render path: the "Save as PDF"
       // equivalent of webContents.print() without the printer-first OS
-      // dialog (issue #1774). printBackground mirrors the option the
-      // pre-#1774 print() call passed.
-      return window.webContents.printToPDF({ printBackground: true });
+      // dialog (issue #1774).
+      return window.webContents.printToPDF(options);
     },
     async write(filePath, data) {
       await writeFile(filePath, data);
@@ -217,6 +230,15 @@ export function createElectronPdfTarget(): PrintReadyPdfTarget {
       if (window && !window.isDestroyed()) window.destroy();
       window = null;
     },
+  };
+}
+
+function printToPdfOptions(pageSize: PageSize): PrintToPdfOptions {
+  return {
+    margins: { bottom: 0, left: 0, right: 0, top: 0 },
+    pageSize,
+    preferCSSPageSize: true,
+    printBackground: true,
   };
 }
 

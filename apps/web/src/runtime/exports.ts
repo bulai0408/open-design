@@ -578,6 +578,10 @@ export function openSandboxedPreviewInNewTab(
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+type DesktopPrintPdfOptions = {
+  deck?: boolean;
+};
+
 // Open the artifact in a new tab via a Blob URL with a self-printing
 // script injected. Going through a Blob URL (rather than `window.open('')`
 // + `document.write`) avoids two failure modes we hit before:
@@ -616,7 +620,14 @@ export async function exportAsPdf(
   const desktopApi =
     typeof window !== 'undefined'
       ? (window as unknown as Record<string, unknown>).__odDesktop as
-          | { printPdf?: (html: string, nonce?: string) => Promise<void>; isDesktop?: boolean }
+          | {
+              printPdf?: (
+                html: string,
+                nonce?: string,
+                options?: DesktopPrintPdfOptions,
+              ) => Promise<void>;
+              isDesktop?: boolean;
+            }
           | undefined
       : undefined;
   if (desktopApi?.printPdf) {
@@ -625,7 +636,7 @@ export async function exportAsPdf(
     }
     doc = injectParentPrintReadyCache(doc, nonce);
     try {
-      await desktopApi.printPdf(doc, nonce);
+      await desktopApi.printPdf(doc, nonce, opts?.deck ? { deck: true } : undefined);
     } catch {
       if (typeof alert !== 'undefined') {
         alert('Print failed. Please try Export PDF again or use the browser version.');
