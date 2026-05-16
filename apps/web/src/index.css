@@ -19495,7 +19495,10 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   pointer-events: none;
 }
 
-.privacy-consent-banner .privacy-consent-actions {
+/* The banner is pointer-events:none so the user can click through the empty
+   card area to the app behind it. Interactive children opt back in. */
+.privacy-consent-banner .privacy-consent-actions,
+.privacy-consent-banner .privacy-consent-policy-link {
   pointer-events: auto;
 }
 
@@ -19527,7 +19530,46 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
 }
 
 .privacy-consent-banner-footer {
-  margin: 2px 0 6px;
+  margin: 2px 0 0;
+}
+
+/* Privacy policy link — between the disclosure copy and the action buttons.
+   Underlined and accent-coloured so it's an obvious, distinct affordance,
+   not just tinted text. */
+.privacy-consent-policy-link {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.privacy-consent-policy-link:hover {
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+}
+
+.privacy-consent-policy-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* On narrow viewports the fixed bottom-right card crowds page content —
+   stretch it into a bottom-edge bar with even gutters, and clear the
+   mobile browser chrome / home indicator via the safe-area inset. */
+@media (max-width: 540px) {
+  .privacy-consent-banner {
+    right: 12px;
+    left: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    width: auto;
+    max-width: none;
+    padding: 16px;
+  }
 }
 
 /* ============================================================
