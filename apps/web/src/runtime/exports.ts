@@ -606,11 +606,13 @@ export async function exportAsPdf(
   if (opts?.deck) doc = injectDeckPrintStylesheet(doc);
   doc = injectPrintReadyHandshake(doc, nonce);
 
-  // Desktop native print bridge — uses Electron's webContents.print() API
-  // instead of window.open + window.print(). The sandboxed wrapper omits
-  // allow-modals here because the native flow doesn't call window.print();
-  // granting it would let untrusted artifact code call alert()/confirm()
-  // and stall the hidden Electron window indefinitely.
+  // Desktop native PDF bridge — the main process runs a direct
+  // Save-as-PDF flow: a native Save dialog, then Electron's
+  // webContents.printToPDF() straight to the chosen file (issue #1774;
+  // see apps/desktop/src/main/pdf-export.ts). The sandboxed wrapper
+  // omits allow-modals here because the native flow never calls
+  // window.print(); granting it would let untrusted artifact code call
+  // alert()/confirm() and stall the hidden Electron window indefinitely.
   const desktopApi =
     typeof window !== 'undefined'
       ? (window as unknown as Record<string, unknown>).__odDesktop as

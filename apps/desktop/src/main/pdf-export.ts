@@ -84,6 +84,142 @@ export async function exportPdfFromHtml(input: DesktopExportPdfInput): Promise<D
   }
 }
 
+/**
+ * Default Save-dialog filename for a print-ready document. The
+ * renderer's `printPdf()` bridge sends only the document and a nonce —
+ * no title — but `buildSandboxedPreviewDocument` stamps the export
+ * title into the wrapper's <title>, so we recover it from there.
+ * Falls back to `artifact.pdf` when no usable title is present.
+ */
+export function pdfFilenameFromDocument(html: string): string {
+  const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
+  const title = match ? decodeBasicEntities(match[1]).trim() : "";
+  return `${safeFilename(title, "artifact")}.pdf`;
+}
+
+/**
+ * Electron surface consumed by {@link savePrintReadyDocumentAsPdf},
+ * declared structurally — like `WindowFullscreenSurface` in runtime.ts
+ * — so the save-as-PDF flow is unit-testable with plain stubs instead
+ * of a real `dialog` + `BrowserWindow`.
+ *
+ * There is deliberately no `print()` here. Issue #1774's bug was the
+ * `od:print-pdf` IPC handler reaching for `webContents.print()`, which
+ * opens the printer-first OS dialog; `printToPdf()` is the only render
+ * path this surface offers, so that regression cannot be reintroduced.
+ */
+export type PrintReadyPdfTarget = {
+  /** Native "Save PDF" dialog. Resolves the chosen path, or null on cancel. */
+  promptSavePath: (defaultFilename: string) => Promise<string | null>;
+  /** Load the print-ready document into a hidden render surface. */
+  load: (html: string) => Promise<void>;
+  /** Resolve once the document signals print-readiness for `nonce`. */
+  waitUntilReady: (nonce: string) => Promise<void>;
+  /** Render the loaded document to PDF bytes (Electron printToPDF). */
+  printToPdf: () => Promise<Uint8Array>;
+  /** Write the PDF bytes to `filePath`. */
+  write: (filePath: string, data: Uint8Array) => Promise<void>;
+  /** Tear down the render surface. Always invoked, including on cancel/error. */
+  dispose: () => void;
+};
+
+/**
+ * Direct Save-as-PDF flow for the renderer's
+ * `window.__odDesktop.printPdf()` bridge (the `od:print-pdf` IPC
+ * handler).
+ *
+ * Unlike {@link exportPdfFromHtml}, the document handed over here is
+ * already a fully-wrapped sandboxed preview carrying the print-ready
+ * handshake (built by apps/web/src/runtime/exports.ts#exportAsPdf), so
+ * this flow does not build the printable document — it loads it as-is,
+ * waits for the handshake, and renders straight to the file the user
+ * picked.
+ *
+ * Invariant (issue #1774): PDF export shows the native Save dialog and
+ * writes the file to disk. It never opens the printer-first OS print
+ * dialog — `webContents.print()` is not on the {@link PrintReadyPdfTarget}
+ * surface at all. A canceled Save dialog is a successful no-op.
+ */
+export async function savePrintReadyDocumentAsPdf(
+  html: string,
+  nonce: string,
+  target: PrintReadyPdfTarget,
+): Promise<DesktopExportPdfResult> {
+  const savePath = await target.promptSavePath(pdfFilenameFromDocument(html));
+  if (savePath == null) {
+    target.dispose();
+    return { canceled: true, ok: true };
+  }
+  try {
+    await target.load(html);
+    await target.waitUntilReady(nonce);
+    const pdf = await target.printToPdf();
+    await target.write(savePath, pdf);
+    return { ok: true, path: savePath };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error), ok: false };
+  } finally {
+    target.dispose();
+  }
+}
+
+/**
+ * Production {@link PrintReadyPdfTarget} backed by a real Electron
+ * `dialog` and a hidden `BrowserWindow`. The render window is created
+ * lazily in `load`, so a canceled Save dialog never spins one up.
+ */
+export function createElectronPdfTarget(): PrintReadyPdfTarget {
+  let window: BrowserWindow | null = null;
+  return {
+    async promptSavePath(defaultFilename) {
+      const save = await dialog.showSaveDialog({
+        defaultPath: defaultFilename,
+        filters: [
+          { name: "PDF", extensions: ["pdf"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+        title: "Save PDF",
+      });
+      return save.canceled || !save.filePath ? null : save.filePath;
+    },
+    async load(html) {
+      const printWindow = new BrowserWindow({
+        height: 600,
+        show: false,
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+        },
+        width: 800,
+      });
+      window = printWindow;
+      printWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      printWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+      await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    },
+    async waitUntilReady(nonce) {
+      if (!window) throw new Error("PDF render window has not been loaded");
+      await waitForPrintReadyHandshake(window.webContents, nonce);
+    },
+    async printToPdf() {
+      if (!window) throw new Error("PDF render window has not been loaded");
+      // printToPDF() is the dialogless render path: the "Save as PDF"
+      // equivalent of webContents.print() without the printer-first OS
+      // dialog (issue #1774). printBackground mirrors the option the
+      // pre-#1774 print() call passed.
+      return window.webContents.printToPDF({ printBackground: true });
+    },
+    async write(filePath, data) {
+      await writeFile(filePath, data);
+    },
+    dispose() {
+      if (window && !window.isDestroyed()) window.destroy();
+      window = null;
+    },
+  };
+}
+
 function buildPrintableDocument(input: DesktopExportPdfInput): string {
   const source = injectBaseHref(input.html, input.baseHref);
   const withTitle = injectTitle(source, input.title);
@@ -200,4 +336,34 @@ function escapeHtmlText(value: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+// Named entities the export pipeline can escape into a <title>
+// (escapeHtmlAttribute / escapeHtmlText emit `& " < >`). `&amp;` is
+// decoded last so a doubly-escaped `&amp;lt;` does not collapse to `<`.
+const BASIC_HTML_ENTITIES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/&lt;/gi, "<"],
+  [/&gt;/gi, ">"],
+  [/&quot;/gi, '"'],
+  [/&#39;/g, "'"],
+  [/&amp;/gi, "&"],
+];
+
+function decodeBasicEntities(value: string): string {
+  return BASIC_HTML_ENTITIES.reduce(
+    (acc, [pattern, char]) => acc.replace(pattern, char),
+    value,
+  );
+}
+
+// Slugify a title into a filesystem-safe filename stem. Mirrors the
+// `safeFilename` helpers in apps/daemon/src/pdf-export.ts and
+// apps/web/src/runtime/exports.ts so the desktop Save dialog's default
+// filename matches the daemon-backed export path.
+function safeFilename(name: string, fallback: string): string {
+  const slug = (name || fallback)
+    .replace(/[^\w.\-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return slug || fallback;
 }
