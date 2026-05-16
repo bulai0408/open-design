@@ -1243,6 +1243,66 @@ code {
   justify-content: flex-end;
 }
 
+/* Saved-state entry point: a persistent header chip that reveals the
+   review panel so saved Project instructions stay discoverable (#1822). */
+.project-instructions-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: var(--bg-hover, rgba(128, 128, 128, 0.1));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+  max-width: 220px;
+}
+.project-instructions-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-instructions-chip:hover,
+.project-instructions-chip.is-open {
+  color: var(--text);
+  border-color: var(--accent, #646cff);
+}
+.project-instructions-bar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.project-instructions-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent, #646cff);
+  flex-shrink: 0;
+}
+.project-instructions-preview {
+  width: 100%;
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
 /* Settings: custom instructions textarea */
 .custom-instructions-input {
   width: 100%;

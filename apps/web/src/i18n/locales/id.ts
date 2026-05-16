@@ -8,6 +8,7 @@ export const id: Dict = {
   'common.close': 'Tutup',
   'common.delete': 'Hapus',
   'common.rename': 'Ganti nama',
+  'common.edit': 'Edit',
   'common.preview': 'Pratinjau',
   'common.share': 'Bagikan',
   'common.search': 'Cari',
@@ -705,6 +706,7 @@ export const id: Dict = {
   'project.backToProjects': 'Kembali ke proyek',
   'project.metaFreeform': 'Bebas',
   'project.resizeChatPanel': 'Ubah ukuran panel chat',
+  'project.instructionsActive': 'Aktif — disertakan di setiap pesan',
 
   'chat.tabChat': 'Chat',
   'chat.tabComments': 'Komentar',
