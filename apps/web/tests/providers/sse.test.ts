@@ -7,6 +7,7 @@ import {
   sanitizePriorAssistantTurnForTranscript,
   streamViaDaemon,
 } from '../../src/providers/daemon';
+import { streamMessageAnthropicProxy } from '../../src/providers/anthropic-compatible';
 import { streamMessageOpenAI } from '../../src/providers/openai-compatible';
 import { parseSseFrame } from '../../src/providers/sse';
 
@@ -1236,35 +1237,21 @@ describe('streamViaDaemon', () => {
 });
 
 describe('streamMessageOpenAI', () => {
-  it('continues truncated OpenAI-compatible streams using accumulated assistant text', async () => {
+  it('does not continue truncated OpenAI-compatible streams with assistant prefill', async () => {
     const handlers = createStreamHandlers();
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(
-        sseResponse(
-          [
-            'event: delta',
-            'data: {"delta":"first chunk"}',
-            '',
-            'event: end',
-            'data: {"finishReason":"length"}',
-            '',
-            '',
-          ].join('\n'),
-        ),
-      )
-      .mockResolvedValueOnce(
-        sseResponse(
-          [
-            'event: delta',
-            'data: {"delta":" second chunk"}',
-            '',
-            'event: end',
-            'data: {"finishReason":"stop"}',
-            '',
-            '',
-          ].join('\n'),
-        ),
-      );
+    const fetchMock = vi.fn(async () =>
+      sseResponse(
+        [
+          'event: delta',
+          'data: {"delta":"first chunk"}',
+          '',
+          'event: end',
+          'data: {"finishReason":"length"}',
+          '',
+          '',
+        ].join('\n'),
+      ),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     await streamMessageOpenAI(
@@ -1283,18 +1270,10 @@ describe('streamMessageOpenAI', () => {
       handlers,
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [, retryInit] = fetchMock.mock.calls[1] as unknown as [RequestInfo | URL, RequestInit];
-    expect(JSON.parse(String(retryInit.body))).toMatchObject({
-      messages: [
-        { role: 'user', content: 'hello' },
-        { role: 'assistant', content: 'first chunk' },
-      ],
-    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(handlers.onDelta).toHaveBeenNthCalledWith(1, 'first chunk');
-    expect(handlers.onDelta).toHaveBeenNthCalledWith(2, ' second chunk');
     expect(handlers.onError).not.toHaveBeenCalled();
-    expect(handlers.onDone).toHaveBeenCalledWith('first chunk second chunk');
+    expect(handlers.onDone).toHaveBeenCalledWith('first chunk');
   });
 
   it('ignores comments and keeps delta/end behavior unchanged', async () => {
@@ -1376,6 +1355,70 @@ describe('streamMessageOpenAI', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/proxy/openai/stream', expect.any(Object));
     expect(handlers.onDelta).toHaveBeenCalledWith('hi');
     expect(handlers.onDone).toHaveBeenCalledWith('hi');
+  });
+});
+
+describe('streamMessageAnthropicProxy', () => {
+  it('continues truncated Anthropic streams using accumulated assistant text', async () => {
+    const handlers = createStreamHandlers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        sseResponse(
+          [
+            'event: delta',
+            'data: {"delta":"first chunk"}',
+            '',
+            'event: end',
+            'data: {"finishReason":"max_tokens"}',
+            '',
+            '',
+          ].join('\n'),
+        ),
+      )
+      .mockResolvedValueOnce(
+        sseResponse(
+          [
+            'event: delta',
+            'data: {"delta":" second chunk"}',
+            '',
+            'event: end',
+            'data: {"finishReason":"end_turn"}',
+            '',
+            '',
+          ].join('\n'),
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamMessageAnthropicProxy(
+      {
+        mode: 'api',
+        apiProtocol: 'anthropic',
+        apiKey: 'test-key',
+        baseUrl: 'https://example.test/anthropic',
+        model: 'claude-test',
+        agentId: null,
+        skillId: null,
+        designSystemId: null,
+      },
+      '',
+      [{ id: '1', role: 'user', content: 'hello' }],
+      new AbortController().signal,
+      handlers,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, retryInit] = fetchMock.mock.calls[1] as unknown as [RequestInfo | URL, RequestInit];
+    expect(JSON.parse(String(retryInit.body))).toMatchObject({
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'first chunk' },
+      ],
+    });
+    expect(handlers.onDelta).toHaveBeenNthCalledWith(1, 'first chunk');
+    expect(handlers.onDelta).toHaveBeenNthCalledWith(2, ' second chunk');
+    expect(handlers.onError).not.toHaveBeenCalled();
+    expect(handlers.onDone).toHaveBeenCalledWith('first chunk second chunk');
   });
 });
 
