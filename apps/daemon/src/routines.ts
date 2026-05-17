@@ -98,6 +98,7 @@ export interface RoutinePersistence {
   insertRun(run: RoutineRun): void;
   updateRun(id: string, patch: Partial<RoutineRun>): void;
   getLatestRun(routineId: string): RoutineRun | null;
+  claimScheduledSlot?(routineId: string, slotAt: number): boolean;
 }
 
 interface ScheduledTimer {
@@ -464,6 +465,22 @@ export class RoutineService {
     const delay = Math.max(1_000, Math.min(2_000_000_000, fireAt.getTime() - Date.now()));
     const timer = setTimeout(() => {
       this.timers.delete(routine.id);
+      const slotAt = fireAt.getTime();
+      let claimed = true;
+      try {
+        claimed = this.persistence.claimScheduledSlot?.(routine.id, slotAt) ?? true;
+      } catch (error) {
+        console.error(
+          `[od] routine ${routine.id} scheduled slot claim failed:`,
+          error instanceof Error ? error.message : error,
+        );
+        this.rescheduleOne(routine.id);
+        return;
+      }
+      if (!claimed) {
+        this.rescheduleOne(routine.id);
+        return;
+      }
       this.start_(routine.id, 'scheduled')
         .catch((error) => {
           console.error(

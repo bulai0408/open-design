@@ -195,6 +195,14 @@ function migrate(db: SqliteDb): void {
       FOREIGN KEY(routine_id) REFERENCES routines(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS routine_schedule_claims (
+      routine_id TEXT NOT NULL,
+      slot_at INTEGER NOT NULL,
+      claimed_at INTEGER NOT NULL,
+      PRIMARY KEY(routine_id, slot_at),
+      FOREIGN KEY(routine_id) REFERENCES routines(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_routine_runs_routine
       ON routine_runs(routine_id, started_at DESC);
   `);
@@ -1450,6 +1458,15 @@ export function insertRoutineRun(db: SqliteDb, r: DbRow) {
     r.errorCode ?? null,
   );
   return getRoutineRun(db, r.id);
+}
+
+export function claimRoutineScheduledSlot(db: SqliteDb, routineId: string, slotAt: number): boolean {
+  const result = db.prepare(
+    `INSERT OR IGNORE INTO routine_schedule_claims
+       (routine_id, slot_at, claimed_at)
+     VALUES (?, ?, ?)`,
+  ).run(routineId, slotAt, Date.now());
+  return result.changes > 0;
 }
 
 export function updateRoutineRun(db: SqliteDb, id: string, patch: DbRow) {

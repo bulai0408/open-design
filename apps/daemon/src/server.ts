@@ -329,6 +329,7 @@ import {
   getDeploymentById,
   getProject,
   getTemplate,
+  claimRoutineScheduledSlot,
   insertConversation,
   insertProject,
   insertRoutine,
@@ -3732,6 +3733,7 @@ export async function startServer({
       updateRoutineRun(db, id, patch);
     },
     getLatestRun: (routineId) => getLatestRoutineRun(db, routineId),
+    claimScheduledSlot: (routineId, slotAt) => claimRoutineScheduledSlot(db, routineId, slotAt),
   });
   let daemonUrl = `http://127.0.0.1:${port}`;
 

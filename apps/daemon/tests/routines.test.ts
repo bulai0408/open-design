@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   nextRunAtForSchedule,
+  RoutineService,
+  type Routine,
+  type RoutineRun,
+  type RoutineRunHandlerStart,
   validateSchedule,
   validateTarget,
 } from '../src/routines.js';
@@ -23,6 +27,68 @@ function partsIn(timezone: string, at: Date): Record<string, string> {
   if (out.hour === '24') out.hour = '00';
   return out;
 }
+
+class SharedRoutinePersistence {
+  readonly runs: RoutineRun[] = [];
+  readonly claimedSlots = new Set<string>();
+
+  constructor(private readonly routines: Routine[]) {}
+
+  list(): Routine[] {
+    return this.routines;
+  }
+
+  insertRun(run: RoutineRun): void {
+    this.runs.push(run);
+  }
+
+  updateRun(id: string, patch: Partial<RoutineRun>): void {
+    const run = this.runs.find((candidate) => candidate.id === id);
+    if (run) Object.assign(run, patch);
+  }
+
+  getLatestRun(routineId: string): RoutineRun | null {
+    return this.runs.find((run) => run.routineId === routineId) ?? null;
+  }
+
+  claimScheduledSlot(routineId: string, slotAt: number): boolean {
+    const key = `${routineId}:${slotAt}`;
+    if (this.claimedSlots.has(key)) return false;
+    this.claimedSlots.add(key);
+    return true;
+  }
+}
+
+function fixtureRoutine(overrides: Partial<Routine> = {}): Routine {
+  return {
+    id: 'routine-1',
+    name: 'Daily brief',
+    prompt: 'Summarize the day',
+    schedule: { kind: 'hourly', minute: 1 },
+    target: { mode: 'create_each_run' },
+    skillId: null,
+    agentId: null,
+    enabled: true,
+    nextRunAt: null,
+    lastRun: null,
+    createdAt: Date.UTC(2026, 4, 17, 0, 0),
+    updatedAt: Date.UTC(2026, 4, 17, 0, 0),
+    ...overrides,
+  };
+}
+
+function handlerStart(agentRunId: string): RoutineRunHandlerStart {
+  return {
+    projectId: 'project-1',
+    conversationId: 'conversation-1',
+    agentRunId,
+    completion: Promise.resolve({ status: 'succeeded' }),
+  };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('nextRunAtForSchedule DST handling', () => {
   it('does not fire before the requested wall time on a spring-forward gap day', () => {
@@ -159,6 +225,41 @@ describe('nextRunAtForSchedule DST handling', () => {
     expect(parts.day).toBe('15');
     expect(parts.hour).toBe('08');
     expect(parts.minute).toBe('30');
+  });
+});
+
+describe('RoutineService scheduled run idempotency', () => {
+  it('starts only one scheduled run when two scheduler instances fire the same slot', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));
+
+    const persistence = new SharedRoutinePersistence([fixtureRoutine()]);
+    const first = new RoutineService(persistence);
+    const second = new RoutineService(persistence);
+    const starts: string[] = [];
+
+    first.setRunHandler(async ({ runId }) => {
+      starts.push(runId);
+      return handlerStart('agent-run-1');
+    });
+    second.setRunHandler(async ({ runId }) => {
+      starts.push(runId);
+      return handlerStart('agent-run-2');
+    });
+
+    try {
+      first.start();
+      second.start();
+
+      await vi.advanceTimersByTimeAsync(61_000);
+
+      expect(starts).toHaveLength(1);
+      expect(persistence.runs).toHaveLength(1);
+      expect(persistence.claimedSlots).toEqual(new Set(['routine-1:1779012060000']));
+    } finally {
+      first.stop();
+      second.stop();
+    }
   });
 });
 
