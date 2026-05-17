@@ -22887,6 +22887,12 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   gap: 6px;
   align-items: center;
 }
+.routines-item-error {
+  color: #b3382b;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
 .routines-tag {
   font-size: 11px;
   background: var(--bg-muted);
@@ -22924,6 +22930,12 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+.routines-history-error {
+  grid-column: 1 / -1;
+  color: #b3382b;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 .routines-history-link {
   background: transparent;
