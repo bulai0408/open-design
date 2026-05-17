@@ -2604,11 +2604,16 @@ export function ProjectView({
   // shortcut wiring. Close to the JSX so the data flow is easy to
   // trace from the toolbar back to its sources.
   const handleFinalize = useCallback(() => {
+    const protocol = config.apiProtocol ?? 'anthropic';
     void finalize.trigger({
+      protocol,
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
       model: config.model,
       maxTokens: effectiveMaxTokens(config),
+      ...(protocol === 'azure' && config.apiVersion?.trim()
+        ? { apiVersion: config.apiVersion.trim() }
+        : {}),
     }).then((result) => {
       if (result) void designMdState.refresh();
     });
