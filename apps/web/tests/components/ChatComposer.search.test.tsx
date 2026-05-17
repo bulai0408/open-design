@@ -247,14 +247,14 @@ describe('ChatComposer /search command', () => {
     });
   });
 
-  it('queues draw screenshots with hidden visual target context while streaming', async () => {
+  it('auto-sends draw screenshots after the active stream finishes', async () => {
     const onSend = vi.fn();
     mockedUploadProjectFiles.mockResolvedValue({
       uploaded: [{ path: 'uploads/drawing.png', name: 'drawing.png', kind: 'image' }],
       failed: [],
     });
 
-    render(
+    const { rerender } = render(
       <ChatComposer
         projectId="project-1"
         projectFiles={[]}
@@ -282,6 +282,33 @@ describe('ChatComposer /search command', () => {
     expect(screen.queryByTestId('staged-comment-attachments')).toBeNull();
     expect((screen.getByTestId('chat-composer-input') as HTMLTextAreaElement).value).toBe('tighten this area');
     expect(onSend).not.toHaveBeenCalled();
+
+    rerender(
+      <ChatComposer
+        projectId="project-1"
+        projectFiles={[]}
+        streaming={false}
+        onEnsureProject={async () => 'project-1'}
+        onSend={onSend}
+        onStop={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    const [prompt, attachments, commentAttachments] = onSend.mock.calls[0]! as [
+      string,
+      ChatAttachment[],
+      ChatCommentAttachment[],
+    ];
+    expect(prompt).toBe('tighten this area');
+    expect(attachments).toEqual([{ path: 'uploads/drawing.png', name: 'drawing.png', kind: 'image' }]);
+    expect(commentAttachments).toHaveLength(1);
+    expect(commentAttachments[0]).toMatchObject({
+      selectionKind: 'visual',
+      screenshotPath: 'uploads/drawing.png',
+      markKind: 'stroke',
+      comment: 'tighten this area',
+    });
   });
 
   it('previews a staged image attachment from its chip', () => {

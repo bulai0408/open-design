@@ -202,6 +202,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     }, [projectId, analytics.track]);
     const [staged, setStaged] = useState<ChatAttachment[]>([]);
     const [stagedVisualComments, setStagedVisualComments] = useState<ChatCommentAttachment[]>([]);
+    const [sendStagedWhenReady, setSendStagedWhenReady] = useState(false);
     // Skills the user has @-mentioned for this turn. We dedupe on id and
     // strip the chip when the user removes the corresponding `@<skill>`
     // token from the draft, keeping draft and chips in sync.
@@ -620,6 +621,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       setDraft("");
       setStaged([]);
       setStagedVisualComments([]);
+      setSendStagedWhenReady(false);
       setStagedSkills([]);
       setUploadError(null);
       setMention(null);
@@ -629,6 +631,31 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     function currentCommentAttachments(extra: ChatCommentAttachment[] = []): ChatCommentAttachment[] {
       return [...commentAttachments, ...stagedVisualComments, ...extra];
     }
+
+    useEffect(() => {
+      if (!sendStagedWhenReady || streaming || sendDisabled) return;
+      const prompt = draft.trim();
+      const nextCommentAttachments = currentCommentAttachments();
+      if (!prompt && staged.length === 0 && nextCommentAttachments.length === 0) {
+        setSendStagedWhenReady(false);
+        return;
+      }
+      const skillIds = stagedSkills.map((s) => s.id);
+      const skillMeta = skillIds.length > 0 ? { skillIds } : undefined;
+      onSend(prompt, staged, nextCommentAttachments, skillMeta);
+      setSendStagedWhenReady(false);
+      reset();
+    }, [
+      commentAttachments,
+      draft,
+      onSend,
+      sendDisabled,
+      sendStagedWhenReady,
+      staged,
+      stagedSkills,
+      stagedVisualComments,
+      streaming,
+    ]);
 
     async function insertSkillMention(skill: SkillSummary) {
       const applied = await applyProjectSkill(skill);
@@ -756,6 +783,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                 ]);
               }
               if (detail.note) setDraft((d) => (d ? `${d}\n${detail.note}` : detail.note));
+              setSendStagedWhenReady(true);
               textareaRef.current?.focus();
               return;
             }
