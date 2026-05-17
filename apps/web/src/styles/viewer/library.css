@@ -924,6 +924,67 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
+.skills-file-upload {
+  gap: 8px;
+}
+.skills-file-dropzone {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 54px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.skills-file-dropzone input[type='file'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.skills-file-dropzone:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.skills-draft-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.skills-draft-files li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--bg-panel) 72%, transparent);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.skills-draft-files li > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skills-draft-files li > span:last-of-type {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.skills-file-upload-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.4;
+}
 .library-import-error {
   color: #ef4444;
   font-size: 12px;

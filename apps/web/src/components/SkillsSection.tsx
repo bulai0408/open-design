@@ -17,6 +17,7 @@ import {
   importSkill,
   updateSkill,
   type SkillFileEntry,
+  type SkillWriteFileInput,
 } from '../providers/registry';
 
 // Functional skills only — design templates render in EntryView's
@@ -53,6 +54,7 @@ interface DraftState {
   description: string;
   triggers: string;
   body: string;
+  files: SkillWriteFileInput[];
 }
 
 const EMPTY_DRAFT: DraftState = {
@@ -60,6 +62,7 @@ const EMPTY_DRAFT: DraftState = {
   description: '',
   triggers: '',
   body: '',
+  files: [],
 };
 
 function summaryToDraft(skill: SkillSummary, body: string): DraftState {
@@ -68,6 +71,7 @@ function summaryToDraft(skill: SkillSummary, body: string): DraftState {
     description: skill.description,
     triggers: Array.isArray(skill.triggers) ? skill.triggers.join(', ') : '',
     body,
+    files: [],
   };
 }
 
@@ -288,6 +292,7 @@ export function SkillsSection({ cfg, setCfg, onSkillsRefresh, onSkillsChanged }:
       description: draft.description.trim() || undefined,
       body,
       triggers,
+      ...(draft.files.length > 0 ? { files: draft.files } : {}),
     };
     setDraftSaving(true);
     setDraftError(null);
@@ -798,10 +803,56 @@ function SkillDraftForm({
   onSubmit,
 }: SkillDraftFormProps) {
   const t = useT();
+  const [filesReading, setFilesReading] = useState(false);
+  const [filesError, setFilesError] = useState<string | null>(null);
+
+  const addFiles = useCallback(
+    async (list: FileList | File[] | null) => {
+      const selected = Array.from(list ?? []);
+      if (selected.length === 0) return;
+      setFilesReading(true);
+      setFilesError(null);
+      try {
+        const uploaded = await Promise.all(
+          selected.map((file) => readFileForUpload(file)),
+        );
+        setDraft((cur) => ({
+          ...cur,
+          files: mergeDraftFiles(cur.files, uploaded),
+        }));
+      } catch (err) {
+        setFilesError(
+          err instanceof Error ? err.message : 'Could not read selected files.',
+        );
+      } finally {
+        setFilesReading(false);
+      }
+    },
+    [setDraft],
+  );
+
+  const removeFile = useCallback(
+    (path: string) => {
+      setDraft((cur) => ({
+        ...cur,
+        files: cur.files.filter((file) => file.path !== path),
+      }));
+    },
+    [setDraft],
+  );
+
   return (
     <div
       className="skills-draft library-import-form"
       data-testid={isEdit ? 'skills-edit-form' : 'skills-create-form'}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        void addFiles(e.dataTransfer.files);
+      }}
     >
       <header className="skills-draft-head">
         <div>
@@ -852,6 +903,54 @@ function SkillDraftForm({
           placeholder={'# My skill\n\n1. Explain the workflow.\n2. Describe the inputs and outputs.'}
         />
       </label>
+      <div className="library-import-block skills-file-upload">
+        <span>Side files</span>
+        <label className="skills-file-dropzone">
+          <Icon name="file" size={14} />
+          <span>Drop files here or choose files</span>
+          <input
+            type="file"
+            multiple
+            data-testid="skills-file-input"
+            onChange={(e) => {
+              void addFiles(e.currentTarget.files);
+              e.currentTarget.value = '';
+            }}
+          />
+        </label>
+        {draft.files.length > 0 ? (
+          <ul className="skills-draft-files" data-testid="skills-draft-files">
+            {draft.files.map((file) => (
+              <li key={file.path}>
+                <span>{file.path}</span>
+                <span>{formatSize(skillDraftFileSize(file))}</span>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() => removeFile(file.path)}
+                  title={`Remove ${file.path}`}
+                  data-testid={`skills-file-remove-${file.path}`}
+                >
+                  <Icon name="close" size={12} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="skills-file-upload-hint">
+            Add references, scripts, assets, or examples that should live next
+            to SKILL.md.
+          </p>
+        )}
+        {filesReading ? (
+          <p className="skills-file-upload-hint">Reading selected files…</p>
+        ) : null}
+        {filesError ? (
+          <div className="library-import-error" role="alert">
+            {filesError}
+          </div>
+        ) : null}
+      </div>
       {error ? (
         <div className="library-import-error" role="alert">
           {error}
@@ -870,7 +969,7 @@ function SkillDraftForm({
           type="button"
           className="btn primary"
           onClick={onSubmit}
-          disabled={saving}
+          disabled={saving || filesReading}
           data-testid="skills-save"
         >
           {saving
@@ -902,6 +1001,50 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function readFileForUpload(file: File): Promise<SkillWriteFileInput> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return {
+    path: uploadRelativePath(file),
+    content: bytesToBase64(bytes),
+    encoding: 'base64',
+  };
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function uploadRelativePath(file: File): string {
+  const withRelativePath = file as File & { webkitRelativePath?: string };
+  return withRelativePath.webkitRelativePath || file.name;
+}
+
+function skillDraftFileSize(file: SkillWriteFileInput): number {
+  if (file.encoding === 'base64') return base64ByteLength(file.content);
+  return new Blob([file.content]).size;
+}
+
+function base64ByteLength(value: string): number {
+  const compact = value.replace(/\s/g, '');
+  if (!compact) return 0;
+  const padding = compact.endsWith('==') ? 2 : compact.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((compact.length * 3) / 4) - padding);
+}
+
+function mergeDraftFiles(
+  current: SkillWriteFileInput[],
+  incoming: SkillWriteFileInput[],
+): SkillWriteFileInput[] {
+  const byPath = new Map(current.map((file) => [file.path, file]));
+  for (const file of incoming) byPath.set(file.path, file);
+  return Array.from(byPath.values());
 }
 
 // Frontmatter-style category slugs come in as kebab-case

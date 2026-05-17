@@ -194,6 +194,7 @@ export interface SkillImportRequest {
   description?: string;
   body: string;
   triggers?: string[];
+  files?: SkillWriteFile[];
 }
 
 export interface SkillImportResponse {
@@ -209,6 +210,7 @@ export interface SkillUpdateRequest {
   description?: string;
   body: string;
   triggers?: string[];
+  files?: SkillWriteFile[];
 }
 
 export interface SkillUpdateResponse {
@@ -226,6 +228,17 @@ export interface SkillFileEntry {
 
 export interface SkillFilesResponse {
   files: SkillFileEntry[];
+}
+
+export interface SkillWriteFile {
+  // Path relative to the skill folder. The daemon rejects absolute paths,
+  // traversal segments, dotfile segments, and SKILL.md because that file is
+  // generated from the structured skill fields above.
+  path: string;
+  // File payload. Omitted encoding is treated as UTF-8 for older clients;
+  // browser uploads send base64 so arbitrary assets survive the JSON hop.
+  content: string;
+  encoding?: 'utf8' | 'base64';
 }
 
 export interface SkillDetail extends SkillSummary {

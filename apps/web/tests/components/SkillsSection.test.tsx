@@ -343,4 +343,47 @@ describe('SkillsSection', () => {
       expect(onSkillsChanged).toHaveBeenCalledWith('user-skill');
     });
   });
+
+  it('includes selected side files when creating a skill', async () => {
+    const { fetchMock } = renderSkillsSection([]);
+
+    fireEvent.click(await screen.findByTestId('skills-new'));
+    const form = await screen.findByTestId('skills-create-form');
+
+    fireEvent.change(within(form).getByLabelText('Name'), {
+      target: { value: 'Custom Skill' },
+    });
+    fireEvent.change(within(form).getByLabelText('SKILL.md body'), {
+      target: { value: '# Custom Skill\n\nUse the reference.' },
+    });
+    const binaryAsset = new Uint8Array([0x00, 0x9f, 0x92, 0x96, 0xff]);
+    fireEvent.change(within(form).getByTestId('skills-file-input'), {
+      target: {
+        files: [
+          new File([binaryAsset], 'pixel.bin', {
+            type: 'application/octet-stream',
+          }),
+        ],
+      },
+    });
+
+    await within(form).findByText('pixel.bin');
+    fireEvent.click(within(form).getByTestId('skills-save'));
+
+    await waitFor(() => {
+      const createCall = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          url === '/api/skills/import' && init?.method === 'POST',
+      );
+      expect(createCall).toBeTruthy();
+      const payload = JSON.parse(String(createCall?.[1]?.body));
+      expect(payload.files).toEqual([
+        {
+          path: 'pixel.bin',
+          content: 'AJ+Slv8=',
+          encoding: 'base64',
+        },
+      ]);
+    });
+  });
 });

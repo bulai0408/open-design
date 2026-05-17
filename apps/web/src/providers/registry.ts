@@ -312,6 +312,13 @@ export interface SkillImportInput {
   description?: string;
   body: string;
   triggers?: string[];
+  files?: SkillWriteFileInput[];
+}
+
+export interface SkillWriteFileInput {
+  path: string;
+  content: string;
+  encoding?: 'utf8' | 'base64';
 }
 
 export interface SkillImportError {
@@ -360,6 +367,7 @@ export interface SkillUpdateInput {
   description?: string;
   body: string;
   triggers?: string[];
+  files?: SkillWriteFileInput[];
 }
 
 export async function updateSkill(

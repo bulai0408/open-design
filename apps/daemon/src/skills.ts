@@ -773,6 +773,7 @@ export interface SkillImportInput {
   description?: unknown;
   body?: unknown;
   triggers?: unknown;
+  files?: unknown;
 }
 
 export interface SkillImportResult {
@@ -783,6 +784,144 @@ export interface SkillImportResult {
 
 function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
   return Boolean(err) && typeof err === "object" && "code" in (err as object);
+}
+
+interface SkillSideFileInput {
+  path: string;
+  content: Buffer;
+}
+
+const SKILL_IMPORT_MAX_FILES = 100;
+const SKILL_IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024;
+const SKILL_IMPORT_MAX_TOTAL_FILE_BYTES = 25 * 1024 * 1024;
+
+function normalizeSkillSideFilePath(input: unknown): string {
+  const raw = typeof input === "string" ? input.trim() : "";
+  const value = raw.replace(/\\/g, "/");
+  if (
+    !value ||
+    value.includes("\0") ||
+    value.startsWith("/") ||
+    /^[A-Za-z]:\//.test(value)
+  ) {
+    throw new SkillImportError("BAD_REQUEST", "invalid skill file path");
+  }
+  const parts = value.split("/").filter(Boolean);
+  if (
+    parts.length === 0 ||
+    parts.some((part) => part === "." || part === ".." || part.startsWith("."))
+  ) {
+    throw new SkillImportError(
+      "BAD_REQUEST",
+      `unsafe skill file path: ${value}`,
+    );
+  }
+  if (parts.join("/").toLowerCase() === "skill.md") {
+    throw new SkillImportError(
+      "BAD_REQUEST",
+      "SKILL.md is generated automatically",
+    );
+  }
+  return parts.join("/");
+}
+
+function normalizeSkillSideFiles(files: unknown): SkillSideFileInput[] {
+  if (files === undefined || files === null) return [];
+  if (!Array.isArray(files)) {
+    throw new SkillImportError("BAD_REQUEST", "skill files must be an array");
+  }
+  if (files.length > SKILL_IMPORT_MAX_FILES) {
+    throw new SkillImportError("BAD_REQUEST", "too many skill files");
+  }
+  const seen = new Set<string>();
+  let totalBytes = 0;
+  return files.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      throw new SkillImportError("BAD_REQUEST", "invalid skill file entry");
+    }
+    const record = entry as Record<string, unknown>;
+    const rel = normalizeSkillSideFilePath(record.path);
+    if (seen.has(rel)) {
+      throw new SkillImportError(
+        "BAD_REQUEST",
+        `duplicate skill file path: ${rel}`,
+      );
+    }
+    seen.add(rel);
+    const content = decodeSkillSideFileContent(rel, record);
+    const size = content.byteLength;
+    if (size > SKILL_IMPORT_MAX_FILE_BYTES) {
+      throw new SkillImportError(
+        "BAD_REQUEST",
+        `skill file is too large: ${rel}`,
+      );
+    }
+    totalBytes += size;
+    if (totalBytes > SKILL_IMPORT_MAX_TOTAL_FILE_BYTES) {
+      throw new SkillImportError(
+        "BAD_REQUEST",
+        "skill files exceed total size limit",
+      );
+    }
+    return { path: rel, content };
+  });
+}
+
+async function writeSkillSideFiles(
+  skillDir: string,
+  files: SkillSideFileInput[],
+): Promise<void> {
+  const root = path.resolve(skillDir);
+  for (const file of files) {
+    const target = path.resolve(root, file.path);
+    if (target === root || !target.startsWith(root + path.sep)) {
+      throw new SkillImportError("BAD_REQUEST", "invalid skill file path");
+    }
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, file.content);
+  }
+}
+
+function decodeSkillSideFileContent(
+  rel: string,
+  record: Record<string, unknown>,
+): Buffer {
+  if (typeof record.content !== "string") {
+    throw new SkillImportError(
+      "BAD_REQUEST",
+      `skill file content must be a string: ${rel}`,
+    );
+  }
+  const encoding = record.encoding ?? "utf8";
+  if (encoding === "utf8") {
+    return Buffer.from(record.content, "utf8");
+  }
+  if (encoding !== "base64") {
+    throw new SkillImportError(
+      "BAD_REQUEST",
+      `unsupported skill file encoding for ${rel}`,
+    );
+  }
+  return decodeBase64SkillSideFile(rel, record.content);
+}
+
+function decodeBase64SkillSideFile(rel: string, content: string): Buffer {
+  const compact = content.replace(/\s/g, "");
+  if (compact.length === 0) return Buffer.alloc(0);
+  if (compact.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) {
+    throw new SkillImportError(
+      "BAD_REQUEST",
+      `invalid base64 skill file content: ${rel}`,
+    );
+  }
+  const decoded = Buffer.from(compact, "base64");
+  if (decoded.toString("base64") !== compact) {
+    throw new SkillImportError(
+      "BAD_REQUEST",
+      `invalid base64 skill file content: ${rel}`,
+    );
+  }
+  return decoded;
 }
 
 export async function importUserSkill(
@@ -810,6 +949,7 @@ export async function importUserSkill(
   const triggers = triggersRaw
     .map((t) => (typeof t === "string" ? t.trim() : ""))
     .filter(Boolean);
+  const files = normalizeSkillSideFiles(input?.files);
 
   await mkdir(userSkillsRoot, { recursive: true });
   const dir = path.join(userSkillsRoot, slug);
@@ -835,6 +975,7 @@ export async function importUserSkill(
   await mkdir(dir, { recursive: true });
   const md = buildSkillMarkdown({ name, description, body, triggers });
   await writeFile(path.join(dir, "SKILL.md"), md, "utf8");
+  await writeSkillSideFiles(dir, files);
   return { id: name, slug, dir };
 }
 
@@ -843,6 +984,7 @@ export interface SkillUpdateInput {
   description?: unknown;
   body?: unknown;
   triggers?: unknown;
+  files?: unknown;
   // Original on-disk dir for the skill being edited. When the caller is
   // shadowing a built-in for the first time (i.e. `sourceDir` differs
   // from the user shadow target and the shadow folder does not exist
@@ -893,6 +1035,7 @@ export async function updateUserSkill(
   const triggers = triggersRaw
     .map((t) => (typeof t === "string" ? t.trim() : ""))
     .filter(Boolean);
+  const files = normalizeSkillSideFiles(input?.files);
   await mkdir(userSkillsRoot, { recursive: true });
   const dir = path.join(userSkillsRoot, slug);
   const dirExisted = await stat(dir)
@@ -922,6 +1065,7 @@ export async function updateUserSkill(
   }
   const md = buildSkillMarkdown({ name, description, body, triggers });
   await writeFile(path.join(dir, "SKILL.md"), md, "utf8");
+  await writeSkillSideFiles(dir, files);
   return { id: name, slug, dir };
 }
 

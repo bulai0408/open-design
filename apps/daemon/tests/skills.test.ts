@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -425,6 +425,77 @@ describe('importUserSkill / deleteUserSkill', () => {
       await expect(deleteUserSkill(root, 'Code Review')).rejects.toMatchObject({
         code: 'NOT_FOUND',
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('writes uploaded side files inside the imported skill folder', async () => {
+    const root = fresh();
+    try {
+      const binaryAsset = Buffer.from([0x00, 0x9f, 0x92, 0x96, 0xff]);
+      const result = await importUserSkill(root, {
+        name: 'With Files',
+        body: '# With files',
+        files: [
+          {
+            path: 'references/checklist.md',
+            content: '# Checklist\n\n- Verify output.',
+          },
+          {
+            path: 'assets/logo.svg',
+            content: '<svg role="img"></svg>',
+          },
+          {
+            path: 'assets/pixel.bin',
+            content: binaryAsset.toString('base64'),
+            encoding: 'base64',
+          },
+        ],
+      });
+
+      expect(result.slug).toBe('with-files');
+      expect(
+        readFileSync(
+          path.join(root, 'with-files', 'references', 'checklist.md'),
+          'utf8',
+        ),
+      ).toContain('Verify output');
+      expect(
+        readFileSync(path.join(root, 'with-files', 'assets', 'logo.svg'), 'utf8'),
+      ).toContain('<svg');
+      expect(
+        readFileSync(path.join(root, 'with-files', 'assets', 'pixel.bin')),
+      ).toEqual(binaryAsset);
+
+      const files = await listSkillFiles(result.dir);
+      expect(files.map((entry) => entry.path)).toEqual(
+        expect.arrayContaining([
+          'SKILL.md',
+          'assets',
+          'assets/logo.svg',
+          'assets/pixel.bin',
+          'references',
+          'references/checklist.md',
+        ]),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects uploaded side files with unsafe relative paths', async () => {
+    const root = fresh();
+    try {
+      await expect(
+        importUserSkill(root, {
+          name: 'Unsafe files',
+          body: '# Unsafe',
+          files: [{ path: '../escape.md', content: 'escape' }],
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+      expect(existsSync(path.join(root, 'unsafe-files'))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
