@@ -85,6 +85,34 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('chat composer switches the project design system mid-chat', async ({ page }) => {
+  // Capture every outbound run-create request so we can prove the chat
+  // turn *after* the switch composes with the new design system rather
+  // than stale in-memory state. The run + its SSE stream are stubbed so
+  // the assertion does not depend on a live agent.
+  const runRequestBodies: Array<Record<string, unknown>> = [];
+  await page.route('**/api/runs', async (route) => {
+    const raw = route.request().postData();
+    if (raw) {
+      try {
+        runRequestBodies.push(JSON.parse(raw) as Record<string, unknown>);
+      } catch {
+        // Non-JSON body — ignore; the assertion below will surface it.
+      }
+    }
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: '{"runId":"mock-run"}',
+    });
+  });
+  await page.route('**/api/runs/*/events', async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+      body: ['event: end', 'data: {"code":0,"status":"succeeded"}', '', ''].join('\n'),
+    });
+  });
+
   await page.goto('/');
   await createProject(page, 'Mid-chat DS switch');
   await expectWorkspaceReady(page);
@@ -115,6 +143,25 @@ test('chat composer switches the project design system mid-chat', async ({ page 
 
   const after = await fetchCurrentProject(page);
   expect(after.designSystemId).toBe('editorial-noir');
+
+  // The regression boundary: send a chat turn and assert the outbound
+  // run carries the *switched* design system. If the composer kept
+  // composing from a stale `project` mirror, `designSystemId` here would
+  // still be `null` even though the server record was updated.
+  const input = page.getByTestId('chat-composer-input');
+  await expect(input).toBeVisible();
+  await input.fill('Lay out the landing hero');
+  const sendButton = page.getByTestId('chat-send');
+  await expect(sendButton).toBeEnabled();
+  await Promise.all([
+    page.waitForRequest(
+      (req) => req.url().includes('/api/runs') && req.method() === 'POST',
+    ),
+    sendButton.click(),
+  ]);
+
+  expect(runRequestBodies.length).toBeGreaterThan(0);
+  expect(runRequestBodies[0]?.designSystemId).toBe('editorial-noir');
 });
 
 async function openImportTab(page: Page) {

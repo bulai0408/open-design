@@ -4513,8 +4513,8 @@ export function ProjectView({
               }}
               activePluginSnapshot={activePluginSnapshot}
               currentDesignSystemId={project.designSystemId}
-              onActiveDesignSystemChange={(designSystemId) => {
-                onProjectChange({ ...project, designSystemId });
+              onActiveDesignSystemChange={(updatedProject) => {
+                onProjectChange(updatedProject);
               }}
               onShowToast={(message) => {
                 setProjectActionsToast({ message, details: null });

@@ -27,7 +27,7 @@ import { patchProject } from "../state/projects";
 import { fetchMcpServers } from "../state/mcp";
 import type { McpServerConfig, McpTemplate } from "../state/mcp";
 import { listPlugins } from "../state/projects";
-import type { AppConfig, ChatAttachment, ChatCommentAttachment, ProjectFile, ProjectMetadata, SkillSummary } from "../types";
+import type { AppConfig, ChatAttachment, ChatCommentAttachment, Project, ProjectFile, ProjectMetadata, SkillSummary } from "../types";
 import type {
   ContextItem,
   ConnectorDetail,
@@ -162,10 +162,11 @@ interface Props {
   // switch. Optional so test/screenshot harnesses can omit it.
   currentDesignSystemId?: string | null;
   // Fires after a successful `PATCH /api/projects/:id` from the mid-chat
-  // design-system picker. Parent updates its mirror of project state so
-  // subsequent chat turns compose with the new DESIGN.md. `null` means the
-  // user picked the "freeform / no DS" entry.
-  onActiveDesignSystemChange?: (designSystemId: string | null) => void;
+  // design-system picker. Receives the full patched `Project` straight
+  // from the PATCH response so the parent replaces its mirror wholesale —
+  // rebuilding from a stale `project` prop would drop server-owned fields
+  // the daemon refreshes on every PATCH (e.g. `updatedAt`).
+  onActiveDesignSystemChange?: (project: Project) => void;
   // Optional transient banner sink. The composer emits one short message
   // here when a mid-chat design-system switch lands (or fails) so the user
   // has explicit confirmation without re-opening the picker.
@@ -1128,7 +1129,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         onShowToast?.(t('chat.importDesignSystemFailed'));
         return false;
       }
-      onActiveDesignSystemChange?.(designSystemId);
+      onActiveDesignSystemChange?.(result);
       const switchedTitle = designSystemId === null
         ? t('chat.importDesignSystemNone')
         : title ?? designSystemId;

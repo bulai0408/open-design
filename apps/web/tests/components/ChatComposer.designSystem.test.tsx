@@ -132,7 +132,18 @@ describe('ChatComposer mid-chat design-system switcher', () => {
       designSystemId: 'nexu-soft-tech',
     });
 
-    await waitFor(() => expect(onActiveDesignSystemChange).toHaveBeenCalledWith('nexu-soft-tech'));
+    // The callback receives the full patched Project from the PATCH
+    // response — not just the id — so the parent keeps server-owned
+    // fields like `updatedAt` instead of rebuilding from a stale prop.
+    await waitFor(() =>
+      expect(onActiveDesignSystemChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'project-1',
+          designSystemId: 'nexu-soft-tech',
+          updatedAt: 2,
+        }),
+      ),
+    );
     expect(onShowToast).toHaveBeenCalledWith(
       'Design system switched to Nexu Soft Tech',
     );
@@ -315,7 +326,11 @@ describe('ChatComposer mid-chat design-system switcher', () => {
     expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toEqual({
       designSystemId: null,
     });
-    await waitFor(() => expect(onActiveDesignSystemChange).toHaveBeenCalledWith(null));
+    await waitFor(() =>
+      expect(onActiveDesignSystemChange).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'project-1', designSystemId: null, updatedAt: 2 }),
+      ),
+    );
   });
 
   it("doesn't PATCH when the user picks the current design system", async () => {

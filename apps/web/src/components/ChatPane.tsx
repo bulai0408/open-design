@@ -15,7 +15,7 @@ import {
 } from '../design-system-auto-prompt';
 import { latestTodoWriteInputForPinnedCard } from '../runtime/todos';
 import { TodoCard } from './ToolCard';
-import type { AppConfig, ChatAttachment, ChatCommentAttachment, ChatMessage, ChatMessageFeedbackChange, Conversation, DesignSystemSummary, PreviewComment, ProjectFile, ProjectMetadata, SkillSummary } from '../types';
+import type { AppConfig, ChatAttachment, ChatCommentAttachment, ChatMessage, ChatMessageFeedbackChange, Conversation, DesignSystemSummary, PreviewComment, Project, ProjectFile, ProjectMetadata, SkillSummary } from '../types';
 import { dayKey, dayLabel, exactDateTime, messageTime, relativeTimeLong } from '../utils/chatTime';
 import { commentTargetDisplayName, commentsToAttachments, simplePositionLabel } from '../comments';
 import { AssistantMessage } from './AssistantMessage';
@@ -331,9 +331,9 @@ interface Props {
   composerFooterAccessory?: ReactNode;
   // Forwarded straight to the chat composer's mid-chat design-system
   // switcher. ProjectView owns the project record so the parent is the
-  // natural place to mirror the new `designSystemId` after a PATCH lands.
+  // natural place to mirror the patched project after a PATCH lands.
   currentDesignSystemId?: string | null;
-  onActiveDesignSystemChange?: (designSystemId: string | null) => void;
+  onActiveDesignSystemChange?: (project: Project) => void;
   onShowToast?: (message: string) => void;
 }
 
