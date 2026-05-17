@@ -10646,6 +10646,20 @@ button.connector-action.is-loading {
   border: none;
   background: white;
 }
+.artifact-preview-transport-stack {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.artifact-preview-transport-stack iframe {
+  position: absolute;
+  inset: 0;
+}
+.artifact-preview-transport-stack iframe[data-od-active='false'] {
+  visibility: hidden;
+  pointer-events: none;
+}
 .viewer-viewport-switcher {
   position: relative;
   display: inline-flex;

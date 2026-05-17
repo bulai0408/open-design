@@ -359,9 +359,57 @@ describe('FileViewer SVG artifacts', () => {
 
     expect(markup).toContain('data-testid="artifact-preview-frame"');
     expect(markup).toContain('data-od-render-mode="url-load"');
+    expect(markup).toContain('data-od-render-mode="url-load" data-od-active="true"');
+    expect(markup).toContain('data-od-render-mode="srcdoc" data-od-active="false"');
     expect(markup).toContain('src="/api/projects/project-1/raw/page.html?v=1710000000&amp;r=0"');
     expect(markup).toContain('sandbox="allow-scripts allow-downloads"');
-    expect(markup).not.toContain('data-od-render-mode="srcdoc"');
+  });
+
+  it('keeps both HTML preview transports mounted when Inspect switches to srcDoc', () => {
+    const file = baseFile({
+      name: 'page.html',
+      path: 'page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+
+    const { container } = render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+      />,
+    );
+
+    const urlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement | null;
+    const srcDocFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement | null;
+
+    expect(urlFrame).toBeTruthy();
+    expect(srcDocFrame).toBeTruthy();
+    expect(urlFrame?.getAttribute('data-od-active')).toBe('true');
+    expect(srcDocFrame?.getAttribute('data-od-active')).toBe('false');
+    expect(srcDocFrame?.srcdoc).toContain('data-od-selection-bridge');
+
+    const initialSrcDoc = srcDocFrame?.srcdoc;
+    fireEvent.click(screen.getByTestId('inspect-mode-toggle'));
+
+    const urlFrameAfter = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement | null;
+    const srcDocFrameAfter = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement | null;
+
+    expect(urlFrameAfter).toBe(urlFrame);
+    expect(srcDocFrameAfter).toBe(srcDocFrame);
+    expect(urlFrameAfter?.getAttribute('data-od-active')).toBe('false');
+    expect(srcDocFrameAfter?.getAttribute('data-od-active')).toBe('true');
+    expect(srcDocFrameAfter?.srcdoc).toBe(initialSrcDoc);
   });
 
   it('allows downloads in the in-tab HTML presentation iframe', async () => {
@@ -448,8 +496,9 @@ describe('FileViewer SVG artifacts', () => {
 
     expect(markup).toContain('data-testid="artifact-preview-frame"');
     expect(markup).toContain('data-od-render-mode="srcdoc"');
+    expect(markup).toContain('data-od-render-mode="srcdoc" data-od-active="true"');
+    expect(markup).toContain('data-od-render-mode="url-load" data-od-active="false"');
     expect(markup).toContain('sandbox="allow-scripts allow-downloads"');
-    expect(markup).not.toContain('data-od-render-mode="url-load"');
   });
 
   it('falls back to srcDoc when the HTML body looks deck-shaped even without an isDeck hint', () => {
@@ -475,7 +524,8 @@ describe('FileViewer SVG artifacts', () => {
     );
 
     expect(markup).toContain('data-od-render-mode="srcdoc"');
-    expect(markup).not.toContain('data-od-render-mode="url-load"');
+    expect(markup).toContain('data-od-render-mode="srcdoc" data-od-active="true"');
+    expect(markup).toContain('data-od-render-mode="url-load" data-od-active="false"');
   });
 
   it('hides preview-only toolbar controls when switching an HTML deck to source view', async () => {
@@ -1105,21 +1155,28 @@ describe('FileViewer tweaks toolbar', () => {
     expect(screen.queryByPlaceholderText('Type anywhere to add a note')).toBeNull();
   });
 
-  it('enables element picking while the Draw bar is in click mode', async () => {
+  it('keeps the preloaded selection bridge mounted while the Draw bar switches to click mode', async () => {
     render(
       <FileViewer projectId="project-1" projectKind="prototype" file={htmlPreviewFile()}
         liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
       />,
     );
 
-    const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+    expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
     fireEvent.click(screen.getByTestId('draw-overlay-toggle'));
-    await waitFor(() => expect(frame.srcdoc).not.toContain('data-od-selection-bridge'));
+
+    const frame = await waitFor(() => {
+      const activeFrame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(activeFrame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      expect(activeFrame.srcdoc).toContain('data-od-selection-bridge');
+      return activeFrame;
+    });
+    const initialSrcDoc = frame.srcdoc;
 
     fireEvent.click(screen.getByRole('button', { name: 'Click' }));
 
-    await waitFor(() => expect(frame.srcdoc).toContain('data-od-selection-bridge'));
-    expect(frame.srcdoc).toContain('data-od-comment-mode');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Click' }).getAttribute('aria-pressed')).toBe('true'));
+    expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).srcdoc).toBe(initialSrcDoc);
   });
 
   it('disables Draw direct send while a task is running but keeps queue available', () => {

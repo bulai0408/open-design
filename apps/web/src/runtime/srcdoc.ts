@@ -27,6 +27,7 @@ export type SrcdocOptions = {
   initialSlideIndex?: number;
   commentBridge?: boolean;
   inspectBridge?: boolean;
+  selectionBridge?: boolean;
   editBridge?: boolean;
   paletteBridge?: boolean;
   initialPalette?: string | null;
@@ -61,7 +62,7 @@ export function buildSrcdoc(
   // active — without that initial seed there is a window after each
   // srcdoc rebuild where the host's `od:*-mode` postMessage races the
   // bridge's own listener install and the iframe ignores clicks.
-  const withSelection = options.commentBridge || options.inspectBridge
+  const withSelection = options.selectionBridge || options.commentBridge || options.inspectBridge
     ? injectSelectionBridge(withDeck, {
         initialCommentMode: !!options.commentBridge,
         initialInspectMode: !!options.inspectBridge,
