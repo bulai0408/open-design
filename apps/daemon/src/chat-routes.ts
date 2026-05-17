@@ -622,6 +622,13 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     return '';
   };
 
+  const extractOpenAIFinishReason = (data: any) => {
+    const choices = data?.choices;
+    if (!Array.isArray(choices) || choices.length === 0) return '';
+    const first = choices[0];
+    return typeof first?.finish_reason === 'string' ? first.finish_reason : '';
+  };
+
   const extractStreamErrorMessage = (data: any) => {
     const err = data?.error;
     if (!err) return '';
@@ -640,6 +647,13 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     const parts = candidates[0]?.content?.parts;
     if (!Array.isArray(parts)) return '';
     return parts.map((part) => part?.text).filter((text) => typeof text === 'string').join('');
+  };
+
+  const extractGeminiFinishReason = (data: any) => {
+    const candidates = data?.candidates;
+    if (!Array.isArray(candidates) || candidates.length === 0) return '';
+    const reason = candidates[0]?.finishReason;
+    return typeof reason === 'string' ? reason : '';
   };
 
   const benignGeminiFinishReasons = new Set(['', 'STOP', 'MAX_TOKENS', 'FINISH_REASON_UNSPECIFIED']);
@@ -746,6 +760,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
 
       let ended = false;
       const guard = createDeltaGuard(sse);
+      let finishReason = '';
       await streamUpstreamSse(response, ({ event, data }: any) => {
         if (!data) return false;
         if (event === 'error' || data.type === 'error') {
@@ -762,8 +777,11 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
             return true;
           }
         }
+        if (event === 'message_delta' && typeof data.delta?.stop_reason === 'string') {
+          finishReason = data.delta.stop_reason;
+        }
         if (event === 'message_stop') {
-          sse.send('end', {});
+          sse.send('end', finishReason ? { finishReason } : {});
           ended = true;
           return true;
         }
@@ -834,6 +852,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
 
       let ended = false;
       const guard = createDeltaGuard(sse);
+      let finishReason = '';
       await streamUpstreamSse(response, ({ data }: any) => {
         if (!data) return false;
         const streamError = extractStreamErrorMessage(data);
@@ -851,6 +870,8 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
             return true;
           }
         }
+        const reason = extractGeminiFinishReason(data);
+        if (reason) finishReason = reason;
         const blockMessage = extractGeminiBlockMessage(data);
         if (blockMessage) {
           sendProxyError(sse, blockMessage, { details: data });
@@ -859,7 +880,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
         }
         return false;
       });
-      if (!ended) sse.send('end', {});
+      if (!ended) sse.send('end', finishReason ? { finishReason } : {});
       sse.end();
     } catch (err: any) {
       console.error(`[${opts.logTag}] internal error: ${err.message}`);
@@ -1074,9 +1095,10 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
 
       let ended = false;
       const guard = createDeltaGuard(sse);
+      let finishReason = '';
       await streamUpstreamSse(response, ({ payload, data }: any) => {
         if (payload === '[DONE]') {
-          sse.send('end', {});
+          sse.send('end', finishReason ? { finishReason } : {});
           ended = true;
           return true;
         }
@@ -1088,14 +1110,16 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
           return true;
         }
         const delta = extractOpenAIText(data);
-        if (delta) { 
-          guard.sendDelta(delta); 
-          if (guard.contaminated) { 
-            sse.send('end', {}); 
-            ended = true; 
-            return true; 
-          } 
+        if (delta) {
+          guard.sendDelta(delta);
+          if (guard.contaminated) {
+            sse.send('end', {});
+            ended = true;
+            return true;
+          }
         }
+        const reason = extractOpenAIFinishReason(data);
+        if (reason) finishReason = reason;
         return false;
       });
       if (!ended) sse.send('end', {});
@@ -1229,9 +1253,10 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
 
       let ended = false;
       const guard = createDeltaGuard(sse);
+      let finishReason = '';
       await streamUpstreamSse(response, ({ payload: ssePayload, data }: any) => {
         if (ssePayload === '[DONE]') {
-          sse.send('end', {});
+          sse.send('end', finishReason ? { finishReason } : {});
           ended = true;
           return true;
         }
@@ -1243,13 +1268,16 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
           return true;
         }
         const delta = extractOpenAIText(data);
-        if (delta) { guard.sendDelta(delta); 
-          if (guard.contaminated) { 
-            sse.send('end', {}); 
-            ended = true; 
-            return true; 
-          } 
+        if (delta) {
+          guard.sendDelta(delta);
+          if (guard.contaminated) {
+            sse.send('end', {});
+            ended = true;
+            return true;
+          }
         }
+        const reason = extractOpenAIFinishReason(data);
+        if (reason) finishReason = reason;
         return false;
       });
       if (!ended) sse.send('end', {});

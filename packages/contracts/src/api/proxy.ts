@@ -46,4 +46,5 @@ export interface ProxyStreamDeltaPayload {
 
 export interface ProxyStreamEndPayload {
   code?: number;
+  finishReason?: string;
 }

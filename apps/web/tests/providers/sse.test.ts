@@ -1236,6 +1236,67 @@ describe('streamViaDaemon', () => {
 });
 
 describe('streamMessageOpenAI', () => {
+  it('continues truncated OpenAI-compatible streams using accumulated assistant text', async () => {
+    const handlers = createStreamHandlers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        sseResponse(
+          [
+            'event: delta',
+            'data: {"delta":"first chunk"}',
+            '',
+            'event: end',
+            'data: {"finishReason":"length"}',
+            '',
+            '',
+          ].join('\n'),
+        ),
+      )
+      .mockResolvedValueOnce(
+        sseResponse(
+          [
+            'event: delta',
+            'data: {"delta":" second chunk"}',
+            '',
+            'event: end',
+            'data: {"finishReason":"stop"}',
+            '',
+            '',
+          ].join('\n'),
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamMessageOpenAI(
+      {
+        mode: 'api',
+        apiKey: 'test-key',
+        baseUrl: 'https://example.test',
+        model: 'gpt-test',
+        agentId: null,
+        skillId: null,
+        designSystemId: null,
+      },
+      '',
+      [{ id: '1', role: 'user', content: 'hello' }],
+      new AbortController().signal,
+      handlers,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, retryInit] = fetchMock.mock.calls[1] as unknown as [RequestInfo | URL, RequestInit];
+    expect(JSON.parse(String(retryInit.body))).toMatchObject({
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'first chunk' },
+      ],
+    });
+    expect(handlers.onDelta).toHaveBeenNthCalledWith(1, 'first chunk');
+    expect(handlers.onDelta).toHaveBeenNthCalledWith(2, ' second chunk');
+    expect(handlers.onError).not.toHaveBeenCalled();
+    expect(handlers.onDone).toHaveBeenCalledWith('first chunk second chunk');
+  });
+
   it('ignores comments and keeps delta/end behavior unchanged', async () => {
     const handlers = createStreamHandlers();
     vi.stubGlobal(
