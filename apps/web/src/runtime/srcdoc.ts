@@ -72,7 +72,40 @@ export function buildSrcdoc(
     ? injectPaletteBridge(withSelection, { initialPalette: options.initialPalette ?? null })
     : withSelection;
   const withEdit = options.editBridge ? injectManualEditBridge(withPalette) : withPalette;
-  return injectSnapshotBridge(withEdit);
+  return injectSrcdocTransportActivationBridge(injectSnapshotBridge(withEdit));
+}
+
+export function buildLazySrcdocTransport(): string {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script data-od-lazy-srcdoc-transport>(function(){
+      window.addEventListener('message', function(ev){
+        var data = ev && ev.data;
+        if (!data || data.type !== 'od:srcdoc-transport-activate' || typeof data.html !== 'string') return;
+        document.open();
+        document.write(data.html);
+        document.close();
+      });
+    })();</script>
+  </head>
+  <body></body>
+</html>`;
+}
+
+function injectSrcdocTransportActivationBridge(doc: string): string {
+  const script = `<script data-od-srcdoc-transport-activation>(function(){
+  window.addEventListener('message', function(ev){
+    var data = ev && ev.data;
+    if (!data || data.type !== 'od:srcdoc-transport-activate' || typeof data.html !== 'string') return;
+    document.open();
+    document.write(data.html);
+    document.close();
+  });
+})();</script>`;
+  return injectBeforeBodyEnd(doc, script);
 }
 
 function injectSnapshotBridge(doc: string): string {

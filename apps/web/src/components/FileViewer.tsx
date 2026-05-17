@@ -58,7 +58,7 @@ import {
   requestPreviewSnapshot,
 } from '../runtime/exports';
 import { buildReactComponentSrcdoc } from '../runtime/react-component';
-import { buildSrcdoc } from '../runtime/srcdoc';
+import { buildLazySrcdocTransport, buildSrcdoc } from '../runtime/srcdoc';
 import {
   hasUrlModeBridge,
   htmlNeedsSandboxShim,
@@ -3502,6 +3502,7 @@ function HtmlViewer({
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const urlPreviewIframeRef = useRef<HTMLIFrameElement | null>(null);
   const srcDocPreviewIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const activatedSrcDocTransportHtmlRef = useRef<string | null>(null);
   const isActivePreviewIframeSource = useCallback((source: MessageEventSource | null) => {
     return !!source && source === iframeRef.current?.contentWindow;
   }, []);
@@ -3951,6 +3952,36 @@ function HtmlViewer({
     }) : ''),
     [previewSource, effectiveDeck, projectId, file.name, previewStateKey, manualEditMode, selectedPalette],
   );
+  const lazySrcDocTransport = useMemo(() => buildLazySrcdocTransport(), []);
+  const [hasLazySrcDocTransport, setHasLazySrcDocTransport] = useState(useUrlLoadPreview);
+  const [srcDocTransportResetKey, setSrcDocTransportResetKey] = useState(0);
+  const wasUrlLoadPreviewRef = useRef(useUrlLoadPreview);
+  useEffect(() => {
+    if (useUrlLoadPreview) setHasLazySrcDocTransport(true);
+  }, [useUrlLoadPreview]);
+  const useLazySrcDocTransport = useUrlLoadPreview || hasLazySrcDocTransport;
+  const srcDocTransportContent = useLazySrcDocTransport ? lazySrcDocTransport : srcDoc;
+  const urlTransportSrc = useUrlLoadPreview ? previewSrcUrl : 'about:blank';
+  const activateSrcDocTransport = useCallback((target: HTMLIFrameElement | null = srcDocPreviewIframeRef.current) => {
+    const win = target?.contentWindow;
+    if (!win || !srcDoc || useUrlLoadPreview || !useLazySrcDocTransport) return false;
+    if (activatedSrcDocTransportHtmlRef.current === srcDoc) return false;
+    win.postMessage({ type: 'od:srcdoc-transport-activate', html: srcDoc }, '*');
+    activatedSrcDocTransportHtmlRef.current = srcDoc;
+    return true;
+  }, [srcDoc, useLazySrcDocTransport, useUrlLoadPreview]);
+  useEffect(() => {
+    if (useUrlLoadPreview) {
+      activatedSrcDocTransportHtmlRef.current = null;
+      if (!wasUrlLoadPreviewRef.current) {
+        setSrcDocTransportResetKey((key) => key + 1);
+      }
+      wasUrlLoadPreviewRef.current = true;
+      return;
+    }
+    wasUrlLoadPreviewRef.current = false;
+    activateSrcDocTransport();
+  }, [activateSrcDocTransport, useUrlLoadPreview]);
   useEffect(() => {
     restorePreviewScrollPosition();
   }, [boardMode, manualEditMode, srcDoc, restorePreviewScrollPosition]);
@@ -5875,7 +5906,7 @@ function HtmlViewer({
                       tabIndex={useUrlLoadPreview ? 0 : -1}
                       title={file.name}
                       sandbox="allow-scripts allow-downloads"
-                      src={previewSrcUrl}
+                      src={urlTransportSrc}
                       onLoad={() => {
                         const frame = urlPreviewIframeRef.current;
                         if (useUrlLoadPreview) iframeRef.current = frame;
@@ -5889,6 +5920,7 @@ function HtmlViewer({
                       }}
                     />
                     <iframe
+                      key={srcDocTransportResetKey}
                       ref={srcDocPreviewIframeRef}
                       data-testid={useUrlLoadPreview ? 'artifact-preview-frame-srcdoc' : 'artifact-preview-frame'}
                       data-od-render-mode="srcdoc"
@@ -5897,10 +5929,11 @@ function HtmlViewer({
                       tabIndex={useUrlLoadPreview ? -1 : 0}
                       title={file.name}
                       sandbox="allow-scripts allow-downloads"
-                      srcDoc={srcDoc}
+                      srcDoc={srcDocTransportContent}
                       onLoad={() => {
                         const frame = srcDocPreviewIframeRef.current;
                         if (!useUrlLoadPreview) iframeRef.current = frame;
+                        activateSrcDocTransport(frame);
                         dcViewportRestoreAtRef.current = Date.now();
                         frame?.contentWindow?.postMessage({
                           type: '__dc_set_viewport',

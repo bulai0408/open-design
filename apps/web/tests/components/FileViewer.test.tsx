@@ -66,6 +66,16 @@ function deferredResponse() {
   return { promise, resolve };
 }
 
+function srcDocActivationMessages(calls: readonly (readonly unknown[])[]) {
+  return calls
+    .map(([message]) => message)
+    .filter((message): message is { type: 'od:srcdoc-transport-activate'; html: string } => {
+      if (typeof message !== 'object' || message === null) return false;
+      const data = message as { type?: unknown; html?: unknown };
+      return data.type === 'od:srcdoc-transport-activate' && typeof data.html === 'string';
+    });
+}
+
 describe('FileViewer preview scale', () => {
   it('uses the requested zoom for desktop preview overlays', () => {
     expect(effectivePreviewScale('desktop', 1.5, { width: 320, height: 480 })).toBe(1.5);
@@ -365,7 +375,7 @@ describe('FileViewer SVG artifacts', () => {
     expect(markup).toContain('sandbox="allow-scripts allow-downloads"');
   });
 
-  it('keeps both HTML preview transports mounted when Inspect switches to srcDoc', () => {
+  it('keeps inactive HTML preview transports mounted without booting the artifact', async () => {
     const file = baseFile({
       name: 'page.html',
       path: 'page.html',
@@ -386,7 +396,7 @@ describe('FileViewer SVG artifacts', () => {
         projectId="project-1"
         projectKind="prototype"
         file={file}
-        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+        liveHtml='<html><body><script>window.__odArtifactBootCount = (window.__odArtifactBootCount || 0) + 1;</script><main data-od-id="hero">Hero</main></body></html>'
       />,
     );
 
@@ -397,9 +407,10 @@ describe('FileViewer SVG artifacts', () => {
     expect(srcDocFrame).toBeTruthy();
     expect(urlFrame?.getAttribute('data-od-active')).toBe('true');
     expect(srcDocFrame?.getAttribute('data-od-active')).toBe('false');
-    expect(srcDocFrame?.srcdoc).toContain('data-od-selection-bridge');
+    expect(srcDocFrame?.srcdoc).toContain('data-od-lazy-srcdoc-transport');
+    expect(srcDocFrame?.srcdoc).not.toContain('__odArtifactBootCount');
 
-    const initialSrcDoc = srcDocFrame?.srcdoc;
+    const postMessageSpy = vi.spyOn(srcDocFrame!.contentWindow!, 'postMessage');
     fireEvent.click(screen.getByTestId('inspect-mode-toggle'));
 
     const urlFrameAfter = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement | null;
@@ -408,8 +419,16 @@ describe('FileViewer SVG artifacts', () => {
     expect(urlFrameAfter).toBe(urlFrame);
     expect(srcDocFrameAfter).toBe(srcDocFrame);
     expect(urlFrameAfter?.getAttribute('data-od-active')).toBe('false');
+    expect(urlFrameAfter?.getAttribute('src')).toBe('about:blank');
     expect(srcDocFrameAfter?.getAttribute('data-od-active')).toBe('true');
-    expect(srcDocFrameAfter?.srcdoc).toBe(initialSrcDoc);
+    expect(srcDocFrameAfter?.srcdoc).toContain('data-od-lazy-srcdoc-transport');
+    expect(srcDocFrameAfter?.srcdoc).not.toContain('__odArtifactBootCount');
+
+    await waitFor(() => {
+      const activations = srcDocActivationMessages(postMessageSpy.mock.calls);
+      expect(activations.at(-1)?.html).toContain('__odArtifactBootCount');
+      expect(activations.at(-1)?.html).toContain('data-od-selection-bridge');
+    });
   });
 
   it('allows downloads in the in-tab HTML presentation iframe', async () => {
@@ -1163,13 +1182,18 @@ describe('FileViewer tweaks toolbar', () => {
     );
 
     expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
+    const inactiveSrcDocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
+    const postMessageSpy = vi.spyOn(inactiveSrcDocFrame.contentWindow!, 'postMessage');
     fireEvent.click(screen.getByTestId('draw-overlay-toggle'));
 
     const frame = await waitFor(() => {
       const activeFrame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
       expect(activeFrame.getAttribute('data-od-render-mode')).toBe('srcdoc');
-      expect(activeFrame.srcdoc).toContain('data-od-selection-bridge');
+      expect(activeFrame.srcdoc).toContain('data-od-lazy-srcdoc-transport');
       return activeFrame;
+    });
+    await waitFor(() => {
+      expect(srcDocActivationMessages(postMessageSpy.mock.calls).at(-1)?.html).toContain('data-od-selection-bridge');
     });
     const initialSrcDoc = frame.srcdoc;
 
