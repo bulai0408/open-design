@@ -630,13 +630,13 @@ describe('connector routes', () => {
     });
   });
 
-  it('surfaces nested Composio auth config creation errors', async () => {
+  it('returns custom auth guidance when preparing an unsupported managed Composio auth config', async () => {
     await closeServer();
     mockComposioFetch({
       authConfigs: [],
       createAuthConfigResponse: composioJson({
         error: {
-          message: 'Default auth config not found for toolkit "canvas".',
+          message: 'Default auth config not found for toolkit "twitter". Composio does not have managed credentials for this toolkit.',
           suggested_fix: 'Use type "use_custom_auth" with your own credentials.',
         },
       }, 400),
@@ -651,10 +651,51 @@ describe('connector routes', () => {
       body: JSON.stringify({ apiKey: 'cmp_test' }),
     });
 
-    const connect = await jsonFetch(`${baseUrl}/api/connectors/canvas/connect`, { method: 'POST' });
+    const prepare = await jsonFetch(`${baseUrl}/api/connectors/auth-configs/prepare`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ connectorIds: ['twitter'] }),
+    });
 
-    expect(connect.status).toBe(502);
-    expect(connect.body.error.message).toBe('Default auth config not found for toolkit "canvas".');
+    expect(prepare.status).toBe(200);
+    expect(prepare.body.results.twitter).toEqual({
+      status: 'custom_required',
+      message: 'Twitter requires a custom Composio auth config. Create or enable a Twitter auth config in Composio with your own OAuth credentials, then retry this connection.',
+    });
+  });
+
+  it('explains when a Composio connector requires a custom auth config', async () => {
+    await closeServer();
+    mockComposioFetch({
+      authConfigs: [],
+      createAuthConfigResponse: composioJson({
+        error: {
+          message: 'Default auth config not found for toolkit "twitter". Composio does not have managed credentials for this toolkit.',
+          suggested_fix: 'Use type "use_custom_auth" with your own credentials.',
+        },
+      }, 400),
+    });
+    composioConnectorProvider.clearDiscoveryCache();
+    const started = await startServer({ port: 0, returnServer: true }) as StartedServer;
+    server = started.server;
+    baseUrl = started.url;
+    await jsonFetch(`${baseUrl}/api/connectors/composio/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: 'cmp_test' }),
+    });
+
+    const connect = await jsonFetch(`${baseUrl}/api/connectors/twitter/connect`, { method: 'POST' });
+
+    expect(connect.status).toBe(409);
+    expect(connect.body.error.code).toBe('CONNECTOR_AUTH_CONFIG_REQUIRED');
+    expect(connect.body.error.message).toBe('Twitter requires a custom Composio auth config. Create or enable a Twitter auth config in Composio with your own OAuth credentials, then retry this connection.');
+    expect(connect.body.error.details).toMatchObject({
+      connectorId: 'twitter',
+      provider: 'composio',
+      reason: 'managed_auth_unavailable',
+      upstreamMessage: 'Default auth config not found for toolkit "twitter". Composio does not have managed credentials for this toolkit.',
+    });
   });
 
   it('rejects immediate Composio connections when account validation does not match the connector', async () => {
