@@ -162,6 +162,7 @@ import {
   validateSchedule as validateRoutineSchedule,
   validateTarget as validateRoutineTarget,
 } from './routines.js';
+import { classifyRoutineRunFailureReason } from './routine-failure-reason.js';
 import { buildMcpInstallPayload } from './mcp-install-info.js';
 import {
   buildProjectArchive,
@@ -1815,6 +1816,38 @@ function createSseErrorPayload(code, message, init = {}) {
   return { message, error: createCompatApiError(code, message, init) };
 }
 
+function updateRoutineAssistantMessageOnCompletion(db, assistantMessageId, status, endedAt, failureReason) {
+  if (!failureReason?.message) {
+    db.prepare(`UPDATE messages SET run_status = ?, ended_at = ? WHERE id = ?`)
+      .run(status, endedAt, assistantMessageId);
+    return;
+  }
+  const row = db.prepare(`SELECT events_json AS eventsJson FROM messages WHERE id = ?`)
+    .get(assistantMessageId);
+  let events = [];
+  if (typeof row?.eventsJson === 'string' && row.eventsJson) {
+    try {
+      const parsed = JSON.parse(row.eventsJson);
+      if (Array.isArray(parsed)) events = parsed;
+    } catch {
+      events = [];
+    }
+  }
+  const alreadyPresent = events.some((event) => (
+    event?.kind === 'status' &&
+    event.label === 'error' &&
+    event.detail === failureReason.message
+  ));
+  const nextEvents = alreadyPresent
+    ? events
+    : [...events, { kind: 'status', label: 'error', detail: failureReason.message }];
+  db.prepare(
+    `UPDATE messages
+        SET run_status = ?, ended_at = ?, events_json = ?
+      WHERE id = ?`,
+  ).run(status, endedAt, JSON.stringify(nextEvents), assistantMessageId);
+}
+
 const UPLOAD_DIR = path.join(os.tmpdir(), 'od-uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
@@ -2276,6 +2309,7 @@ export async function startServer({
         completedAt: run.completedAt,
         summary: run.summary,
         error: run.error,
+        failureReason: run.failureReason,
       });
     },
     updateRun: (id, patch) => {
@@ -4697,11 +4731,21 @@ export async function startServer({
 
     const completion = (async () => {
       const finalStatus = await design.runs.wait(run);
-      db.prepare(`UPDATE messages SET run_status = ?, ended_at = ? WHERE id = ?`)
-        .run(finalStatus.status, Date.now(), assistantMessageId);
+      const failureReason = finalStatus.status === 'failed'
+        ? classifyRoutineRunFailureReason(run.events)
+        : null;
+      updateRoutineAssistantMessageOnCompletion(
+        db,
+        assistantMessageId,
+        finalStatus.status,
+        Date.now(),
+        failureReason,
+      );
       return {
         status: finalStatus.status,
         summary: `Routine "${routine.name}" ${finalStatus.status}.`,
+        error: failureReason?.message,
+        failureReason,
       };
     })();
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   nextRunAtForSchedule,
+  RoutineService,
   validateSchedule,
   validateTarget,
 } from '../src/routines.js';
@@ -193,5 +194,55 @@ describe('routine validation', () => {
     expect(() =>
       validateTarget({ mode: 'reuse', projectId: '' }),
     ).toThrow(/projectId/);
+  });
+});
+
+describe('RoutineService failure persistence', () => {
+  it('passes structured failure reasons from run completion into persistence', async () => {
+    const routine = {
+      id: 'routine-1',
+      name: 'Daily digest',
+      prompt: 'Summarize activity.',
+      schedule: { kind: 'daily' as const, time: '09:00', timezone: 'UTC' },
+      target: { mode: 'create_each_run' as const },
+      skillId: null,
+      agentId: null,
+      enabled: true,
+      nextRunAt: null,
+      lastRun: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const failureReason = {
+      kind: 'inactivity_watchdog',
+      message: 'Agent stalled without emitting any new output for 1s.',
+      code: 'AGENT_EXECUTION_FAILED',
+      retryable: true,
+    } as const;
+    const updated = new Promise<Record<string, unknown>>((resolve) => {
+      const service = new RoutineService({
+        list: () => [routine],
+        insertRun: () => {},
+        updateRun: (_id, patch) => resolve(patch),
+        getLatestRun: () => null,
+      });
+      service.setRunHandler(async () => ({
+        projectId: 'proj-1',
+        conversationId: 'conv-1',
+        agentRunId: 'agent-run-1',
+        completion: Promise.resolve({
+          status: 'failed',
+          error: failureReason.message,
+          failureReason,
+        }),
+      }));
+      void service.runNow('routine-1');
+    });
+
+    await expect(updated).resolves.toMatchObject({
+      status: 'failed',
+      error: failureReason.message,
+      failureReason,
+    });
   });
 });

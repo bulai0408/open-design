@@ -284,6 +284,12 @@ describe('routine routes', () => {
         completedAt: Date.now(),
         summary: 'Connector auth failed',
         error: 'provider rejected credentials',
+        failureReason: {
+          kind: 'agent_auth',
+          message: 'provider rejected credentials',
+          code: 'AGENT_AUTH_REQUIRED',
+          retryable: true,
+        },
       });
 
       const getRes = await fetch(`http://127.0.0.1:${port}/api/routines/${created.routine.id}`);
@@ -298,6 +304,12 @@ describe('routine routes', () => {
             conversationId: string;
             agentRunId: string;
             summary: string;
+            failureReason: {
+              kind: string;
+              message: string;
+              code: string;
+              retryable: boolean;
+            };
             completedAt: number;
           } | null;
         };
@@ -310,8 +322,37 @@ describe('routine routes', () => {
         conversationId: 'conv-failed',
         agentRunId: 'agent-run-failed',
         summary: 'Connector auth failed',
+        failureReason: {
+          kind: 'agent_auth',
+          message: 'provider rejected credentials',
+          code: 'AGENT_AUTH_REQUIRED',
+          retryable: true,
+        },
       });
       expect(json.routine.lastRun?.completedAt).toBeTypeOf('number');
+
+      const runsRes = await fetch(`http://127.0.0.1:${port}/api/routines/${created.routine.id}/runs?limit=10`);
+      expect(runsRes.status).toBe(200);
+      const runsJson = await runsRes.json() as {
+        runs: Array<{
+          id: string;
+          failureReason: {
+            kind: string;
+            message: string;
+            code: string;
+            retryable: boolean;
+          };
+        }>;
+      };
+      expect(runsJson.runs[0]).toMatchObject({
+        id: 'run-failed-1',
+        failureReason: {
+          kind: 'agent_auth',
+          message: 'provider rejected credentials',
+          code: 'AGENT_AUTH_REQUIRED',
+          retryable: true,
+        },
+      });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

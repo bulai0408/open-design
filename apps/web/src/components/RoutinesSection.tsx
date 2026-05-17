@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import type {
   CreateRoutineRequest,
   Routine,
+  RoutineRunFailureReason,
   RoutineProjectTarget,
   RoutineRun,
   RoutineSchedule,
@@ -216,6 +217,19 @@ function StatusPill({ status }: { status: RoutineRun['status'] }) {
   return <span className={`routines-status routines-status-${status}`}>{status}</span>;
 }
 
+const FAILURE_REASON_LABELS: Record<RoutineRunFailureReason['kind'], string> = {
+  agent_auth: 'Agent login required',
+  agent_spawn: 'Agent could not start',
+  inactivity_watchdog: 'Timed out with no agent output',
+  unknown: 'Run failed',
+};
+
+function formatFailureReason(reason: RoutineRunFailureReason | null | undefined): string | null {
+  if (!reason?.message) return null;
+  const label = FAILURE_REASON_LABELS[reason.kind] ?? FAILURE_REASON_LABELS.unknown;
+  return `${label}: ${reason.message}`;
+}
+
 function ScheduleEditor({
   form,
   setForm,
@@ -339,38 +353,46 @@ function RunHistory({ routineId, refreshKey, onClose }: { routineId: string; ref
 
   return (
     <ul className="routines-history">
-      {runs.map((r) => (
-        <li key={r.id} className="routines-history-row">
-          <StatusPill status={r.status} />
-          <span className="routines-history-time">{formatRunTimestamp(r.startedAt)}</span>
-          <span className="routines-history-trigger">
-            {r.trigger === 'manual' ? 'manual' : 'scheduled'}
-          </span>
-          <button
-            type="button"
-            className="routines-history-link"
-            onClick={() => {
-              // Issue #1505: deep-link to this run's specific
-              // conversation, not just the project root. Without the
-              // conversation id, parallel runs that share a project
-              // (reuse mode) all resolve to the same default
-              // conversation in the project view, which made earlier
-              // runs look "absorbed" by the latest one.
-              navigate({
-                kind: 'project',
-                projectId: r.projectId,
-                conversationId: r.conversationId ?? null,
-                fileName: null,
-              });
-              onClose?.();
-            }}
-            title="Open the project this run wrote to"
-          >
-            Open project
-            <Icon name="chevron-right" size={12} />
-          </button>
-        </li>
-      ))}
+      {runs.map((r) => {
+        const failureReason = formatFailureReason(r.failureReason);
+        return (
+          <li key={r.id} className="routines-history-row">
+            <StatusPill status={r.status} />
+            <span className="routines-history-main">
+              <span className="routines-history-time">{formatRunTimestamp(r.startedAt)}</span>
+              {failureReason ? (
+                <span className="routines-failure-reason">{failureReason}</span>
+              ) : null}
+            </span>
+            <span className="routines-history-trigger">
+              {r.trigger === 'manual' ? 'manual' : 'scheduled'}
+            </span>
+            <button
+              type="button"
+              className="routines-history-link"
+              onClick={() => {
+                // Issue #1505: deep-link to this run's specific
+                // conversation, not just the project root. Without the
+                // conversation id, parallel runs that share a project
+                // (reuse mode) all resolve to the same default
+                // conversation in the project view, which made earlier
+                // runs look "absorbed" by the latest one.
+                navigate({
+                  kind: 'project',
+                  projectId: r.projectId,
+                  conversationId: r.conversationId ?? null,
+                  fileName: null,
+                });
+                onClose?.();
+              }}
+              title="Open the project this run wrote to"
+            >
+              Open project
+              <Icon name="chevron-right" size={12} />
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -662,6 +684,7 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
                 : '→ new project each run';
             const isBusy = busyId === r.id;
             const isExpanded = expandedId === r.id;
+            const lastRunFailureReason = formatFailureReason(r.lastRun?.failureReason);
             return (
               <li key={r.id} className={`routines-card routines-item${r.enabled ? '' : ' is-disabled'}`}>
                 <div className="routines-item-head">
@@ -687,6 +710,9 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
                         </>
                       ) : null}
                     </div>
+                    {lastRunFailureReason ? (
+                      <div className="routines-failure-reason">{lastRunFailureReason}</div>
+                    ) : null}
                   </div>
                   <div className="routines-item-actions">
                     <button

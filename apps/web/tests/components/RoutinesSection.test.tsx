@@ -264,6 +264,92 @@ describe('RoutinesSection', () => {
     expect(runBodies).toEqual(['/api/routines/routine-1/run']);
   });
 
+  it('shows failure reasons in the latest run summary and run history', async () => {
+    const failureReason = {
+      kind: 'inactivity_watchdog',
+      message: 'Agent stalled without emitting any new output for 1s.',
+      code: 'AGENT_EXECUTION_FAILED',
+      retryable: true,
+    } as const;
+    const routines: Routine[] = [{
+      id: 'routine-1',
+      name: 'Morning briefing',
+      prompt: 'Morning summary',
+      schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+      target: { mode: 'create_each_run' },
+      skillId: null,
+      agentId: null,
+      enabled: true,
+      nextRunAt: Date.now() + 3600_000,
+      lastRun: {
+        runId: 'run-1',
+        status: 'failed',
+        trigger: 'scheduled',
+        startedAt: Date.now() - 1000,
+        completedAt: Date.now(),
+        projectId: 'proj-run',
+        conversationId: 'conv-run',
+        agentRunId: 'agent-run-1',
+        failureReason,
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === '/api/routines' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ routines }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/projects' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ projects: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/routines/routine-1/runs?limit=10') {
+        return new Response(JSON.stringify({
+          runs: [
+            {
+              id: 'run-1',
+              routineId: 'routine-1',
+              trigger: 'scheduled',
+              status: 'failed',
+              projectId: 'proj-run',
+              conversationId: 'conv-run',
+              agentRunId: 'agent-run-1',
+              startedAt: Date.now() - 1000,
+              completedAt: Date.now(),
+              summary: null,
+              error: failureReason.message,
+              failureReason,
+            },
+          ],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    }) as typeof fetch;
+
+    render(<RoutinesSection />);
+
+    const card = (await screen.findByText('Morning briefing')).closest('li')!;
+    expect(within(card).getByText(/Timed out with no agent output/)).toBeTruthy();
+    expect(within(card).getByText(/Agent stalled without emitting any new output/)).toBeTruthy();
+
+    fireEvent.click(within(card).getByRole('button', { name: 'History' }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/Timed out with no agent output/).length).toBeGreaterThanOrEqual(2);
+      expect(screen.getAllByText(/Agent stalled without emitting any new output/).length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   it('shows a validation error when reuse mode is selected without a project', async () => {
     const postBodies: unknown[] = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

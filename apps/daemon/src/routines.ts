@@ -22,6 +22,19 @@ export type RoutineRunStatus =
 
 export type RoutineRunTrigger = 'manual' | 'scheduled';
 
+export type RoutineRunFailureReasonKind =
+  | 'agent_auth'
+  | 'agent_spawn'
+  | 'inactivity_watchdog'
+  | 'unknown';
+
+export interface RoutineRunFailureReason {
+  kind: RoutineRunFailureReasonKind;
+  message: string;
+  code?: string;
+  retryable?: boolean;
+}
+
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 export type RoutineSchedule =
@@ -61,6 +74,7 @@ export interface RoutineRun {
   completedAt: number | null;
   summary: string | null;
   error: string | null;
+  failureReason: RoutineRunFailureReason | null;
 }
 
 export interface RoutineRunHandlerStart {
@@ -74,6 +88,7 @@ export interface RoutineRunCompletion {
   status: RoutineRunStatus;
   summary?: string;
   error?: string;
+  failureReason?: RoutineRunFailureReason | null;
 }
 
 export type RoutineRunHandler = (input: {
@@ -507,6 +522,7 @@ export class RoutineService {
         completedAt: null,
         summary: null,
         error: null,
+        failureReason: null,
       });
       handlerStart.completion
         .then((completion) => {
@@ -515,14 +531,20 @@ export class RoutineService {
             completedAt: Date.now(),
             summary: completion.summary ?? null,
             error: completion.error ?? null,
+            failureReason: completion.failureReason ?? null,
           });
         })
         .catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
           this.persistence.updateRun(runId, {
             status: 'failed',
             completedAt: Date.now(),
             summary: null,
-            error: error instanceof Error ? error.message : String(error),
+            error: message,
+            failureReason: {
+              kind: 'unknown',
+              message,
+            },
           });
         });
       return handlerStart;

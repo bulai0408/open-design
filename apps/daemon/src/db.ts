@@ -188,6 +188,7 @@ function migrate(db: SqliteDb): void {
       completed_at INTEGER,
       summary TEXT,
       error TEXT,
+      failure_reason_json TEXT,
       FOREIGN KEY(routine_id) REFERENCES routines(id) ON DELETE CASCADE
     );
 
@@ -257,6 +258,10 @@ function migrate(db: SqliteDb): void {
   const routineCols = db.prepare(`PRAGMA table_info(routines)`).all() as DbRow[];
   if (routineCols.length > 0 && !routineCols.some((c: DbRow) => c.name === 'schedule_json')) {
     db.exec(`ALTER TABLE routines ADD COLUMN schedule_json TEXT`);
+  }
+  const routineRunCols = db.prepare(`PRAGMA table_info(routine_runs)`).all() as DbRow[];
+  if (routineRunCols.length > 0 && !routineRunCols.some((c: DbRow) => c.name === 'failure_reason_json')) {
+    db.exec(`ALTER TABLE routine_runs ADD COLUMN failure_reason_json TEXT`);
   }
   migrateCritique(db);
   migrateMediaTasks(db);
@@ -1226,7 +1231,8 @@ const ROUTINE_COLS = `id, name, prompt,
 const ROUTINE_RUN_COLS = `id, routine_id AS routineId, trigger, status,
   project_id AS projectId, conversation_id AS conversationId,
   agent_run_id AS agentRunId, started_at AS startedAt,
-  completed_at AS completedAt, summary, error`;
+  completed_at AS completedAt, summary, error,
+  failure_reason_json AS failureReasonJson`;
 
 export function listRoutines(db: SqliteDb) {
   return (db
@@ -1360,8 +1366,9 @@ export function insertRoutineRun(db: SqliteDb, r: DbRow) {
   db.prepare(
     `INSERT INTO routine_runs
        (id, routine_id, trigger, status, project_id, conversation_id,
-        agent_run_id, started_at, completed_at, summary, error)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        agent_run_id, started_at, completed_at, summary, error,
+        failure_reason_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     r.id,
     r.routineId,
@@ -1374,6 +1381,7 @@ export function insertRoutineRun(db: SqliteDb, r: DbRow) {
     r.completedAt ?? null,
     r.summary ?? null,
     r.error ?? null,
+    r.failureReason ? JSON.stringify(r.failureReason) : null,
   );
   return getRoutineRun(db, r.id);
 }
@@ -1387,13 +1395,15 @@ export function updateRoutineRun(db: SqliteDb, id: string, patch: DbRow) {
   };
   db.prepare(
     `UPDATE routine_runs
-        SET status = ?, completed_at = ?, summary = ?, error = ?
+        SET status = ?, completed_at = ?, summary = ?, error = ?,
+            failure_reason_json = ?
       WHERE id = ?`,
   ).run(
     merged.status,
     merged.completedAt ?? null,
     merged.summary ?? null,
     merged.error ?? null,
+    merged.failureReason ? JSON.stringify(merged.failureReason) : null,
     id,
   );
   return getRoutineRun(db, id);
@@ -1412,6 +1422,7 @@ function normalizeRoutineRun(row: DbRow) {
     completedAt: row.completedAt == null ? null : Number(row.completedAt),
     summary: row.summary ?? null,
     error: row.error ?? null,
+    failureReason: parseJsonOrUndef(row.failureReasonJson) ?? null,
   };
 }
 

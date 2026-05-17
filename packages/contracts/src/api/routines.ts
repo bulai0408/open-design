@@ -71,6 +71,19 @@ export type RoutineRunStatus =
 
 export type RoutineRunTrigger = 'manual' | 'scheduled';
 
+export type RoutineRunFailureReasonKind =
+  | 'agent_auth'
+  | 'agent_spawn'
+  | 'inactivity_watchdog'
+  | 'unknown';
+
+export interface RoutineRunFailureReason {
+  kind: RoutineRunFailureReasonKind;
+  message: string;
+  code?: string;
+  retryable?: boolean;
+}
+
 export interface RoutineLastRunSummary {
   runId: string;
   status: RoutineRunStatus;
@@ -81,6 +94,7 @@ export interface RoutineLastRunSummary {
   conversationId: string;
   agentRunId: string;
   summary?: string;
+  failureReason?: RoutineRunFailureReason;
 }
 
 export interface Routine {
@@ -110,6 +124,7 @@ export interface RoutineRun {
   completedAt: number | null;
   summary: string | null;
   error: string | null;
+  failureReason: RoutineRunFailureReason | null;
 }
 
 export interface CreateRoutineRequest {

@@ -18801,6 +18801,12 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   color: var(--text-muted);
 }
 .routines-history-row:hover { background: var(--bg-subtle); }
+.routines-history-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .routines-history-time { color: var(--text); }
 .routines-history-trigger {
   font-size: 11px;
@@ -18838,6 +18844,12 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
 .routines-status-succeeded { background: #e3efe6; color: #2e7d5b; }
 .routines-status-failed { background: #f6dfdc; color: #b3382b; }
 .routines-status-canceled { background: #ece9e2; color: var(--text-muted); }
+.routines-failure-reason {
+  min-width: 0;
+  color: #8c2f25;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
 
 /* ============================================================
    New Project — Media tab additions (Media tab + segmented inner
