@@ -73,7 +73,21 @@ export function DesignSystemSwitchPicker({
     return Array.from(byCategory.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [items, query]);
 
-  const showNoneRow = query.trim().length === 0;
+  // The freeform "None" row is an action — clearing the project's DS —
+  // not a catalog entry, so it does not live inside `groups`. It stays
+  // visible whenever the typed query matches its own label/summary, and
+  // is *always* shown when the catalog failed to load: a broken
+  // `/api/design-systems` must never strand the user without a reachable
+  // fallback, even after they have typed into the search box.
+  const noneRowMatchesQuery = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return true;
+    return (
+      t('chat.importDesignSystemNone').toLowerCase().includes(needle) ||
+      t('chat.importDesignSystemNoneSub').toLowerCase().includes(needle)
+    );
+  }, [query, t]);
+  const showNoneRow = loadError || noneRowMatchesQuery;
   const noneActive = currentDesignSystemId === null || currentDesignSystemId === undefined;
 
   async function handlePick(id: string | null, title: string | null) {
@@ -121,6 +135,7 @@ export function DesignSystemSwitchPicker({
             className={`composer-ds-picker-item composer-ds-picker-item-none${noneActive ? ' current' : ''}`}
             disabled={pendingId === 'none'}
             onClick={() => void handlePick(null, null)}
+            data-testid="composer-ds-picker-item-none"
           >
             <div className="composer-ds-picker-item-text">
               <span className="composer-ds-picker-item-title">

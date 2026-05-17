@@ -243,6 +243,81 @@ describe('ChatComposer mid-chat design-system switcher', () => {
     expect(onShowToast).not.toHaveBeenCalled();
   });
 
+  it('keeps the freeform fallback row usable after typing a query when the catalog fails to load', async () => {
+    // Regression for @nettee's review on DesignSystemSwitchPicker: the
+    // `showNoneRow` guard used to hide the "None — freeform" action the
+    // moment the search box was non-empty. Combined with a `loadError`
+    // that suppresses every catalog row, a user who typed anything was
+    // left with no clickable fallback — breaking the load-failure
+    // contract that promises the project DS can still be cleared when
+    // `/api/design-systems` is down.
+    mockedFetchDesignSystemsResult.mockResolvedValue({ ok: false });
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as URL | Request).toString();
+      if (url.startsWith('/api/projects/')) {
+        return new Response(
+          JSON.stringify({
+            project: {
+              id: 'project-1',
+              name: 'p',
+              skillId: null,
+              designSystemId: null,
+              createdAt: 1,
+              updatedAt: 2,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    const onActiveDesignSystemChange = vi.fn();
+    const onShowToast = vi.fn();
+
+    render(
+      <ChatComposer
+        projectId="project-1"
+        projectFiles={[]}
+        streaming={false}
+        onEnsureProject={async () => 'project-1'}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        currentDesignSystemId="nexu-soft-tech"
+        onActiveDesignSystemChange={onActiveDesignSystemChange}
+        onShowToast={onShowToast}
+      />,
+    );
+
+    await openImportTab();
+    fireEvent.click(await screen.findByTestId('composer-import-design-systems'));
+
+    // The catalog failed — the explicit alert renders.
+    await screen.findByTestId('composer-ds-picker-load-error');
+    // …and the freeform fallback row is reachable before typing.
+    expect(screen.getByTestId('composer-ds-picker-item-none')).toBeTruthy();
+
+    // Type a query that matches no catalog row. The fallback must survive.
+    fireEvent.change(screen.getByTestId('composer-ds-picker-search'), {
+      target: { value: 'zzz-no-match' },
+    });
+    const fallbackRow = screen.getByTestId('composer-ds-picker-item-none');
+    expect((fallbackRow as HTMLButtonElement).disabled).toBe(false);
+
+    // And it still clears the project DS.
+    fireEvent.click(fallbackRow);
+    await waitFor(() => {
+      const patchCall = fetchSpy.mock.calls.find(([u]) => String(u) === '/api/projects/project-1');
+      expect(patchCall).toBeTruthy();
+    });
+    const patchCall = fetchSpy.mock.calls.find(([u]) => String(u) === '/api/projects/project-1')!;
+    expect((patchCall[1] as RequestInit | undefined)?.method).toBe('PATCH');
+    expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toEqual({
+      designSystemId: null,
+    });
+    await waitFor(() => expect(onActiveDesignSystemChange).toHaveBeenCalledWith(null));
+  });
+
   it("doesn't PATCH when the user picks the current design system", async () => {
     mockedFetchDesignSystemsResult.mockResolvedValue({ ok: true, designSystems: FAKE_DESIGN_SYSTEMS });
     const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () => {
