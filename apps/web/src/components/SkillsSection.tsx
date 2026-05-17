@@ -905,19 +905,35 @@ function SkillDraftForm({
       </label>
       <div className="library-import-block skills-file-upload">
         <span>Side files</span>
-        <label className="skills-file-dropzone">
-          <Icon name="file" size={14} />
-          <span>Drop files here or choose files</span>
-          <input
-            type="file"
-            multiple
-            data-testid="skills-file-input"
-            onChange={(e) => {
-              void addFiles(e.currentTarget.files);
-              e.currentTarget.value = '';
-            }}
-          />
-        </label>
+        <div className="skills-file-pickers">
+          <label className="skills-file-dropzone">
+            <Icon name="file" size={14} />
+            <span>Drop files here or choose files</span>
+            <input
+              type="file"
+              multiple
+              data-testid="skills-file-input"
+              onChange={(e) => {
+                void addFiles(e.currentTarget.files);
+                e.currentTarget.value = '';
+              }}
+            />
+          </label>
+          <label className="skills-file-folder-picker">
+            <Icon name="folder" size={14} />
+            <span>Choose folder</span>
+            <input
+              type="file"
+              multiple
+              data-testid="skills-folder-input"
+              {...directoryInputProps}
+              onChange={(e) => {
+                void addFiles(e.currentTarget.files);
+                e.currentTarget.value = '';
+              }}
+            />
+          </label>
+        </div>
         {draft.files.length > 0 ? (
           <ul className="skills-draft-files" data-testid="skills-draft-files">
             {draft.files.map((file) => (
@@ -1002,6 +1018,11 @@ function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+const directoryInputProps = {
+  webkitdirectory: '',
+  directory: '',
+} as Record<string, string>;
 
 async function readFileForUpload(file: File): Promise<SkillWriteFileInput> {
   const bytes = new Uint8Array(await file.arrayBuffer());

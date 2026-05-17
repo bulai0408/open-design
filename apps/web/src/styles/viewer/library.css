@@ -927,6 +927,11 @@
 .skills-file-upload {
   gap: 8px;
 }
+.skills-file-pickers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
 .skills-file-dropzone {
   position: relative;
   display: flex;
@@ -948,6 +953,32 @@
   cursor: pointer;
 }
 .skills-file-dropzone:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.skills-file-folder-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 54px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.skills-file-folder-picker input[type='file'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.skills-file-folder-picker:hover {
   color: var(--text);
   border-color: var(--text-faint);
 }

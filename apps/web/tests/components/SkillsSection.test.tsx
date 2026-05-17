@@ -386,4 +386,48 @@ describe('SkillsSection', () => {
       ]);
     });
   });
+
+  it('preserves nested side-file paths from folder selection', async () => {
+    const { fetchMock } = renderSkillsSection([]);
+
+    fireEvent.click(await screen.findByTestId('skills-new'));
+    const form = await screen.findByTestId('skills-create-form');
+
+    fireEvent.change(within(form).getByLabelText('Name'), {
+      target: { value: 'Folder Skill' },
+    });
+    fireEvent.change(within(form).getByLabelText('SKILL.md body'), {
+      target: { value: '# Folder Skill\n\nUse nested references.' },
+    });
+
+    const nestedFile = new File(['# Checklist'], 'checklist.md', {
+      type: 'text/markdown',
+    });
+    Object.defineProperty(nestedFile, 'webkitRelativePath', {
+      value: 'references/checklist.md',
+    });
+
+    fireEvent.change(within(form).getByTestId('skills-folder-input'), {
+      target: { files: [nestedFile] },
+    });
+
+    await within(form).findByText('references/checklist.md');
+    fireEvent.click(within(form).getByTestId('skills-save'));
+
+    await waitFor(() => {
+      const createCall = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          url === '/api/skills/import' && init?.method === 'POST',
+      );
+      expect(createCall).toBeTruthy();
+      const payload = JSON.parse(String(createCall?.[1]?.body));
+      expect(payload.files).toEqual([
+        {
+          path: 'references/checklist.md',
+          content: 'IyBDaGVja2xpc3Q=',
+          encoding: 'base64',
+        },
+      ]);
+    });
+  });
 });
