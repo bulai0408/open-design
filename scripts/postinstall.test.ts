@@ -120,6 +120,9 @@ test("root workspace depends on the daemon package so pnpm exec resolves the od 
   const daemonManifest = readPackageJson("apps/daemon/package.json");
 
   assert.equal(dependencySpecifier(rootManifest, "@open-design/daemon"), "workspace:*");
+  assert.deepEqual((rootManifest as { bin?: unknown }).bin, {
+    od: "./apps/daemon/bin/od.mjs",
+  });
   assert.deepEqual((daemonManifest as { bin?: unknown }).bin, {
     od: "./bin/od.mjs",
   });
