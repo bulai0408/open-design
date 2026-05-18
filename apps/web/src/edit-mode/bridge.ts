@@ -122,10 +122,12 @@ export function buildManualEditBridge(enabled: boolean): string {
     return display.indexOf('flex') >= 0 || display.indexOf('grid') >= 0;
   }
   function isHiddenTarget(el, rect){
+    var targetVisibility = window.getComputedStyle(el).visibility;
+    if (targetVisibility === 'hidden' || targetVisibility === 'collapse') return true;
     var node = el;
     while (node && node !== document.documentElement) {
       var computed = window.getComputedStyle(node);
-      if (computed.display === 'none' || computed.visibility === 'hidden' || node.hasAttribute('hidden')) return true;
+      if (computed.display === 'none' || node.hasAttribute('hidden')) return true;
       node = node.parentElement;
     }
     return false;

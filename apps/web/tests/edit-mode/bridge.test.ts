@@ -94,6 +94,44 @@ describe('manual edit bridge target normalization', () => {
     dom.window.close();
   });
 
+  it('does not mark visibility:visible descendants as hidden', async () => {
+    const posts: Array<{ type?: string; targets?: Array<{ id: string; isHidden?: boolean }> }> = [];
+    const dom = new JSDOM(
+      `<main>
+        <section data-od-source-path="path-0-0" style="visibility:hidden">
+          <p data-od-source-path="path-0-0-0" style="visibility:visible">Visible child copy</p>
+        </section>
+      </main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const section = dom.window.document.querySelector('section')!;
+    const visibleChild = dom.window.document.querySelector('p')!;
+    section.getBoundingClientRect = () => ({
+      x: 0, y: 0, width: 160, height: 32,
+      top: 0, right: 160, bottom: 32, left: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    visibleChild.getBoundingClientRect = () => ({
+      x: 8, y: 8, width: 140, height: 20,
+      top: 8, right: 148, bottom: 28, left: 8,
+      toJSON: () => ({}),
+    } as DOMRect);
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string; targets?: Array<{ id: string; isHidden?: boolean }> });
+    }) as typeof dom.window.parent.postMessage;
+
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-mode', enabled: true },
+    }));
+    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+
+    const targetsMessage = posts.find((message) => message.type === 'od-edit-targets');
+    expect(targetsMessage?.targets?.find((target) => target.id === 'path-0-0')?.isHidden).toBe(true);
+    expect(targetsMessage?.targets?.find((target) => target.id === 'path-0-0-0')?.isHidden).toBe(false);
+
+    dom.window.close();
+  });
+
   it('does not expose path targets unless they carry a source path marker', () => {
     const dom = new JSDOM('<main><h1>Runtime title</h1><p data-od-source-path="path-0-1">Source text</p></main>');
     const runtimeTitle = dom.window.document.querySelector('h1')!;
