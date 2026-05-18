@@ -220,6 +220,65 @@ describe('resolveCurrentArtifact', () => {
     expect(out).toBeNull();
   });
 
+  it('reconciles an active HTML artifact that is missing its sidecar', async () => {
+    const { db, projectsRoot } = setupResolverFixture();
+
+    // Mirrors a resumed/Continue run that wrote the HTML deliverable but
+    // terminated before durable artifact sidecar registration completed.
+    await writeProjectFile(projectsRoot, PROJECT_ID, 'resumed.html', '<p>resumed</p>');
+    setActiveTab(db, 'resumed.html');
+
+    const out = await resolveCurrentArtifact(db, projectsRoot, PROJECT_ID);
+
+    expect(out).not.toBeNull();
+    expect(out!.name).toBe('resumed.html');
+    expect(out!.body).toBe('<p>resumed</p>');
+    expect(out!.manifest?.entry).toBe('resumed.html');
+    expect(out!.manifest?.kind).toBe('html');
+    const sidecarPath = path.join(projectsRoot, PROJECT_ID, 'resumed.html.artifact.json');
+    expect(fs.existsSync(sidecarPath)).toBe(true);
+    const sidecar = JSON.parse(fs.readFileSync(sidecarPath, 'utf8')) as {
+      entry?: string;
+      kind?: string;
+      metadata?: { inferred?: boolean; reconciled?: boolean };
+    };
+    expect(sidecar.entry).toBe('resumed.html');
+    expect(sidecar.kind).toBe('html');
+    expect(sidecar.metadata?.inferred).toBe(true);
+    expect(sidecar.metadata?.reconciled).toBe(true);
+  });
+
+  it('selects a newly reconciled HTML artifact over an older sidecar when no tab is active', async () => {
+    const { db, projectsRoot } = setupResolverFixture();
+
+    await writeProjectFile(projectsRoot, PROJECT_ID, 'older.html', '<p>older</p>', {
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Older',
+        entry: 'older.html',
+        renderer: 'html',
+        exports: ['html'],
+        updatedAt: '2026-05-01T00:00:00.000Z',
+      },
+    });
+    await writeProjectFile(projectsRoot, PROJECT_ID, 'resumed.html', '<p>resumed</p>');
+
+    const out = await resolveCurrentArtifact(db, projectsRoot, PROJECT_ID);
+
+    expect(out).not.toBeNull();
+    expect(out!.name).toBe('resumed.html');
+    expect(out!.body).toBe('<p>resumed</p>');
+    const sidecarPath = path.join(projectsRoot, PROJECT_ID, 'resumed.html.artifact.json');
+    expect(fs.existsSync(sidecarPath)).toBe(true);
+    const sidecar = JSON.parse(fs.readFileSync(sidecarPath, 'utf8')) as {
+      updatedAt?: string;
+      metadata?: { reconciled?: boolean };
+    };
+    expect(sidecar.metadata?.reconciled).toBe(true);
+    expect(sidecar.updatedAt).not.toBe('2026-05-01T00:00:00.000Z');
+  });
+
   // PR #832 P3 fix from @lefarcen: a malformed tabs row (e.g. an
   // attacker with DB write access setting tabs.name = `../../../etc/passwd`)
   // would otherwise cause path.join to compose a probe URL outside the
