@@ -24,6 +24,11 @@ const TRUNCATED_FINISH_REASONS = new Set([
 
 const PREFILL_CONTINUATION_PROTOCOLS = new Set<ApiProtocol>(['anthropic']);
 const MAX_TRUNCATION_CONTINUATIONS = 8;
+const EXPLICIT_CONTINUATION_PROMPT = [
+  'Continue exactly from where your previous response stopped.',
+  'Do not repeat earlier text or add a preamble.',
+  'If you were writing an artifact, continue the same artifact and close it normally.',
+].join(' ');
 
 /**
  * Optional per-request context that some protocols thread into the
@@ -86,17 +91,12 @@ export async function streamProxyEndpoint(
         return;
       }
 
-      if (!canContinueWithAssistantPrefill(cfg.apiProtocol)) {
-        handlers.onDone(acc);
-        return;
-      }
-
       if (continuations >= MAX_TRUNCATION_CONTINUATIONS) {
         handlers.onError(new Error('Response was truncated repeatedly before the provider returned a final stop reason.'));
         return;
       }
       continuations += 1;
-      requestMessages = appendContinuationAssistantMessage(requestMessages, acc, cfg.apiProtocol);
+      requestMessages = buildContinuationMessages(requestMessages, acc, cfg.apiProtocol);
     }
   } catch (err) {
     if ((err as Error).name === 'AbortError') return;
@@ -376,6 +376,17 @@ function canContinueWithAssistantPrefill(protocol?: ApiProtocol): boolean {
   return protocol !== undefined && PREFILL_CONTINUATION_PROTOCOLS.has(protocol);
 }
 
+function buildContinuationMessages(
+  messages: ProxyMessage[],
+  assistantText: string,
+  protocol?: ApiProtocol,
+): ProxyMessage[] {
+  if (canContinueWithAssistantPrefill(protocol)) {
+    return appendContinuationAssistantMessage(messages, assistantText, protocol);
+  }
+  return appendExplicitContinuationRequest(messages, assistantText, protocol);
+}
+
 function appendContinuationAssistantMessage(
   messages: ProxyMessage[],
   assistantText: string,
@@ -390,6 +401,41 @@ function appendContinuationAssistantMessage(
     ];
   }
   return [...compacted, { role: 'assistant', content: assistantText }];
+}
+
+function appendExplicitContinuationRequest(
+  messages: ProxyMessage[],
+  assistantText: string,
+  protocol?: ApiProtocol,
+): ProxyMessage[] {
+  const compacted = compactContinuationHistory(messages, protocol);
+  const last = compacted[compacted.length - 1];
+  const previous = compacted[compacted.length - 2];
+  if (
+    last?.role === 'user'
+    && last.content === EXPLICIT_CONTINUATION_PROMPT
+    && previous?.role === 'assistant'
+  ) {
+    return [
+      ...compacted.slice(0, -2),
+      { ...previous, content: assistantText },
+      last,
+    ];
+  }
+
+  if (last?.role === 'assistant') {
+    return [
+      ...compacted.slice(0, -1),
+      { ...last, content: assistantText },
+      { role: 'user', content: EXPLICIT_CONTINUATION_PROMPT },
+    ];
+  }
+
+  return [
+    ...compacted,
+    { role: 'assistant', content: assistantText },
+    { role: 'user', content: EXPLICIT_CONTINUATION_PROMPT },
+  ];
 }
 
 function compactContinuationHistory(

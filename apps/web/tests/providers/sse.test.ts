@@ -1237,21 +1237,35 @@ describe('streamViaDaemon', () => {
 });
 
 describe('streamMessageOpenAI', () => {
-  it('does not continue truncated OpenAI-compatible streams with assistant prefill', async () => {
+  it('continues truncated OpenAI-compatible streams with a follow-up user request', async () => {
     const handlers = createStreamHandlers();
-    const fetchMock = vi.fn(async () =>
-      sseResponse(
-        [
-          'event: delta',
-          'data: {"delta":"first chunk"}',
-          '',
-          'event: end',
-          'data: {"finishReason":"length"}',
-          '',
-          '',
-        ].join('\n'),
-      ),
-    );
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        sseResponse(
+          [
+            'event: delta',
+            'data: {"delta":"first chunk"}',
+            '',
+            'event: end',
+            'data: {"finishReason":"length"}',
+            '',
+            '',
+          ].join('\n'),
+        ),
+      )
+      .mockResolvedValueOnce(
+        sseResponse(
+          [
+            'event: delta',
+            'data: {"delta":" second chunk"}',
+            '',
+            'event: end',
+            'data: {"finishReason":"stop"}',
+            '',
+            '',
+          ].join('\n'),
+        ),
+      );
     vi.stubGlobal('fetch', fetchMock);
 
     await streamMessageOpenAI(
@@ -1270,10 +1284,88 @@ describe('streamMessageOpenAI', () => {
       handlers,
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, retryInit] = fetchMock.mock.calls[1] as unknown as [RequestInfo | URL, RequestInit];
+    const retryBody = JSON.parse(String(retryInit.body));
+    expect(retryBody.messages).toHaveLength(3);
+    expect(retryBody.messages[0]).toEqual({ role: 'user', content: 'hello' });
+    expect(retryBody.messages[1]).toEqual({ role: 'assistant', content: 'first chunk' });
+    expect(retryBody.messages[2]).toMatchObject({ role: 'user' });
+    expect(retryBody.messages[2].content).toContain('Continue exactly from where your previous response stopped');
     expect(handlers.onDelta).toHaveBeenNthCalledWith(1, 'first chunk');
+    expect(handlers.onDelta).toHaveBeenNthCalledWith(2, ' second chunk');
     expect(handlers.onError).not.toHaveBeenCalled();
-    expect(handlers.onDone).toHaveBeenCalledWith('first chunk');
+    expect(handlers.onDone).toHaveBeenCalledWith('first chunk second chunk');
+  });
+
+  it('updates the explicit continuation request with accumulated OpenAI-compatible text', async () => {
+    const handlers = createStreamHandlers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        sseResponse(
+          [
+            'event: delta',
+            'data: {"delta":"first"}',
+            '',
+            'event: end',
+            'data: {"finishReason":"length"}',
+            '',
+            '',
+          ].join('\n'),
+        ),
+      )
+      .mockResolvedValueOnce(
+        sseResponse(
+          [
+            'event: delta',
+            'data: {"delta":" second"}',
+            '',
+            'event: end',
+            'data: {"finishReason":"length"}',
+            '',
+            '',
+          ].join('\n'),
+        ),
+      )
+      .mockResolvedValueOnce(
+        sseResponse(
+          [
+            'event: delta',
+            'data: {"delta":" third"}',
+            '',
+            'event: end',
+            'data: {"finishReason":"stop"}',
+            '',
+            '',
+          ].join('\n'),
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamMessageOpenAI(
+      {
+        mode: 'api',
+        apiKey: 'test-key',
+        baseUrl: 'https://example.test',
+        model: 'gpt-test',
+        agentId: null,
+        skillId: null,
+        designSystemId: null,
+      },
+      '',
+      [{ id: '1', role: 'user', content: 'hello' }],
+      new AbortController().signal,
+      handlers,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const [, thirdInit] = fetchMock.mock.calls[2] as unknown as [RequestInfo | URL, RequestInit];
+    const thirdBody = JSON.parse(String(thirdInit.body));
+    expect(thirdBody.messages).toHaveLength(3);
+    expect(thirdBody.messages[1]).toEqual({ role: 'assistant', content: 'first second' });
+    expect(thirdBody.messages[2].content).toContain('Continue exactly from where your previous response stopped');
+    expect(handlers.onError).not.toHaveBeenCalled();
+    expect(handlers.onDone).toHaveBeenCalledWith('first second third');
   });
 
   it('ignores comments and keeps delta/end behavior unchanged', async () => {
