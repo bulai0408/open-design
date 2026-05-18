@@ -21254,6 +21254,18 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   line-height: 1.6;
   color: var(--text);
 }
+.plugin-details-modal__provenance-line {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .plugin-details-modal__chip-btn {
   appearance: none;
   display: inline-flex;
@@ -21731,6 +21743,45 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   border: 1px solid var(--border);
   letter-spacing: 0.02em;
   text-transform: uppercase;
+}
+.plugins-view__version-install {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.plugins-view__version-select {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.plugins-view__version-select select {
+  width: min(240px, 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg);
+  color: var(--text);
+  padding: 7px 9px;
+  font: inherit;
+}
+.plugins-view__install-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.plugins-view__install-command code {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-size: 12px;
 }
 .plugin-details-modal__avatar {
   width: 40px;

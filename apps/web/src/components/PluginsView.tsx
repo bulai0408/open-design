@@ -28,6 +28,7 @@ import { Icon } from './Icon';
 import { PluginDetailsModal } from './PluginDetailsModal';
 import { PluginsHomeSection } from './PluginsHomeSection';
 import { useI18n } from '../i18n';
+import { copyToClipboard } from '../lib/copy-to-clipboard';
 import type { PluginUseAction } from './plugins-home/useActions';
 
 type PluginsTab = 'installed' | 'available' | 'sources' | 'team';
@@ -236,7 +237,7 @@ export function PluginsView({
     setPendingInstallEntry(plugin.key);
     try {
       const outcome = await finishImport(
-        () => installPluginSource(plugin.entry.name),
+        () => installPluginSource(plugin.installSource ?? plugin.entry.name),
         'installed',
       );
       if (outcome.ok) setAvailableDetails(null);
@@ -644,6 +645,25 @@ interface AvailableMarketplacePlugin {
   key: string;
   marketplace: PluginMarketplace;
   entry: PluginMarketplaceEntry;
+  installSource?: string;
+}
+
+interface AvailablePluginVersion {
+  version: string;
+  source?: string;
+  ref?: string;
+  dist?: {
+    type?: string;
+    archive?: string;
+    integrity?: string;
+    manifestDigest?: string;
+  };
+  integrity?: string;
+  manifestDigest?: string;
+  deprecated?: boolean | string;
+  yanked?: boolean;
+  yankedAt?: string;
+  yankReason?: string;
 }
 
 function AvailablePluginsPanel({
@@ -793,6 +813,14 @@ function AvailablePluginDetailsModal({
   onClose: () => void;
   onInstall: (plugin: AvailableMarketplacePlugin) => void;
 }) {
+  const { t } = useI18n();
+  const versions = useMemo(() => availablePluginVersions(plugin.entry), [plugin.entry]);
+  const [selectedVersion, setSelectedVersion] = useState(
+    () => versions[0]?.version ?? plugin.entry.version ?? 'latest',
+  );
+  const [copiedInstall, setCopiedInstall] = useState(false);
+  const selectedVersionInfo =
+    versions.find((version) => version.version === selectedVersion) ?? versions[0] ?? null;
   const title = plugin.entry.title ?? plugin.entry.name;
   const sourceName = plugin.marketplace.manifest.name ?? plugin.marketplace.url;
   const trustClass =
@@ -802,6 +830,35 @@ function AvailablePluginDetailsModal({
     publisher?.id ?? publisher?.github ?? publisher?.url ?? null;
   const tags = plugin.entry.tags ?? [];
   const capabilitySummary = plugin.entry.capabilitiesSummary ?? [];
+  const permissions = plugin.entry.permissions ?? [];
+  const installCommand = buildAvailableInstallCommand(plugin.entry, selectedVersion);
+  const selectedRef = selectedVersionInfo?.ref ?? null;
+  const selectedIntegrity =
+    selectedVersionInfo?.integrity ?? selectedVersionInfo?.dist?.integrity ?? null;
+  const provenance = buildAvailablePluginProvenance({
+    plugin,
+    sourceName,
+    version: selectedVersionInfo,
+    t,
+  });
+
+  async function copyInstallCommand() {
+    const ok = await copyToClipboard(installCommand);
+    if (!ok) return;
+    setCopiedInstall(true);
+    window.setTimeout(() => setCopiedInstall(false), 1500);
+  }
+
+  function installSelectedVersion() {
+    onInstall({
+      ...plugin,
+      key: `${plugin.key}:${selectedVersion}`,
+      installSource: `${plugin.entry.name}${
+        selectedVersion && selectedVersion !== 'latest' ? `@${selectedVersion}` : ''
+      }`,
+      entry: selectedEntryForVersion(plugin.entry, selectedVersion),
+    });
+  }
 
   return (
     <div
@@ -830,7 +887,7 @@ function AvailablePluginDetailsModal({
             </div>
             <div className="plugin-details-modal__meta">
               <span>{plugin.entry.name}</span>
-              {plugin.entry.version ? <span>· v{plugin.entry.version}</span> : null}
+              {selectedVersion ? <span>· v{selectedVersion}</span> : null}
               <span>· {sourceName}</span>
             </div>
           </div>
@@ -849,11 +906,95 @@ function AvailablePluginDetailsModal({
         <div className="plugin-details-modal__body">
           <section className="plugin-details-modal__section">
             <div className="plugin-details-modal__section-head">
+              <h3 className="plugin-details-modal__section-title">
+                {t('plugins.availableDetails.provenance')}
+              </h3>
+            </div>
+            <p
+              className="plugin-details-modal__provenance-line"
+              data-testid="plugins-available-provenance"
+            >
+              {provenance}
+            </p>
+          </section>
+
+          <section className="plugin-details-modal__section">
+            <div className="plugin-details-modal__section-head">
               <h3 className="plugin-details-modal__section-title">About</h3>
             </div>
             <p className="plugin-details-modal__description">
               {plugin.entry.description ?? 'No description provided.'}
             </p>
+          </section>
+
+          <section className="plugin-details-modal__section">
+            <div className="plugin-details-modal__section-head">
+              <h3 className="plugin-details-modal__section-title">
+                {t('plugins.availableDetails.install')}
+              </h3>
+            </div>
+            <div className="plugins-view__version-install">
+              <label className="plugins-view__version-select">
+                <span>{t('plugins.availableDetails.version')}</span>
+                <select
+                  aria-label={t('plugins.availableDetails.pluginVersion')}
+                  value={selectedVersion}
+                  onChange={(event) => {
+                    setSelectedVersion(event.target.value);
+                    setCopiedInstall(false);
+                  }}
+                >
+                  {versions.map((version) => (
+                    <option
+                      key={version.version}
+                      value={version.version}
+                      disabled={version.yanked}
+                    >
+                      {version.version}
+                      {version.deprecated
+                        ? t('plugins.availableDetails.versionDeprecatedSuffix')
+                        : ''}
+                      {version.yanked
+                        ? t('plugins.availableDetails.versionYankedSuffix')
+                        : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="plugins-view__install-command">
+                <code data-testid="plugins-available-install-command">
+                  {installCommand}
+                </code>
+                <button
+                  type="button"
+                  className="plugin-details-modal__chip-btn"
+                  onClick={() => void copyInstallCommand()}
+                >
+                  <Icon name="copy" size={12} />
+                  {copiedInstall
+                    ? t('plugins.availableDetails.copied')
+                    : t('plugins.availableDetails.copyInstallCommand')}
+                </button>
+              </div>
+            </div>
+            {selectedVersionInfo?.deprecated ? (
+              <p className="plugin-details-modal__section-hint">
+                {t('plugins.availableDetails.deprecatedPrefix', {
+                  message: selectedVersionInfo.deprecated === true
+                    ? t('plugins.availableDetails.deprecatedFallback')
+                    : selectedVersionInfo.deprecated,
+                })}
+              </p>
+            ) : null}
+            {selectedVersionInfo?.yanked ? (
+              <p className="plugin-details-modal__section-hint">
+                {selectedVersionInfo.yankReason
+                  ? t('plugins.availableDetails.yankedWithReason', {
+                    reason: selectedVersionInfo.yankReason,
+                  })
+                  : t('plugins.availableDetails.yanked')}
+              </p>
+            ) : null}
           </section>
 
           <section className="plugin-details-modal__section">
@@ -864,9 +1005,25 @@ function AvailablePluginDetailsModal({
               <div>
                 <dt>Source</dt>
                 <dd>
-                  <code>{plugin.entry.source}</code>
+                  <code>{selectedVersionInfo?.source ?? plugin.entry.source}</code>
                 </dd>
               </div>
+              {selectedRef ? (
+                <div>
+                  <dt>{t('plugins.availableDetails.ref')}</dt>
+                  <dd>
+                    <code>{selectedRef}</code>
+                  </dd>
+                </div>
+              ) : null}
+              {selectedIntegrity ? (
+                <div>
+                  <dt>{t('plugins.availableDetails.integrity')}</dt>
+                  <dd>
+                    <code>{selectedIntegrity}</code>
+                  </dd>
+                </div>
+              ) : null}
               <div>
                 <dt>Catalog</dt>
                 <dd>{sourceName}</dd>
@@ -912,12 +1069,29 @@ function AvailablePluginDetailsModal({
             </dl>
           </section>
 
-          {tags.length > 0 || capabilitySummary.length > 0 ? (
+          {permissions.length > 0 || tags.length > 0 || capabilitySummary.length > 0 ? (
             <section className="plugin-details-modal__section">
               <div className="plugin-details-modal__section-head">
                 <h3 className="plugin-details-modal__section-title">Metadata</h3>
               </div>
               <div className="plugin-details-modal__context">
+                {permissions.length > 0 ? (
+                  <div className="plugin-details-modal__ctx-group">
+                    <div className="plugin-details-modal__ctx-label">
+                      {t('plugins.availableDetails.permissions')}
+                    </div>
+                    <div className="plugin-details-modal__chips">
+                      {permissions.map((permission) => (
+                        <span
+                          key={permission}
+                          className="plugin-details-modal__chip plugin-details-modal__chip--mono"
+                        >
+                          {permission}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 {tags.length > 0 ? (
                   <div className="plugin-details-modal__ctx-group">
                     <div className="plugin-details-modal__ctx-label">Tags</div>
@@ -932,7 +1106,9 @@ function AvailablePluginDetailsModal({
                 ) : null}
                 {capabilitySummary.length > 0 ? (
                   <div className="plugin-details-modal__ctx-group">
-                    <div className="plugin-details-modal__ctx-label">Capabilities</div>
+                    <div className="plugin-details-modal__ctx-label">
+                      {t('plugins.availableDetails.capabilitySummary')}
+                    </div>
                     <div className="plugin-details-modal__chips">
                       {capabilitySummary.map((capability) => (
                         <span
@@ -962,7 +1138,7 @@ function AvailablePluginDetailsModal({
           <button
             type="button"
             className="plugin-details-modal__primary"
-            onClick={() => onInstall(plugin)}
+            onClick={installSelectedVersion}
             disabled={pending}
             aria-busy={pending ? 'true' : undefined}
             data-testid={`plugins-available-details-install-${plugin.entry.name}`}
@@ -1366,6 +1542,127 @@ function buildAvailablePlugins(
         entry,
       }];
     });
+  });
+}
+
+function availablePluginVersions(entry: PluginMarketplaceEntry): AvailablePluginVersion[] {
+  const byVersion = new Map<string, AvailablePluginVersion>();
+  if (entry.version) {
+    byVersion.set(entry.version, {
+      version: entry.version,
+      source: entry.source,
+      ...(entry.ref ? { ref: entry.ref } : {}),
+      ...(entry.dist ? { dist: entry.dist } : {}),
+      ...(entry.integrity ? { integrity: entry.integrity } : {}),
+      ...(entry.manifestDigest ? { manifestDigest: entry.manifestDigest } : {}),
+      ...(entry.deprecated !== undefined ? { deprecated: entry.deprecated } : {}),
+      ...(entry.yanked !== undefined ? { yanked: entry.yanked } : {}),
+      ...(entry.yankedAt ? { yankedAt: entry.yankedAt } : {}),
+      ...(entry.yankReason ? { yankReason: entry.yankReason } : {}),
+    });
+  }
+  for (const version of entry.versions ?? []) {
+    const isCurrentVersion = version.version === entry.version;
+    byVersion.set(version.version, {
+      ...version,
+      source: version.source ?? entry.source,
+      ...(version.ref ?? (isCurrentVersion ? entry.ref : undefined)
+        ? { ref: version.ref ?? entry.ref }
+        : {}),
+      ...(version.dist ?? (isCurrentVersion ? entry.dist : undefined)
+        ? { dist: version.dist ?? entry.dist }
+        : {}),
+      ...(version.integrity ?? (isCurrentVersion ? entry.integrity : undefined)
+        ? { integrity: version.integrity ?? entry.integrity }
+        : {}),
+      ...(version.manifestDigest ?? (isCurrentVersion ? entry.manifestDigest : undefined)
+        ? { manifestDigest: version.manifestDigest ?? entry.manifestDigest }
+        : {}),
+    });
+  }
+  if (byVersion.size === 0) {
+    byVersion.set('latest', {
+      version: 'latest',
+      source: entry.source,
+      ...(entry.ref ? { ref: entry.ref } : {}),
+      ...(entry.dist ? { dist: entry.dist } : {}),
+      ...(entry.integrity ? { integrity: entry.integrity } : {}),
+      ...(entry.manifestDigest ? { manifestDigest: entry.manifestDigest } : {}),
+      ...(entry.deprecated !== undefined ? { deprecated: entry.deprecated } : {}),
+      ...(entry.yanked !== undefined ? { yanked: entry.yanked } : {}),
+      ...(entry.yankedAt ? { yankedAt: entry.yankedAt } : {}),
+      ...(entry.yankReason ? { yankReason: entry.yankReason } : {}),
+    });
+  }
+  return Array.from(byVersion.values());
+}
+
+function selectedEntryForVersion(
+  entry: PluginMarketplaceEntry,
+  version: string,
+): PluginMarketplaceEntry {
+  const selected = availablePluginVersions(entry).find((item) => item.version === version);
+  const {
+    ref: _ref,
+    dist: _dist,
+    integrity: _integrity,
+    manifestDigest: _manifestDigest,
+    deprecated: _deprecated,
+    yanked: _yanked,
+    yankedAt: _yankedAt,
+    yankReason: _yankReason,
+    ...entryBase
+  } = entry;
+  return {
+    ...entryBase,
+    version,
+    source: selected?.source ?? entry.source,
+    ...(selected?.ref ? { ref: selected.ref } : {}),
+    ...(selected?.dist ? { dist: selected.dist } : {}),
+    ...(selected?.integrity ? { integrity: selected.integrity } : {}),
+    ...(selected?.manifestDigest ? { manifestDigest: selected.manifestDigest } : {}),
+    ...(selected?.deprecated !== undefined ? { deprecated: selected.deprecated } : {}),
+    ...(selected?.yanked !== undefined ? { yanked: selected.yanked } : {}),
+    ...(selected?.yankedAt ? { yankedAt: selected.yankedAt } : {}),
+    ...(selected?.yankReason ? { yankReason: selected.yankReason } : {}),
+  };
+}
+
+function buildAvailableInstallCommand(
+  entry: PluginMarketplaceEntry,
+  version: string,
+): string {
+  const suffix = version && version !== 'latest' ? `@${version}` : '';
+  return `od plugin install ${entry.name}${suffix}`;
+}
+
+function buildAvailablePluginProvenance({
+  plugin,
+  sourceName,
+  version,
+  t,
+}: {
+  plugin: AvailableMarketplacePlugin;
+  sourceName: string;
+  version: AvailablePluginVersion | null;
+  t: ReturnType<typeof useI18n>['t'];
+}): string {
+  const source = version?.source ?? plugin.entry.source;
+  const ref = version?.ref ?? null;
+  const integrity = version?.integrity ?? version?.dist?.integrity ?? null;
+  const resolved = ref ? `${source}@${ref}` : source;
+  if (integrity) {
+    return t('plugins.availableDetails.provenanceLineWithIntegrity', {
+      source: sourceName,
+      trust: plugin.marketplace.trust,
+      resolved,
+      integrity,
+    });
+  }
+  return t('plugins.availableDetails.provenanceLine', {
+    source: sourceName,
+    trust: plugin.marketplace.trust,
+    resolved,
   });
 }
 
