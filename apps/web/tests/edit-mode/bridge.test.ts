@@ -48,6 +48,52 @@ describe('manual edit bridge target normalization', () => {
     expect(isMeaningfulManualEditElement(script, { width: 80, height: 24 })).toBe(false);
   });
 
+  it('keeps source-mappable display:none targets available for the layers panel', async () => {
+    const posts: Array<{ type?: string; targets?: Array<{ id: string; isHidden?: boolean }> }> = [];
+    const dom = new JSDOM(
+      `<main>
+        <h1 data-od-source-path="path-0-0">Visible title</h1>
+        <section data-od-source-path="path-0-1" style="display:none">
+          <p data-od-source-path="path-0-1-0">Hidden author notes</p>
+        </section>
+      </main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const visible = dom.window.document.querySelector('h1')!;
+    const hiddenSection = dom.window.document.querySelector('section')!;
+    const hiddenParagraph = dom.window.document.querySelector('p')!;
+    visible.getBoundingClientRect = () => ({
+      x: 0, y: 0, width: 160, height: 32,
+      top: 0, right: 160, bottom: 32, left: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    hiddenSection.getBoundingClientRect = () => ({
+      x: 0, y: 0, width: 0, height: 0,
+      top: 0, right: 0, bottom: 0, left: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    hiddenParagraph.getBoundingClientRect = hiddenSection.getBoundingClientRect;
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string; targets?: Array<{ id: string; isHidden?: boolean }> });
+    }) as typeof dom.window.parent.postMessage;
+
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-mode', enabled: true },
+    }));
+    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+
+    const targetsMessage = posts.find((message) => message.type === 'od-edit-targets');
+    expect(targetsMessage?.targets?.map((target) => target.id)).toEqual([
+      'path-0-0',
+      'path-0-1',
+      'path-0-1-0',
+    ]);
+    expect(targetsMessage?.targets?.find((target) => target.id === 'path-0-1')?.isHidden).toBe(true);
+    expect(targetsMessage?.targets?.find((target) => target.id === 'path-0-1-0')?.isHidden).toBe(true);
+
+    dom.window.close();
+  });
+
   it('does not expose path targets unless they carry a source path marker', () => {
     const dom = new JSDOM('<main><h1>Runtime title</h1><p data-od-source-path="path-0-1">Source text</p></main>');
     const runtimeTitle = dom.window.document.querySelector('h1')!;

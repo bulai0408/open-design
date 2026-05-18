@@ -119,6 +119,31 @@ describe('ManualEditPanel', () => {
     expect(onClearSelection).toHaveBeenCalledTimes(1);
   });
 
+  it('lists hidden targets so they can be selected outside the canvas', () => {
+    const onSelectTarget = vi.fn();
+    const hiddenTarget: ManualEditTarget = {
+      ...target,
+      id: 'authors',
+      label: 'Authors',
+      tagName: 'section',
+      kind: 'container',
+      rect: { x: 0, y: 0, width: 0, height: 0 },
+      isHidden: true,
+    };
+    renderPanel({ targets: [target, hiddenTarget], selectedTarget: null, onSelectTarget });
+
+    const hiddenRow = Array.from(host.querySelectorAll('.manual-edit-layer-row'))
+      .find((row) => row.textContent?.includes('Authors')) as HTMLButtonElement | undefined;
+    if (!hiddenRow) throw new Error('Hidden target row not found');
+    expect(hiddenRow.textContent).toContain('Hidden');
+
+    act(() => {
+      hiddenRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(onSelectTarget).toHaveBeenCalledWith(hiddenTarget);
+  });
+
   it('normalizes font stacks and writes a usable font-family value', () => {
     const onDraftChange = vi.fn();
     const onStyleChange = vi.fn();
@@ -501,7 +526,9 @@ describe('ManualEditPanel', () => {
     onStyleChange = vi.fn<OnStyleChange>(),
     onInvalidStyle = vi.fn<OnInvalidStyle>(),
     onClearSelection = vi.fn<OnClearSelection>(),
+    onSelectTarget = vi.fn<(target: ManualEditTarget) => void>(),
     attributesText = '{}',
+    targets = [target],
     selectedTarget = target,
     styles = emptyManualEditStyles(),
     pageStylesEnabled = true,
@@ -514,7 +541,9 @@ describe('ManualEditPanel', () => {
     onStyleChange?: OnStyleChange;
     onInvalidStyle?: OnInvalidStyle;
     onClearSelection?: OnClearSelection;
+    onSelectTarget?: (target: ManualEditTarget) => void;
     attributesText?: string;
+    targets?: ManualEditTarget[];
     selectedTarget?: ManualEditTarget | null;
     styles?: ReturnType<typeof emptyManualEditStyles>;
     pageStylesEnabled?: boolean;
@@ -531,7 +560,7 @@ describe('ManualEditPanel', () => {
     act(() => {
       root.render(
         <ManualEditPanel
-          targets={[target]}
+          targets={targets}
           selectedTarget={selectedTarget}
           draft={draft}
           history={[]}
@@ -539,7 +568,7 @@ describe('ManualEditPanel', () => {
           canUndo={false}
           canRedo={false}
           pageStylesEnabled={pageStylesEnabled}
-          onSelectTarget={vi.fn<(target: ManualEditTarget) => void>()}
+          onSelectTarget={onSelectTarget}
           onDraftChange={onDraftChange}
           onStyleChange={onStyleChange}
           onInvalidStyle={onInvalidStyle}

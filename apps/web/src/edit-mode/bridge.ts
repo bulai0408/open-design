@@ -121,10 +121,20 @@ export function buildManualEditBridge(enabled: boolean): string {
     var display = window.getComputedStyle(el).display || '';
     return display.indexOf('flex') >= 0 || display.indexOf('grid') >= 0;
   }
+  function isHiddenTarget(el, rect){
+    var node = el;
+    while (node && node !== document.documentElement) {
+      var computed = window.getComputedStyle(node);
+      if (computed.display === 'none' || computed.visibility === 'hidden' || node.hasAttribute('hidden')) return true;
+      node = node.parentElement;
+    }
+    return false;
+  }
   function targetFrom(el, includeOuterHtml){
     var rect = el.getBoundingClientRect();
     var kind = inferKind(el);
     var id = stableId(el);
+    var hidden = isHiddenTarget(el, rect);
     var fields = {};
     if (kind === 'link') {
       fields.text = (el.textContent || '').trim();
@@ -147,6 +157,7 @@ export function buildManualEditBridge(enabled: boolean): string {
       attributes: attrsFor(el),
       styles: stylesFor(el),
       isLayoutContainer: isLayoutContainer(el),
+      isHidden: hidden,
       outerHtml: includeOuterHtml ? (el.outerHTML || '').replace(/\\sdata-od-runtime-id="[^"]*"/g, '').replace(/\\sdata-od-source-path="[^"]*"/g, '').replace(/\\sdata-od-edit-selected="[^"]*"/g, '') : ''
     };
   }
@@ -155,8 +166,8 @@ export function buildManualEditBridge(enabled: boolean): string {
     var targets = [];
     for (var i = 0; i < nodes.length; i++) {
       var rect = nodes[i].getBoundingClientRect();
-      if (rect.width < 4 || rect.height < 4) continue;
       if (!isSourceMappable(nodes[i])) continue;
+      if (!isHiddenTarget(nodes[i], rect) && (rect.width < 4 || rect.height < 4)) continue;
       targets.push(targetFrom(nodes[i], false));
     }
     return targets;
