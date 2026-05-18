@@ -17,6 +17,7 @@ import { useI18n } from '../i18n';
 import { streamMessage } from '../providers/anthropic';
 import {
   fetchChatRunStatus,
+  isDaemonAgentExitError,
   listActiveChatRuns,
   listProjectRuns,
   reattachDaemonRun,
@@ -142,6 +143,7 @@ import { HandoffButton } from './HandoffButton';
 import { ProjectDesignSystemPicker } from './ProjectDesignSystemPicker';
 import { ChatPane } from './ChatPane';
 import type { ChatSendMeta } from './ChatComposer';
+import type { ChatErrorNoticeValue } from './ChatErrorNotice';
 import {
   CritiqueTheaterMount,
   useCritiqueTheaterEnabled,
@@ -478,6 +480,25 @@ function projectEventToAgentEvent(evt: ProjectEvent): LiveArtifactEventItem['eve
   };
 }
 
+function chatErrorFromError(err: Error): ChatErrorNoticeValue {
+  if (!isDaemonAgentExitError(err)) return err.message;
+  return {
+    message: err.message,
+    details: err.details,
+    category: err.category,
+    retryDelayMs: err.retryDelayMs,
+  };
+}
+
+function errorStatusMetadata(err: Error | undefined) {
+  if (!err || !isDaemonAgentExitError(err)) return {};
+  return {
+    diagnostic: err.details,
+    category: err.category,
+    retryDelayMs: err.retryDelayMs,
+  };
+}
+
 export function ProjectView({
   project,
   routeFileName,
@@ -565,7 +586,7 @@ export function ProjectView({
   const [attachedComments, setAttachedComments] = useState<PreviewComment[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingConversationId, setStreamingConversationId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ChatErrorNoticeValue | null>(null);
   const [audioVoiceOptionsError, setAudioVoiceOptionsError] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   const [filesRefresh, setFilesRefresh] = useState(0);
@@ -1672,11 +1693,11 @@ export function ProjectView({
   );
 
   const appendAssistantErrorEvent = useCallback(
-    (messageId: string, message: string) => {
+    (messageId: string, message: string, err?: Error) => {
       if (!message) return;
       updateMessageById(
         messageId,
-        (prev) => appendErrorStatusEvent(prev, message),
+        (prev) => appendErrorStatusEvent(prev, message, errorStatusMetadata(err)),
         true,
       );
     },
@@ -1989,6 +2010,7 @@ export function ProjectView({
 
         void reattachDaemonRun({
           runId,
+          agentId: message.agentId ?? null,
           signal: controller.signal,
           cancelSignal: cancelController.signal,
           initialLastEventId: needsFullReplay ? null : message.lastRunEventId ?? null,
@@ -2075,8 +2097,8 @@ export function ProjectView({
               textBuffer.flush();
               textBuffer.cancel();
               unregisterTextBuffer();
-              setError(err.message);
-              appendAssistantErrorEvent(message.id, err.message);
+              setError(chatErrorFromError(err));
+              appendAssistantErrorEvent(message.id, err.message, err);
               updateMessageById(
                 message.id,
                 (prev) => ({ ...prev, runStatus: 'failed', endedAt: prev.endedAt ?? Date.now() }),
@@ -2120,9 +2142,9 @@ export function ProjectView({
         })
           .catch((err) => {
             if ((err as Error).name !== 'AbortError') {
-              const msg = err instanceof Error ? err.message : String(err);
-              setError(msg);
-              appendAssistantErrorEvent(message.id, msg);
+              const normalized = err instanceof Error ? err : new Error(String(err));
+              setError(chatErrorFromError(normalized));
+              appendAssistantErrorEvent(message.id, normalized.message, normalized);
               updateMessageById(
                 message.id,
                 (prev) => ({ ...prev, runStatus: 'failed', endedAt: prev.endedAt ?? Date.now() }),
@@ -2627,8 +2649,8 @@ export function ProjectView({
           textBuffer.flush();
           textBuffer.cancel();
           cancelSendTextBuffer();
-          setError(err.message);
-          appendAssistantErrorEvent(assistantId, err.message);
+          setError(chatErrorFromError(err));
+          appendAssistantErrorEvent(assistantId, err.message, err);
           updateAssistant((prev) => ({
             ...prev,
             endedAt,

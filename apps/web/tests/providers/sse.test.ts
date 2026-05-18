@@ -447,6 +447,142 @@ describe('streamViaDaemon', () => {
     expect(handlers.onDone).not.toHaveBeenCalled();
   });
 
+  it('classifies Gemini capacity errors without exposing the bundled stack as the visible message', async () => {
+    const handlers = createDaemonHandlers();
+    const stderr = [
+      'Error: request failed',
+      '    at nc file:///Users/test/.npm-packages/lib/node_modules/@google/gemini-cli/bundle/gemini-U6FSFXFH.js:10811:26',
+      '    at async main (file:///Users/test/.npm-packages/lib/node_modules/@google/gemini-cli/bundle/gemini-U6FSFXFH.js:15885:5) {',
+      '  cause: {',
+      '    code: 429,',
+      "    message: 'You have exhausted your capacity on this model.',",
+      '    details: [ [Object], [Object] ]',
+      '  },',
+      '  retryDelayMs: 10000',
+      '}',
+    ].join('\n');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ runId: 'run-1' }))
+        .mockResolvedValueOnce(
+          sseResponse(
+            [
+              'event: stderr',
+              `data: ${JSON.stringify({ chunk: stderr })}`,
+              '',
+              'event: end',
+              'data: {"code":1,"status":"failed"}',
+              '',
+              '',
+            ].join('\n'),
+          ),
+        ),
+    );
+
+    await streamViaDaemon({
+      agentId: 'gemini',
+      history: [{ id: '1', role: 'user', content: 'hello' }],
+      systemPrompt: '',
+      signal: new AbortController().signal,
+      handlers,
+    });
+
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      category?: string;
+      details?: string;
+      retryDelayMs?: number;
+    };
+    expect(error.category).toBe('quota_exhausted');
+    expect(error.retryDelayMs).toBe(10000);
+    expect(error.message).toContain('capacity');
+    expect(error.message).toContain('10s');
+    expect(error.message).not.toContain('gemini-U6FSFXFH.js');
+    expect(error.details).toContain('gemini-U6FSFXFH.js');
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
+  it('keeps full stderr diagnostics for unclassified agent crashes without appending a 400-character tail', async () => {
+    const handlers = createDaemonHandlers();
+    const stderr = `${'x'.repeat(430)}\nfinal stack frame\nat main (agent.js:99:1)`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ runId: 'run-1' }))
+        .mockResolvedValueOnce(
+          sseResponse(
+            [
+              'event: stderr',
+              `data: ${JSON.stringify({ chunk: stderr })}`,
+              '',
+              'event: end',
+              'data: {"code":1,"status":"failed"}',
+              '',
+              '',
+            ].join('\n'),
+          ),
+        ),
+    );
+
+    await streamViaDaemon({
+      agentId: 'mock',
+      history: [{ id: '1', role: 'user', content: 'hello' }],
+      systemPrompt: '',
+      signal: new AbortController().signal,
+      handlers,
+    });
+
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      category?: string;
+      details?: string;
+    };
+    expect(error.category).toBe('agent_crashed');
+    expect(error.message).toBe('The agent process exited before finishing.');
+    expect(error.message).not.toContain('final stack frame');
+    expect(error.details).toBe(stderr);
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
+  it('classifies missing agent binaries as an installable PATH problem', async () => {
+    const handlers = createDaemonHandlers();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ runId: 'run-1' }))
+        .mockResolvedValueOnce(
+          sseResponse(
+            [
+              'event: stderr',
+              'data: {"chunk":"spawn claude ENOENT"}',
+              '',
+              'event: end',
+              'data: {"code":1,"status":"failed"}',
+              '',
+              '',
+            ].join('\n'),
+          ),
+        ),
+    );
+
+    await streamViaDaemon({
+      agentId: 'claude',
+      history: [{ id: '1', role: 'user', content: 'hello' }],
+      systemPrompt: '',
+      signal: new AbortController().signal,
+      handlers,
+    });
+
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      category?: string;
+      details?: string;
+    };
+    expect(error.category).toBe('binary_not_found');
+    expect(error.message).toContain('Could not find `claude` on PATH');
+    expect(error.message).not.toContain('ENOENT');
+    expect(error.details).toBe('spawn claude ENOENT');
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
   it('still surfaces an error when the end event has a signal but no status field', async () => {
     // Same regression as above for the signal arm of the safety net. Without
     // explicit `status: 'succeeded'` from the server, a SIGTERM-style signal

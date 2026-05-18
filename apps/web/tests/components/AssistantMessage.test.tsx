@@ -136,6 +136,36 @@ describe('AssistantMessage feedback gate', () => {
   });
 });
 
+describe('AssistantMessage failed run diagnostics', () => {
+  it('renders the user-facing error separately from full diagnostics', () => {
+    render(
+      <AssistantMessage
+        message={baseMessage({
+          content: '',
+          runStatus: 'failed',
+          events: [
+            {
+              kind: 'status',
+              label: 'error',
+              detail: 'Gemini hit a per-model capacity limit. Try again in about 10s.',
+              diagnostic: 'Error: request failed\nat main (gemini-U6FSFXFH.js:15885:5)',
+              category: 'quota_exhausted',
+              retryDelayMs: 10000,
+            } as ChatMessage['events'][number],
+          ],
+        })}
+        streaming={false}
+        projectId="proj-1"
+        onFeedback={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Gemini hit a per-model capacity limit. Try again in about 10s.')).toBeTruthy();
+    expect(screen.getByText('Show details')).toBeTruthy();
+    expect(screen.getByText(/gemini-U6FSFXFH\.js/)).toBeTruthy();
+  });
+});
+
 describe('AssistantMessage status badge updates (Bug A)', () => {
   // Regression coverage for the model-badge stale-detail bug. ACP agents
   // emit two `status: 'model'` events per turn:

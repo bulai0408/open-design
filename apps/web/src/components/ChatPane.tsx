@@ -24,6 +24,7 @@ import {
   type ChatComposerHandle,
   type ChatSendMeta,
 } from './ChatComposer';
+import { ChatErrorNotice, type ChatErrorNoticeValue } from './ChatErrorNotice';
 import type { PluginFolderAgentAction } from './design-files/pluginFolderActions';
 import { Icon } from './Icon';
 import { repoConnectCopy } from './design-system-github-evidence';
@@ -211,7 +212,7 @@ function pickStarters(
 interface Props {
   messages: ChatMessage[];
   streaming: boolean;
-  error: string | null;
+  error: ChatErrorNoticeValue | null;
   projectId: string | null;
   // Analytics-only — forwarded to AssistantMessage so the feedback
   // events know which project surface the rating applies to. Optional
@@ -1124,7 +1125,7 @@ export function ChatPane({
               })}
               {error ? (
                 <div className="msg error">
-                  <span className="chat-error-text">{error}</span>
+                  <ChatErrorNotice error={error} />
                   {retryAssistant && onRetry ? (
                     <button
                       type="button"

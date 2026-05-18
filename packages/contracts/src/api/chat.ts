@@ -223,7 +223,14 @@ export interface ChatCommentAttachment {
 }
 
 export type PersistedAgentEvent =
-  | { kind: 'status'; label: string; detail?: string }
+  | {
+      kind: 'status';
+      label: string;
+      detail?: string;
+      diagnostic?: string;
+      category?: string;
+      retryDelayMs?: number;
+    }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | {

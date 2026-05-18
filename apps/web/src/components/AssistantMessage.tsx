@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ToolCard } from "./ToolCard";
 import { FileOpsSummary } from "./FileOpsSummary";
+import { ChatErrorNotice } from "./ChatErrorNotice";
 import {
   renderMarkdown,
   type MarkdownLinkClickHandler,
@@ -568,6 +569,18 @@ export function AssistantMessage({
               />
             );
           }
+          if (b.kind === "status" && b.label === "error")
+            return (
+              <ChatErrorNotice
+                key={i}
+                error={{
+                  message: b.detail ?? "The agent failed.",
+                  details: b.diagnostic,
+                  category: b.category,
+                  retryDelayMs: b.retryDelayMs,
+                }}
+              />
+            );
           if (b.kind === "status")
             return <StatusPill key={i} label={b.label} detail={b.detail} />;
           return null;
@@ -2077,7 +2090,14 @@ type Block =
       confidence?: number | undefined;
       draftPath?: string | null | undefined;
     }
-  | { kind: "status"; label: string; detail?: string | undefined };
+  | {
+      kind: "status";
+      label: string;
+      detail?: string | undefined;
+      diagnostic?: string | undefined;
+      category?: string | undefined;
+      retryDelayMs?: number | undefined;
+    };
 
 /**
  * Walk the event stream and build the rendering layout list. We additionally
@@ -2192,9 +2212,19 @@ function buildBlocks(events: AgentEvent[]): Block[] {
         // (e.g. `claude-opus-4-7-high`) is silently replaced in the badge
         // by the stale initial default (`swe-1-6-fast`).
         last.detail = ev.detail;
+        last.diagnostic = ev.diagnostic;
+        last.category = ev.category;
+        last.retryDelayMs = ev.retryDelayMs;
         continue;
       }
-      out.push({ kind: "status", label: ev.label, detail: ev.detail });
+      out.push({
+        kind: "status",
+        label: ev.label,
+        detail: ev.detail,
+        diagnostic: ev.diagnostic,
+        category: ev.category,
+        retryDelayMs: ev.retryDelayMs,
+      });
       continue;
     }
   }

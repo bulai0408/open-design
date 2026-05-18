@@ -197,6 +197,7 @@ export interface DaemonStreamOptions {
 
 export interface DaemonReattachOptions {
   runId: string;
+  agentId?: string | null;
   signal: AbortSignal;
   cancelSignal?: AbortSignal;
   handlers: DaemonStreamHandlers;
@@ -223,6 +224,217 @@ function daemonSseErrorMessage(data: SseErrorPayload): string {
       : null;
   if (!detail || detail === message || message.includes(detail)) return message;
   return `${message}\n${detail}`;
+}
+
+export type DaemonAgentFailureCategory =
+  | 'quota_exhausted'
+  | 'auth_required'
+  | 'prompt_too_large'
+  | 'cli_version_mismatch'
+  | 'binary_not_found'
+  | 'network'
+  | 'agent_crashed';
+
+export class DaemonAgentExitError extends Error {
+  readonly category: DaemonAgentFailureCategory;
+  readonly details: string;
+  readonly retryDelayMs?: number;
+  readonly exitCode: number | null;
+  readonly exitSignal: string | null;
+
+  constructor(
+    message: string,
+    options: {
+      category: DaemonAgentFailureCategory;
+      details: string;
+      retryDelayMs?: number;
+      exitCode: number | null;
+      exitSignal: string | null;
+    },
+  ) {
+    super(message);
+    this.name = 'DaemonAgentExitError';
+    this.category = options.category;
+    this.details = options.details;
+    this.retryDelayMs = options.retryDelayMs;
+    this.exitCode = options.exitCode;
+    this.exitSignal = options.exitSignal;
+  }
+}
+
+export function isDaemonAgentExitError(err: unknown): err is DaemonAgentExitError {
+  return err instanceof DaemonAgentExitError;
+}
+
+function buildDaemonAgentExitError({
+  agentId,
+  stderr,
+  exitCode,
+  exitSignal,
+}: {
+  agentId?: string | null;
+  stderr: string;
+  exitCode: number | null;
+  exitSignal: string | null;
+}): DaemonAgentExitError | null {
+  const details = stderr.trim();
+  if (!details) return null;
+  const text = details.toLowerCase();
+  const retryDelayMs = extractRetryDelayMs(details);
+  const label = agentLabel(agentId, details);
+  const retryHint = retryDelayMs
+    ? ` Try again in about ${formatRetryDelay(retryDelayMs)}, switch models, or check the provider quota.`
+    : ' Try again later, switch models, or check the provider quota.';
+
+  if (
+    /\b429\b/.test(details) ||
+    text.includes('resource_exhausted') ||
+    text.includes('rate limit') ||
+    text.includes('rate_limit') ||
+    text.includes('capacity on this model') ||
+    text.includes('quota') ||
+    text.includes('exhausted')
+  ) {
+    const message = text.includes('capacity on this model')
+      ? `${label} hit a per-model capacity limit.${retryHint}`
+      : `${label} hit a provider quota or rate limit.${retryHint}`;
+    return new DaemonAgentExitError(message, {
+      category: 'quota_exhausted',
+      details,
+      retryDelayMs,
+      exitCode,
+      exitSignal,
+    });
+  }
+
+  if (
+    /\b(?:401|403)\b/.test(details) ||
+    /not logged in/i.test(details) ||
+    /please run\s+\/?login/i.test(details) ||
+    /run\s+[`'"]?[^`'"\n]*login/i.test(details) ||
+    /(auth|oauth|credential|token|api key).*(fail|invalid|missing|expired|required|unauthorized|rejected|not found|none)/i.test(details) ||
+    /(unauthorized|forbidden|invalid api key|missing api key|authentication failed|could not authenticate)/i.test(details)
+  ) {
+    return new DaemonAgentExitError(
+      `${label} needs authentication before it can run. Sign in with the agent CLI, then retry.`,
+      {
+        category: 'auth_required',
+        details,
+        exitCode,
+        exitSignal,
+      },
+    );
+  }
+
+  if (
+    /enametoolong/i.test(details) ||
+    /argument list too long/i.test(details) ||
+    /argv limit/i.test(details) ||
+    /prompt exceeds/i.test(details)
+  ) {
+    return new DaemonAgentExitError(
+      "The composed prompt is too large for this agent CLI. Start a shorter turn or reduce the attached context, then retry.",
+      {
+        category: 'prompt_too_large',
+        details,
+        exitCode,
+        exitSignal,
+      },
+    );
+  }
+
+  if (
+    /unknown arguments?:/i.test(details) ||
+    /unknown option/i.test(details) ||
+    /unrecognized option/i.test(details) ||
+    /unsupported flag/i.test(details) ||
+    /no such option/i.test(details)
+  ) {
+    return new DaemonAgentExitError(
+      `${label} rejected one of Open Design's CLI flags. Update the agent CLI, then retry.`,
+      {
+        category: 'cli_version_mismatch',
+        details,
+        exitCode,
+        exitSignal,
+      },
+    );
+  }
+
+  if (
+    /spawn\s+.+\s+enoent/i.test(details) ||
+    /\benoent\b/i.test(details) ||
+    /command not found/i.test(details) ||
+    /not recognized as an internal or external command/i.test(details)
+  ) {
+    const bin = extractMissingBinary(details);
+    return new DaemonAgentExitError(
+      `Could not find ${bin ? `\`${bin}\`` : 'the agent CLI'} on PATH. Install it or update the Open Design agent settings, then retry.`,
+      {
+        category: 'binary_not_found',
+        details,
+        exitCode,
+        exitSignal,
+      },
+    );
+  }
+
+  if (
+    /\b(?:enotfound|econnrefused|econnreset|etimedout|eai_again|socket hang up|fetch failed)\b/i.test(details) ||
+    /network/i.test(details)
+  ) {
+    return new DaemonAgentExitError(
+      `${label} could not reach its provider or local service. Check your network, proxy, and endpoint settings, then retry.`,
+      {
+        category: 'network',
+        details,
+        retryDelayMs,
+        exitCode,
+        exitSignal,
+      },
+    );
+  }
+
+  return new DaemonAgentExitError('The agent process exited before finishing.', {
+    category: 'agent_crashed',
+    details,
+    exitCode,
+    exitSignal,
+  });
+}
+
+function agentLabel(agentId: string | null | undefined, stderr: string): string {
+  const id = (agentId ?? '').toLowerCase();
+  if (id.includes('gemini') || /gemini/i.test(stderr)) return 'Gemini';
+  if (id.includes('claude')) return 'Claude Code';
+  if (id.includes('codex')) return 'Codex';
+  if (id.includes('cursor')) return 'Cursor Agent';
+  if (id.includes('qoder')) return 'Qoder';
+  return 'The agent';
+}
+
+function extractRetryDelayMs(stderr: string): number | undefined {
+  const match =
+    /\bretryDelayMs\b["'\s:=]+(\d{2,})/i.exec(stderr) ||
+    /\bretry[_-]?after\b["'\s:=]+(\d{1,})/i.exec(stderr);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function formatRetryDelay(msOrSeconds: number): string {
+  const seconds = msOrSeconds >= 1000 ? Math.max(1, Math.round(msOrSeconds / 1000)) : msOrSeconds;
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return `${minutes}m`;
+}
+
+function extractMissingBinary(stderr: string): string | null {
+  const spawnMatch = /spawn\s+([^\s]+)\s+enoent/i.exec(stderr);
+  if (spawnMatch?.[1]) return spawnMatch[1].replace(/^["']|["']$/g, '');
+  const commandMatch = /([^\s:]+): command not found/i.exec(stderr);
+  if (commandMatch?.[1]) return commandMatch[1].replace(/^["']|["']$/g, '');
+  return null;
 }
 
 export async function streamViaDaemon({
@@ -318,6 +530,7 @@ export async function streamViaDaemon({
     emitRunStatus('queued');
     await consumeDaemonRun({
       runId,
+      agentId,
       signal,
       cancelSignal,
       handlers,
@@ -429,6 +642,7 @@ export async function listProjectRuns(): Promise<ChatRunStatusResponse[]> {
 
 async function consumeDaemonRun({
   runId,
+  agentId,
   signal,
   cancelSignal,
   handlers,
@@ -612,9 +826,15 @@ async function consumeDaemonRun({
       (!serverDeclaredSuccess &&
         (exitSignal || (exitCode !== null && exitCode !== 0)));
     if (looksLikeFailure) {
-      const tail = stderrBuf.trim().slice(-400);
+      const classified = buildDaemonAgentExitError({
+        agentId,
+        stderr: stderrBuf,
+        exitCode,
+        exitSignal,
+      });
       handlers.onError(
-        new Error(`agent exited with ${exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`}${tail ? `\n${tail}` : ''}`),
+        classified ??
+        new Error(`agent exited with ${exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`}`),
       );
       return;
     }
