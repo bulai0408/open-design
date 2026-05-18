@@ -329,11 +329,11 @@ import {
   getDeploymentById,
   getProject,
   getTemplate,
-  claimRoutineScheduledSlot,
   insertConversation,
   insertProject,
   insertRoutine,
   insertRoutineRun,
+  insertScheduledRoutineRun,
   insertTemplate,
   findTemplateByNameAndProject,
   updateTemplate,
@@ -3713,8 +3713,8 @@ export async function startServer({
   // delegates "list me everything" / "record a run" back to SQLite.
   routineService = new RoutineService({
     list: () => listRoutines(db).map((row) => routineDbRowToContract(row, null)),
-    insertRun: (run) => {
-      insertRoutineRun(db, {
+    insertRun: (run, options) => {
+      const row = {
         id: run.id,
         routineId: run.routineId,
         trigger: run.trigger,
@@ -3727,13 +3727,17 @@ export async function startServer({
         summary: run.summary,
         error: run.error,
         errorCode: run.errorCode,
-      });
+      };
+      if (options?.scheduledSlotAt != null) {
+        return Boolean(insertScheduledRoutineRun(db, row, options.scheduledSlotAt));
+      }
+      insertRoutineRun(db, row);
+      return true;
     },
     updateRun: (id, patch) => {
       updateRoutineRun(db, id, patch);
     },
     getLatestRun: (routineId) => getLatestRoutineRun(db, routineId),
-    claimScheduledSlot: (routineId, slotAt) => claimRoutineScheduledSlot(db, routineId, slotAt),
   });
   let daemonUrl = `http://127.0.0.1:${port}`;
 
@@ -12059,6 +12063,8 @@ export async function startServer({
     const stamp = formatLocalProjectTimestamp(new Date(now).toISOString());
     let projectId;
     let projectName;
+    let createdProjectId: string | null = null;
+    let createdConversationId: string | null = null;
     if (routine.target.mode === 'reuse') {
       const project = getProject(db, routine.target.projectId);
       if (!project) throw new Error(`Routine target project ${routine.target.projectId} not found`);
@@ -12084,6 +12090,7 @@ export async function startServer({
         createdAt: now,
         updatedAt: now,
       });
+      createdProjectId = projectId;
     }
 
     const conversationId = `routine-conv-${randomUUID()}`;
@@ -12097,16 +12104,8 @@ export async function startServer({
       createdAt: now,
       updatedAt: now,
     });
+    createdConversationId = conversationId;
 
-    // Notify any open `ProjectView` watching this project so its
-    // conversation list picks up the new routine conversation without
-    // requiring the user to leave and re-enter the project (#1361).
-    // For reuse-an-existing-project mode this is the only path the
-    // open view has to learn the conversation exists; for new-project
-    // mode this is harmless (no subscribers for a project that was
-    // just created milliseconds ago). The payload shape is the shared
-    // `ProjectConversationCreatedSsePayload` from `@open-design/contracts`
-    // so the daemon producer and the web consumer cannot drift.
     /** @type {ProjectConversationCreatedSsePayload} */
     const conversationCreatedEvent = {
       type: 'conversation-created',
@@ -12115,7 +12114,6 @@ export async function startServer({
       title: conversationTitle,
       createdAt: now,
     };
-    emitProjectEvent(projectId, conversationCreatedEvent);
 
     const assistantMessageId = `routine-assistant-${randomUUID()}`;
     let resolvedRoutineSnapshot = null;
@@ -12180,23 +12178,43 @@ export async function startServer({
     });
 
     const modelPrefs = appConfig.agentModels?.[agentId] ?? {};
-    design.runs.start(run, () => startChatRun({
-      agentId,
-      projectId,
-      conversationId: run.conversationId,
-      assistantMessageId: run.assistantMessageId,
-      clientRequestId: run.clientRequestId,
-      skillId: routineSkillId,
-      designSystemId: appConfig.designSystemId ?? null,
-      context: routineContext,
-      model: modelPrefs.model ?? null,
-      reasoning: modelPrefs.reasoning ?? null,
-      message: routine.prompt,
-      systemPrompt: [
-        `You are running an unattended scheduled routine named "${routine.name}".`,
-        'Do not ask follow-up questions, do not emit <question-form>, and do not wait for user input. Pick reasonable defaults and finish the task.',
-      ].join('\n'),
-    }, run));
+    const start = () => {
+      // Notify any open `ProjectView` only after the scheduled run row has
+      // been accepted, so duplicate scheduled slots do not surface phantom
+      // conversations (#1361).
+      emitProjectEvent(projectId, conversationCreatedEvent);
+      design.runs.start(run, () => startChatRun({
+        agentId,
+        projectId,
+        conversationId: run.conversationId,
+        assistantMessageId: run.assistantMessageId,
+        clientRequestId: run.clientRequestId,
+        skillId: routineSkillId,
+        designSystemId: appConfig.designSystemId ?? null,
+        context: routineContext,
+        model: modelPrefs.model ?? null,
+        reasoning: modelPrefs.reasoning ?? null,
+        message: routine.prompt,
+        systemPrompt: [
+          `You are running an unattended scheduled routine named "${routine.name}".`,
+          'Do not ask follow-up questions, do not emit <question-form>, and do not wait for user input. Pick reasonable defaults and finish the task.',
+        ].join('\n'),
+      }, run));
+    };
+
+    const discard = () => {
+      try {
+        design.runs.finish(run, 'canceled');
+      } catch {
+        // best-effort cleanup for an unstarted duplicate scheduled run
+      }
+      if (createdConversationId) {
+        try { deleteConversation(db, createdConversationId); } catch {}
+      }
+      if (createdProjectId) {
+        try { dbDeleteProject(db, createdProjectId); } catch {}
+      }
+    };
 
     const completion = (async () => {
       const finalStatus = await design.runs.wait(run);
@@ -12246,7 +12264,7 @@ export async function startServer({
       };
     })();
 
-    return { projectId, conversationId, agentRunId: run.id, completion };
+    return { projectId, conversationId, agentRunId: run.id, completion, start, discard };
   });
   routineService.start();
 

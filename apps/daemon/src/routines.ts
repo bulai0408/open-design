@@ -77,6 +77,8 @@ export interface RoutineRunHandlerStart {
   conversationId: string;
   agentRunId: string;
   completion: Promise<RoutineRunCompletion>;
+  start?: () => void;
+  discard?: () => void;
 }
 
 export interface RoutineRunCompletion {
@@ -95,16 +97,30 @@ export type RoutineRunHandler = (input: {
 
 export interface RoutinePersistence {
   list(): Routine[];
-  insertRun(run: RoutineRun): void;
+  insertRun(run: RoutineRun, options?: { scheduledSlotAt?: number }): boolean | void;
   updateRun(id: string, patch: Partial<RoutineRun>): void;
   getLatestRun(routineId: string): RoutineRun | null;
-  claimScheduledSlot?(routineId: string, slotAt: number): boolean;
 }
 
 interface ScheduledTimer {
   routineId: string;
   timer: NodeJS.Timeout;
   fireAt: Date;
+}
+
+class ScheduledRunPersistenceError extends Error {
+  constructor(
+    readonly routineId: string,
+    readonly slotAt: number,
+    readonly originalError: unknown,
+  ) {
+    super(`Routine ${routineId} scheduled slot ${slotAt} could not be persisted`);
+    this.name = 'ScheduledRunPersistenceError';
+  }
+}
+
+function isScheduledRunPersistenceError(error: unknown): error is ScheduledRunPersistenceError {
+  return error instanceof ScheduledRunPersistenceError;
 }
 
 // ---------- timezone math ----------
@@ -459,6 +475,17 @@ export class RoutineService {
     if (!routine.enabled) return;
     const fireAt = nextRunAtForSchedule(routine.schedule);
     if (!fireAt) return;
+    this.scheduleRoutineAt(routine, fireAt);
+  }
+
+  private retryScheduledSlot(routineId: string, fireAt: Date): void {
+    if (!this.started) return;
+    const routine = this.persistence.list().find((candidate) => candidate.id === routineId);
+    if (!routine?.enabled) return;
+    this.scheduleRoutineAt(routine, fireAt);
+  }
+
+  private scheduleRoutineAt(routine: Routine, fireAt: Date): void {
     // setTimeout can't carry past 2^31 ms (~24.8 days); we cap and use
     // a chained re-schedule. Routines fire within hours/days, but a
     // misconfigured "next month" weekly value could otherwise overflow.
@@ -466,31 +493,25 @@ export class RoutineService {
     const timer = setTimeout(() => {
       this.timers.delete(routine.id);
       const slotAt = fireAt.getTime();
-      let claimed = true;
-      try {
-        claimed = this.persistence.claimScheduledSlot?.(routine.id, slotAt) ?? true;
-      } catch (error) {
-        console.error(
-          `[od] routine ${routine.id} scheduled slot claim failed:`,
-          error instanceof Error ? error.message : error,
-        );
-        this.rescheduleOne(routine.id);
-        return;
-      }
-      if (!claimed) {
-        this.rescheduleOne(routine.id);
-        return;
-      }
-      this.start_(routine.id, 'scheduled')
+      this.start_(routine.id, 'scheduled', { scheduledSlotAt: slotAt })
+        .then(() => {
+          // Always reschedule so a single fire keeps the cadence alive.
+          this.rescheduleOne(routine.id);
+        })
         .catch((error) => {
           console.error(
             `[od] routine ${routine.id} scheduled run failed:`,
-            error instanceof Error ? error.message : error,
+            error instanceof ScheduledRunPersistenceError
+              ? error.originalError instanceof Error
+                ? error.originalError.message
+                : error.originalError
+              : error instanceof Error ? error.message : error,
           );
-        })
-        .finally(() => {
-          // Always reschedule so a single fire keeps the cadence alive.
-          this.rescheduleOne(routine.id);
+          if (isScheduledRunPersistenceError(error)) {
+            this.retryScheduledSlot(routine.id, fireAt);
+          } else {
+            this.rescheduleOne(routine.id);
+          }
         });
     }, delay);
     if (typeof timer.unref === 'function') timer.unref();
@@ -508,6 +529,7 @@ export class RoutineService {
   private async start_(
     routineId: string,
     trigger: RoutineRunTrigger,
+    options: { scheduledSlotAt?: number } = {},
   ): Promise<RoutineRunHandlerStart> {
     if (!this.runHandler) throw new Error('Routine run handler is not configured');
     const inflight = this.inflight.get(routineId);
@@ -522,7 +544,7 @@ export class RoutineService {
       const handler = this.runHandler;
       if (!handler) throw new Error('Routine run handler is not configured');
       const handlerStart = await handler({ routine, trigger, startedAt, runId });
-      this.persistence.insertRun({
+      const run: RoutineRun = {
         id: runId,
         routineId: routine.id,
         trigger,
@@ -535,7 +557,21 @@ export class RoutineService {
         summary: null,
         error: null,
         errorCode: null,
-      });
+      };
+      let inserted = true;
+      try {
+        inserted = this.persistence.insertRun(run, options) !== false;
+      } catch (error) {
+        handlerStart.discard?.();
+        if (options.scheduledSlotAt != null) {
+          throw new ScheduledRunPersistenceError(routine.id, options.scheduledSlotAt, error);
+        }
+        throw error;
+      }
+      if (!inserted) {
+        handlerStart.discard?.();
+        return handlerStart;
+      }
       handlerStart.completion
         .then((completion) => {
           this.persistence.updateRun(runId, {
@@ -555,6 +591,18 @@ export class RoutineService {
             errorCode: null,
           });
         });
+      try {
+        handlerStart.start?.();
+      } catch (error) {
+        this.persistence.updateRun(runId, {
+          status: 'failed',
+          completedAt: Date.now(),
+          summary: null,
+          error: error instanceof Error ? error.message : String(error),
+          errorCode: null,
+        });
+        throw error;
+      }
       return handlerStart;
     })();
     this.inflight.set(routineId, promise);

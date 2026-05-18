@@ -31,6 +31,7 @@ function partsIn(timezone: string, at: Date): Record<string, string> {
 class SharedRoutinePersistence {
   readonly runs: RoutineRun[] = [];
   readonly claimedSlots = new Set<string>();
+  failScheduledInsertAttempts = 0;
 
   constructor(private readonly routines: Routine[]) {}
 
@@ -38,8 +39,18 @@ class SharedRoutinePersistence {
     return this.routines;
   }
 
-  insertRun(run: RoutineRun): void {
+  insertRun(run: RoutineRun, options: { scheduledSlotAt?: number } = {}): boolean {
+    if (options.scheduledSlotAt != null) {
+      if (this.failScheduledInsertAttempts > 0) {
+        this.failScheduledInsertAttempts -= 1;
+        throw new Error('scheduled slot claim unavailable');
+      }
+      const key = `${run.routineId}:${options.scheduledSlotAt}`;
+      if (this.claimedSlots.has(key)) return false;
+      this.claimedSlots.add(key);
+    }
     this.runs.push(run);
+    return true;
   }
 
   updateRun(id: string, patch: Partial<RoutineRun>): void {
@@ -49,13 +60,6 @@ class SharedRoutinePersistence {
 
   getLatestRun(routineId: string): RoutineRun | null {
     return this.runs.find((run) => run.routineId === routineId) ?? null;
-  }
-
-  claimScheduledSlot(routineId: string, slotAt: number): boolean {
-    const key = `${routineId}:${slotAt}`;
-    if (this.claimedSlots.has(key)) return false;
-    this.claimedSlots.add(key);
-    return true;
   }
 }
 
@@ -68,6 +72,7 @@ function fixtureRoutine(overrides: Partial<Routine> = {}): Routine {
     target: { mode: 'create_each_run' },
     skillId: null,
     agentId: null,
+    context: {},
     enabled: true,
     nextRunAt: null,
     lastRun: null,
@@ -77,12 +82,14 @@ function fixtureRoutine(overrides: Partial<Routine> = {}): Routine {
   };
 }
 
-function handlerStart(agentRunId: string): RoutineRunHandlerStart {
+function handlerStart(agentRunId: string, onStart?: () => void): RoutineRunHandlerStart {
+  const start = onStart ? { start: onStart } : {};
   return {
     projectId: 'project-1',
     conversationId: 'conversation-1',
     agentRunId,
     completion: Promise.resolve({ status: 'succeeded' }),
+    ...start,
   };
 }
 
@@ -239,12 +246,10 @@ describe('RoutineService scheduled run idempotency', () => {
     const starts: string[] = [];
 
     first.setRunHandler(async ({ runId }) => {
-      starts.push(runId);
-      return handlerStart('agent-run-1');
+      return handlerStart('agent-run-1', () => starts.push(runId));
     });
     second.setRunHandler(async ({ runId }) => {
-      starts.push(runId);
-      return handlerStart('agent-run-2');
+      return handlerStart('agent-run-2', () => starts.push(runId));
     });
 
     try {
@@ -259,6 +264,40 @@ describe('RoutineService scheduled run idempotency', () => {
     } finally {
       first.stop();
       second.stop();
+    }
+  });
+
+  it('retries the same scheduled slot when durable run insertion fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));
+
+    const persistence = new SharedRoutinePersistence([fixtureRoutine()]);
+    persistence.failScheduledInsertAttempts = 1;
+    const service = new RoutineService(persistence);
+    const starts: string[] = [];
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    service.setRunHandler(async ({ runId }) => {
+      return handlerStart('agent-run-1', () => starts.push(runId));
+    });
+
+    try {
+      service.start();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(starts).toHaveLength(0);
+      expect(persistence.runs).toHaveLength(0);
+      expect(persistence.claimedSlots.size).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(starts).toHaveLength(1);
+      expect(persistence.runs).toHaveLength(1);
+      expect(persistence.claimedSlots).toEqual(new Set(['routine-1:1779012060000']));
+    } finally {
+      service.stop();
+      errors.mockRestore();
     }
   });
 });

@@ -1460,13 +1460,39 @@ export function insertRoutineRun(db: SqliteDb, r: DbRow) {
   return getRoutineRun(db, r.id);
 }
 
-export function claimRoutineScheduledSlot(db: SqliteDb, routineId: string, slotAt: number): boolean {
-  const result = db.prepare(
+export function insertScheduledRoutineRun(db: SqliteDb, r: DbRow, slotAt: number) {
+  const insertClaim = db.prepare(
     `INSERT OR IGNORE INTO routine_schedule_claims
        (routine_id, slot_at, claimed_at)
      VALUES (?, ?, ?)`,
-  ).run(routineId, slotAt, Date.now());
-  return result.changes > 0;
+  );
+  const insertRun = db.prepare(
+    `INSERT INTO routine_runs
+       (id, routine_id, trigger, status, project_id, conversation_id,
+        agent_run_id, started_at, completed_at, summary, error, error_code)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const tx = db.transaction(() => {
+    const claim = insertClaim.run(r.routineId, slotAt, Date.now());
+    if (claim.changes === 0) return false;
+    insertRun.run(
+      r.id,
+      r.routineId,
+      r.trigger,
+      r.status,
+      r.projectId,
+      r.conversationId,
+      r.agentRunId,
+      r.startedAt,
+      r.completedAt ?? null,
+      r.summary ?? null,
+      r.error ?? null,
+      r.errorCode ?? null,
+    );
+    return true;
+  });
+  if (!tx()) return null;
+  return getRoutineRun(db, r.id);
 }
 
 export function updateRoutineRun(db: SqliteDb, id: string, patch: DbRow) {
