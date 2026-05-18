@@ -583,6 +583,46 @@ describe('streamViaDaemon', () => {
     expect(handlers.onDone).not.toHaveBeenCalled();
   });
 
+  it('does not classify runtime ENOENT file errors as missing agent binaries', async () => {
+    const handlers = createDaemonHandlers();
+    const stderr = "ENOENT: no such file or directory, open '/tmp/missing-design.html'";
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ runId: 'run-1' }))
+        .mockResolvedValueOnce(
+          sseResponse(
+            [
+              'event: stderr',
+              `data: ${JSON.stringify({ chunk: stderr })}`,
+              '',
+              'event: end',
+              'data: {"code":1,"status":"failed"}',
+              '',
+              '',
+            ].join('\n'),
+          ),
+        ),
+    );
+
+    await streamViaDaemon({
+      agentId: 'claude',
+      history: [{ id: '1', role: 'user', content: 'hello' }],
+      systemPrompt: '',
+      signal: new AbortController().signal,
+      handlers,
+    });
+
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      category?: string;
+      details?: string;
+    };
+    expect(error.category).toBe('agent_crashed');
+    expect(error.message).toBe('The agent process exited before finishing.');
+    expect(error.details).toBe(stderr);
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
   it('still surfaces an error when the end event has a signal but no status field', async () => {
     // Same regression as above for the signal arm of the safety net. Without
     // explicit `status: 'succeeded'` from the server, a SIGTERM-style signal
@@ -952,6 +992,63 @@ describe('streamViaDaemon', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input) === '/api/runs/run-1')).toBe(true);
     expect(onRunStatus).toHaveBeenCalledWith('failed');
     expect(handlers.onError).toHaveBeenCalledWith(new Error('daemon stream disconnected before run completed'));
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
+  it('classifies failed fallback run status errors when resumed streams do not replay stderr', async () => {
+    const handlers = createDaemonHandlers();
+    const runError = [
+      'Error: request failed',
+      '  cause: {',
+      '    code: 429,',
+      "    message: 'You have exhausted your capacity on this model.'",
+      '  },',
+      '  retryDelayMs: 10000',
+      '}',
+    ].join('\n');
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/runs') return jsonResponse({ runId: 'run-1' });
+      if (url === '/api/runs/run-1/events') return sseResponse('');
+      if (url === '/api/runs/run-1') {
+        return jsonResponse({
+          id: 'run-1',
+          projectId: null,
+          conversationId: null,
+          assistantMessageId: null,
+          agentId: 'gemini',
+          status: 'failed',
+          createdAt: 1,
+          updatedAt: 2,
+          exitCode: 1,
+          signal: null,
+          error: runError,
+          errorCode: 'AGENT_EXECUTION_FAILED',
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamViaDaemon({
+      agentId: 'gemini',
+      history: [{ id: '1', role: 'user', content: 'hello' }],
+      systemPrompt: '',
+      signal: new AbortController().signal,
+      handlers,
+    });
+
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      category?: string;
+      details?: string;
+      retryDelayMs?: number;
+    };
+    expect(error.category).toBe('quota_exhausted');
+    expect(error.retryDelayMs).toBe(10000);
+    expect(error.message).toContain('capacity');
+    expect(error.message).not.toBe('agent exited with code 1');
+    expect(error.details).toContain('AGENT_EXECUTION_FAILED');
+    expect(error.details).toContain(runError);
     expect(handlers.onDone).not.toHaveBeenCalled();
   });
 

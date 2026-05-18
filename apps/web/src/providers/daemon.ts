@@ -362,8 +362,7 @@ function buildDaemonAgentExitError({
   }
 
   if (
-    /spawn\s+.+\s+enoent/i.test(details) ||
-    /\benoent\b/i.test(details) ||
+    /\bspawn(?:\s+\S+)?\s+enoent\b/i.test(details) ||
     /command not found/i.test(details) ||
     /not recognized as an internal or external command/i.test(details)
   ) {
@@ -401,6 +400,15 @@ function buildDaemonAgentExitError({
     exitCode,
     exitSignal,
   });
+}
+
+function runStatusDiagnostic(error: string | null | undefined, errorCode: string | null | undefined): string {
+  const parts: string[] = [];
+  const code = errorCode?.trim();
+  const message = error?.trim();
+  if (code) parts.push(`errorCode: ${code}`);
+  if (message) parts.push(message);
+  return parts.join('\n');
 }
 
 function agentLabel(agentId: string | null | undefined, stderr: string): string {
@@ -655,6 +663,8 @@ async function consumeDaemonRun({
   let exitCode: number | null = null;
   let exitSignal: string | null = null;
   let endStatus: ChatRunStatus | null = null;
+  let fallbackRunError: string | null = null;
+  let fallbackRunErrorCode: string | null = null;
   // Tracks whether the server explicitly declared `status: 'succeeded'` in
   // the SSE end payload (or via the fallback run-status fetch). Distinct
   // from `endStatus === 'succeeded'`, which can be a local fallback when
@@ -793,6 +803,8 @@ async function consumeDaemonRun({
         endStatus = status.status;
         exitCode = status.exitCode ?? null;
         exitSignal = status.signal ?? null;
+        fallbackRunError = status.error ?? null;
+        fallbackRunErrorCode = status.errorCode ?? null;
         // Fallback REST path: `status.status` is explicitly declared by the
         // daemon's run record (it passed `isChatRunStatus()` above), so an
         // explicit `'succeeded'` here is just as authoritative as the SSE
@@ -826,9 +838,12 @@ async function consumeDaemonRun({
       (!serverDeclaredSuccess &&
         (exitSignal || (exitCode !== null && exitCode !== 0)));
     if (looksLikeFailure) {
+      const diagnostic = stderrBuf.trim()
+        ? stderrBuf
+        : runStatusDiagnostic(fallbackRunError, fallbackRunErrorCode);
       const classified = buildDaemonAgentExitError({
         agentId,
-        stderr: stderrBuf,
+        stderr: diagnostic,
         exitCode,
         exitSignal,
       });
