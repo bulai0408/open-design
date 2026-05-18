@@ -8,6 +8,8 @@ import { Icon } from './Icon';
  */
 const PRIVACY_POLICY_URL = 'https://github.com/nexu-io/open-design/blob/main/PRIVACY.md';
 
+export type PrivacyConsentDecision = 'shared' | 'declined';
+
 interface Props {
   /** Affirmative consent (Share usage data). */
   onShare: () => void;
@@ -32,13 +34,22 @@ interface Props {
  * button reads as a consent choice. A link to the full privacy policy
  * sits above the actions so the policy is reachable before deciding.
  *
- * Stays mounted until the user picks Share or Don't share — there is
- * no dismiss-without-choice button on purpose. Telemetry decisions
- * downstream key off whether `installationId` is set, so an "ambiguous
- * not-yet-decided" state would be hard to interpret.
+ * Stays mounted until the user picks Share or Don't share. There is no
+ * dismiss-without-choice button on purpose. Telemetry decisions downstream
+ * key off whether `installationId` is set, so an "ambiguous not-yet-decided"
+ * state would be hard to interpret.
  */
 export function PrivacyConsentModal({ onShare, onDecline }: Props): JSX.Element {
   const t = useT();
+
+  function choose(next: PrivacyConsentDecision): void {
+    if (next === 'shared') {
+      onShare();
+    } else {
+      onDecline();
+    }
+  }
+
   return (
     <div className="privacy-consent-banner" role="region" aria-labelledby="privacy-consent-title">
       <div className="privacy-consent-banner-head">
@@ -76,10 +87,10 @@ export function PrivacyConsentModal({ onShare, onDecline }: Props): JSX.Element 
         role="group"
         aria-label={t('settings.privacyConsentKicker')}
       >
-        <button type="button" className="privacy-consent-action" onClick={onDecline}>
+        <button type="button" className="privacy-consent-action" onClick={() => choose('declined')}>
           {t('settings.privacyConsentDecline')}
         </button>
-        <button type="button" className="privacy-consent-action" onClick={onShare}>
+        <button type="button" className="privacy-consent-action" onClick={() => choose('shared')}>
           {t('settings.privacyConsentShare')}
         </button>
       </div>

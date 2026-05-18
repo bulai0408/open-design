@@ -182,6 +182,8 @@ export const id: Dict = {
   'settings.privacyConsentFooter': 'You can change either of these any time in Settings → Privacy. We never upload the contents of your generated artifact files.',
   'settings.privacyConsentShare': 'Share usage data',
   'settings.privacyConsentDecline': "Don't share",
+  'settings.privacyConsentSharedTitle': 'Usage data sharing is on',
+  'settings.privacyConsentDeclinedTitle': 'Usage data sharing is off',
   'settings.privacyConsentPolicyLink': 'Read the privacy policy',
   'settings.privacyMetrics': 'Anonymous metrics',
   'settings.privacyMetricsHint': 'Run counts, token usage, error rate, duration. No prompts, no project data.',

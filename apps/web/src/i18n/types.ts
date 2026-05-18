@@ -229,6 +229,8 @@ export interface Dict {
   'settings.privacyConsentFooter': string;
   'settings.privacyConsentShare': string;
   'settings.privacyConsentDecline': string;
+  'settings.privacyConsentSharedTitle': string;
+  'settings.privacyConsentDeclinedTitle': string;
   'settings.privacyConsentPolicyLink': string;
   'settings.privacyMetrics': string;
   'settings.privacyMetricsHint': string;

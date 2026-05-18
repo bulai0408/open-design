@@ -184,6 +184,8 @@ export const fr: Dict = {
   'settings.privacyConsentFooter': 'Vous pouvez modifier ces choix à tout moment dans Paramètres → Confidentialité. Nous ne téléversons jamais le contenu de vos fichiers d’artefacts générés.',
   'settings.privacyConsentShare': 'Partager les données d’utilisation',
   'settings.privacyConsentDecline': 'Ne pas partager',
+  'settings.privacyConsentSharedTitle': 'Le partage des données d’utilisation est activé',
+  'settings.privacyConsentDeclinedTitle': 'Le partage des données d’utilisation est désactivé',
   'settings.privacyConsentPolicyLink': 'Lire la politique de confidentialité',
   'settings.privacyMetrics': 'Mesures anonymes',
   'settings.privacyMetricsHint': 'Nombre d’exécutions, usage des tokens, taux d’erreur, durée. Aucun prompt ni donnée de projet.',

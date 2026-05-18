@@ -93,13 +93,16 @@ vi.mock('../../src/components/SettingsDialog', () => ({
   SettingsDialog: ({
     initial,
     initialSection,
+    welcome,
     onPersistComposioKey,
   }: {
     initial: AppConfig;
     initialSection?: string;
+    welcome?: boolean;
     onPersistComposioKey: (composio: AppConfig['composio']) => void;
   }) => (
     <div role="dialog" aria-label="Settings dialog">
+      <div>Welcome: {welcome ? 'yes' : 'no'}</div>
       <div>Section: {initialSection}</div>
       <div>Composio tail: {initial.composio?.apiKeyTail ?? 'none'}</div>
       <button
@@ -291,6 +294,70 @@ describe('App connectors settings flows', () => {
       expect(screen.getByRole('dialog', { name: 'Settings dialog' })).toBeTruthy();
     });
     expect(container.querySelector('.privacy-consent-banner')).toBeNull();
+  });
+
+  it('confirms first-run privacy opt-in with a toast and opens welcome settings immediately', async () => {
+    mockedLoadConfig.mockReturnValue({
+      ...baseConfig,
+      onboardingCompleted: false,
+      privacyDecisionAt: undefined,
+      telemetry: undefined,
+    });
+
+    const { container } = render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Share usage data' })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Share usage data' }));
+
+    await waitFor(() => {
+      expect(mockedSyncConfigToDaemon).toHaveBeenCalledWith(
+        expect.objectContaining({
+          installationId: expect.any(String),
+          privacyDecisionAt: expect.any(Number),
+          telemetry: { metrics: true, content: true, artifactManifest: false },
+        }),
+      );
+    });
+
+    expect(container.querySelector('.privacy-consent-banner')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('Usage data sharing is on');
+    expect(screen.getByRole('dialog', { name: 'Settings dialog' })).toBeTruthy();
+    expect(screen.getByText('Welcome: yes')).toBeTruthy();
+  });
+
+  it('confirms first-run privacy opt-out with a toast and opens welcome settings immediately', async () => {
+    mockedLoadConfig.mockReturnValue({
+      ...baseConfig,
+      onboardingCompleted: false,
+      privacyDecisionAt: undefined,
+      telemetry: undefined,
+    });
+
+    const { container } = render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: "Don't share" })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: "Don't share" }));
+
+    await waitFor(() => {
+      expect(mockedSyncConfigToDaemon).toHaveBeenCalledWith(
+        expect.objectContaining({
+          installationId: null,
+          privacyDecisionAt: expect.any(Number),
+          telemetry: { metrics: false, content: false, artifactManifest: false },
+        }),
+      );
+    });
+
+    expect(container.querySelector('.privacy-consent-banner')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('Usage data sharing is off');
+    expect(screen.getByRole('dialog', { name: 'Settings dialog' })).toBeTruthy();
+    expect(screen.getByText('Welcome: yes')).toBeTruthy();
   });
 
   it('normalizes local persistence but sends the raw replacement key to the daemon on save', async () => {

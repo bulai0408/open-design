@@ -22,7 +22,11 @@ import {
   updateCurrentApiProtocolConfig,
   type SettingsSection,
 } from './components/SettingsDialog';
-import { PrivacyConsentModal } from './components/PrivacyConsentModal';
+import {
+  PrivacyConsentModal,
+  type PrivacyConsentDecision,
+} from './components/PrivacyConsentModal';
+import { Toast } from './components/Toast';
 import {
   daemonIsLive,
   fetchAppVersionInfo,
@@ -167,6 +171,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsWelcome, setSettingsWelcome] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('execution');
+  const [privacyConsentToast, setPrivacyConsentToast] = useState<string | null>(null);
   const [integrationInitialTab, setIntegrationInitialTab] = useState<IntegrationTab>('mcp');
   const [daemonLive, setDaemonLive] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -275,7 +280,9 @@ export function App() {
   const activeProjectId = route.kind === 'project' ? route.projectId : null;
   const activeFileName = route.kind === 'project' ? route.fileName : null;
   const showPrivacyConsent =
-    daemonConfigLoaded && config.privacyDecisionAt == null && !settingsOpen;
+    daemonConfigLoaded
+    && !settingsOpen
+    && config.privacyDecisionAt == null;
   useEffect(() => {
     const body = activeProjectId
       ? { projectId: activeProjectId, fileName: activeFileName }
@@ -1024,6 +1031,31 @@ export function App() {
     navigate({ kind: 'home', view: 'integrations' });
   }, []);
 
+  const handlePrivacyConsentChoice = useCallback((decision: PrivacyConsentDecision) => {
+    const sharing = decision === 'shared';
+    const next = {
+      ...latestPersistedConfigRef.current,
+      installationId: sharing ? generateInstallationIdSafe() : null,
+      privacyDecisionAt: Date.now(),
+      telemetry: {
+        metrics: sharing,
+        content: sharing,
+        artifactManifest: false,
+      },
+    };
+
+    setPrivacyConsentToast(
+      sharing
+        ? t('settings.privacyConsentSharedTitle')
+        : t('settings.privacyConsentDeclinedTitle'),
+    );
+    void handleConfigPersist(next);
+    if (!next.onboardingCompleted) {
+      setSettingsWelcome(true);
+      setSettingsOpen(true);
+    }
+  }, [handleConfigPersist, t]);
+
   // Cmd+, (mac) / Ctrl+, (win/linux) opens Settings. Capture phase so we
   // beat the browser's default Preferences dialog. Platform-gated so
   // meta/ctrl don't conflict across OS.
@@ -1276,34 +1308,14 @@ export function App() {
           floating banner never intercepts modal interactions. */}
       {showPrivacyConsent ? (
         <PrivacyConsentModal
-          onShare={() => {
-            const installationId = generateInstallationIdSafe();
-            void handleConfigPersist({
-              ...latestPersistedConfigRef.current,
-              installationId,
-              privacyDecisionAt: Date.now(),
-              telemetry: { metrics: true, content: true, artifactManifest: false },
-            });
-            // Hand the foreground over to the welcome modal now that the
-            // privacy decision is recorded — bootstrap deferred opening
-            // it while consent was pending.
-            if (!latestPersistedConfigRef.current.onboardingCompleted) {
-              setSettingsWelcome(true);
-              setSettingsOpen(true);
-            }
-          }}
-          onDecline={() => {
-            void handleConfigPersist({
-              ...latestPersistedConfigRef.current,
-              installationId: null,
-              privacyDecisionAt: Date.now(),
-              telemetry: { metrics: false, content: false, artifactManifest: false },
-            });
-            if (!latestPersistedConfigRef.current.onboardingCompleted) {
-              setSettingsWelcome(true);
-              setSettingsOpen(true);
-            }
-          }}
+          onShare={() => handlePrivacyConsentChoice('shared')}
+          onDecline={() => handlePrivacyConsentChoice('declined')}
+        />
+      ) : null}
+      {privacyConsentToast ? (
+        <Toast
+          message={privacyConsentToast}
+          onDismiss={() => setPrivacyConsentToast(null)}
         />
       ) : null}
     </>

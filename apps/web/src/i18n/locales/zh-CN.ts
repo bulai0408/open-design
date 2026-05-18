@@ -208,6 +208,8 @@ export const zhCN: Dict = {
   'settings.privacyConsentFooter': '你可以随时在 设置 → 隐私 中修改任意一项。我们绝不上传你生成的产物文件内容。',
   'settings.privacyConsentShare': '分享使用数据',
   'settings.privacyConsentDecline': '不分享',
+  'settings.privacyConsentSharedTitle': '已开启使用数据分享',
+  'settings.privacyConsentDeclinedTitle': '已关闭使用数据分享',
   'settings.privacyConsentPolicyLink': '阅读隐私政策',
   'settings.privacyMetrics': '匿名指标',
   'settings.privacyMetricsHint': '运行次数、token 用量、错误率、时长。不包含 prompt,不包含项目数据。',

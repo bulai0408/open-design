@@ -8,7 +8,10 @@ import { I18nProvider } from '../../src/i18n';
 
 const PRIVACY_POLICY_HREF = 'https://github.com/nexu-io/open-design/blob/main/PRIVACY.md';
 
-function renderModal(overrides?: { onShare?: () => void; onDecline?: () => void }) {
+function renderModal(overrides?: {
+  onShare?: () => void;
+  onDecline?: () => void;
+}) {
   const onShare = overrides?.onShare ?? vi.fn();
   const onDecline = overrides?.onDecline ?? vi.fn();
   render(
@@ -47,6 +50,16 @@ describe('PrivacyConsentModal', () => {
     expect(link.getAttribute('rel') ?? '').toContain('noopener');
   });
 
+  it('leaves post-choice confirmation to the parent flow', () => {
+    const { onShare, onDecline } = renderModal();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Share usage data' }));
+
+    expect(onShare).toHaveBeenCalledTimes(1);
+    expect(onDecline).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull();
+  });
+
   it('invokes the matching handler when each action is clicked', () => {
     const { onShare, onDecline } = renderModal();
 
@@ -54,8 +67,11 @@ describe('PrivacyConsentModal', () => {
     expect(onShare).toHaveBeenCalledTimes(1);
     expect(onDecline).not.toHaveBeenCalled();
 
+    cleanup();
+    const next = renderModal();
+
     fireEvent.click(screen.getByRole('button', { name: "Don't share" }));
-    expect(onDecline).toHaveBeenCalledTimes(1);
-    expect(onShare).toHaveBeenCalledTimes(1);
+    expect(next.onDecline).toHaveBeenCalledTimes(1);
+    expect(next.onShare).not.toHaveBeenCalled();
   });
 });
