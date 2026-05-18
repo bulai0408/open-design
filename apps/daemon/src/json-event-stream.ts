@@ -45,31 +45,41 @@ function stringifyContent(value: unknown): string {
   }
 }
 
-function parseJsonObjectFromContent(value: string): JsonObject | null {
+function parseJsonObjectsFromContent(value: string): JsonObject[] {
   const trimmed = value.trim();
-  if (!trimmed) return null;
+  if (!trimmed) return [];
   const direct = safeParseJson(trimmed);
-  if (isRecord(direct)) return direct;
+  if (isRecord(direct)) return [direct];
+  const objects: JsonObject[] = [];
   for (const line of trimmed.split(/\r?\n/u)) {
     const parsedLine = safeParseJson(line.trim());
-    if (isRecord(parsedLine)) return parsedLine;
+    if (isRecord(parsedLine)) objects.push(parsedLine);
   }
-  return null;
+  return objects;
 }
 
 function extractConnectorApiError(value: JsonObject): JsonObject | null {
   if (isRecord(value.error)) {
     if (typeof value.error.code === 'string') return value.error;
-    if (isRecord(value.error.data) && isRecord(value.error.data.error)) return value.error.data.error;
+    if (isRecord(value.error.data) && isRecord(value.error.data.error)) {
+      const wrappedError = value.error.data.error;
+      if (typeof wrappedError.code === 'string') return wrappedError;
+    }
   }
   return null;
 }
 
 function connectorToolSelectionErrorMessage(content: string): string | null {
-  const parsed = parseJsonObjectFromContent(content);
-  if (!parsed) return null;
-  const error = extractConnectorApiError(parsed);
-  if (!error || error.code !== 'CONNECTOR_TOOL_NOT_FOUND') return null;
+  if (!content.includes('CONNECTOR_TOOL_NOT_FOUND')) return null;
+  let error: JsonObject | null = null;
+  for (const parsed of parseJsonObjectsFromContent(content)) {
+    const parsedError = extractConnectorApiError(parsed);
+    if (parsedError?.code === 'CONNECTOR_TOOL_NOT_FOUND') {
+      error = parsedError;
+      break;
+    }
+  }
+  if (!error) return null;
   const details = isRecord(error.details) ? error.details : {};
   const connectorId = typeof details.connectorId === 'string' && details.connectorId
     ? details.connectorId
