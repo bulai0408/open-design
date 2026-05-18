@@ -744,6 +744,8 @@ export async function reconcileHtmlArtifactManifest(projectsRoot, projectId, nam
   const validated = validateArtifactManifestInput(
     {
       ...inferred,
+      createdAt: new Date(targetStat.mtimeMs).toISOString(),
+      updatedAt: new Date(targetStat.mtimeMs).toISOString(),
       metadata: {
         ...inferredMetadata,
         inferred: true,
@@ -751,6 +753,7 @@ export async function reconcileHtmlArtifactManifest(projectsRoot, projectId, nam
       },
     },
     safeName,
+    { preserveUpdatedAt: true },
   );
   if (!validated.ok || !validated.value) return null;
   await writeFile(manifestTarget, JSON.stringify(validated.value, null, 2));

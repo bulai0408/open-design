@@ -248,35 +248,38 @@ describe('resolveCurrentArtifact', () => {
     expect(sidecar.metadata?.reconciled).toBe(true);
   });
 
-  it('selects a newly reconciled HTML artifact over an older sidecar when no tab is active', async () => {
+  it('keeps a newer persisted artifact ahead of an older reconciled HTML file when no tab is active', async () => {
     const { db, projectsRoot } = setupResolverFixture();
+    const projectDir = path.join(projectsRoot, PROJECT_ID);
+    const staleHtmlMtime = new Date('2026-05-01T00:00:00.000Z');
 
-    await writeProjectFile(projectsRoot, PROJECT_ID, 'older.html', '<p>older</p>', {
+    await writeProjectFile(projectsRoot, PROJECT_ID, 'newer.html', '<p>newer</p>', {
       artifactManifest: {
         version: 1,
         kind: 'html',
-        title: 'Older',
-        entry: 'older.html',
+        title: 'Newer',
+        entry: 'newer.html',
         renderer: 'html',
         exports: ['html'],
-        updatedAt: '2026-05-01T00:00:00.000Z',
+        updatedAt: '2026-05-07T00:00:00.000Z',
       },
     });
-    await writeProjectFile(projectsRoot, PROJECT_ID, 'resumed.html', '<p>resumed</p>');
+    await writeProjectFile(projectsRoot, PROJECT_ID, 'stale.html', '<p>stale</p>');
+    fs.utimesSync(path.join(projectDir, 'stale.html'), staleHtmlMtime, staleHtmlMtime);
 
     const out = await resolveCurrentArtifact(db, projectsRoot, PROJECT_ID);
 
     expect(out).not.toBeNull();
-    expect(out!.name).toBe('resumed.html');
-    expect(out!.body).toBe('<p>resumed</p>');
-    const sidecarPath = path.join(projectsRoot, PROJECT_ID, 'resumed.html.artifact.json');
+    expect(out!.name).toBe('newer.html');
+    expect(out!.body).toBe('<p>newer</p>');
+    const sidecarPath = path.join(projectDir, 'stale.html.artifact.json');
     expect(fs.existsSync(sidecarPath)).toBe(true);
     const sidecar = JSON.parse(fs.readFileSync(sidecarPath, 'utf8')) as {
       updatedAt?: string;
       metadata?: { reconciled?: boolean };
     };
     expect(sidecar.metadata?.reconciled).toBe(true);
-    expect(sidecar.updatedAt).not.toBe('2026-05-01T00:00:00.000Z');
+    expect(sidecar.updatedAt).toBe(staleHtmlMtime.toISOString());
   });
 
   // PR #832 P3 fix from @lefarcen: a malformed tabs row (e.g. an
