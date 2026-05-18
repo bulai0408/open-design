@@ -1384,6 +1384,7 @@ export function createAgentRuntimeEnv(
 ): NodeJS.ProcessEnv {
   const env = {
     ...baseEnv,
+    OD_DATA_DIR: RUNTIME_DATA_DIR,
     OD_DAEMON_URL: daemonUrl,
     OD_NODE_BIN: nodeBin,
   };
