@@ -2183,6 +2183,15 @@ export function SettingsDialog({
                 const selectValue = customActive
                   ? CUSTOM_MODEL_SENTINEL
                   : modelValue;
+                const modelSource = selected.modelsSource ?? 'fallback';
+                const modelSourceLabel =
+                  modelSource === 'live'
+                    ? t('settings.modelSourceLive')
+                    : t('settings.modelSourceFallback');
+                const modelSourceHint =
+                  modelSource === 'live'
+                    ? t('settings.modelPickerLiveHint')
+                    : t('settings.modelPickerFallbackHint');
                 return (
                   <div className="agent-model-row">
                     <div className="agent-model-row-head">
@@ -2193,6 +2202,11 @@ export function SettingsDialog({
                         <label className="field">
                           <span className="field-label">
                             {t('settings.modelPicker')}
+                            <span
+                              className={`agent-model-source-badge ${modelSource}`}
+                            >
+                              {modelSourceLabel}
+                            </span>
                           </span>
                           <div className="agent-model-select-wrap">
                             <select
@@ -2229,7 +2243,7 @@ export function SettingsDialog({
                           </div>
                         </label>
                         <p className="hint agent-model-row-hint">
-                          {t('settings.modelPickerHint')}
+                          {modelSourceHint}
                         </p>
                       </>
                     ) : null}

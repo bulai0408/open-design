@@ -5065,10 +5065,39 @@ a.avatar-item:visited {
 }
 .agent-model-row .field { gap: 4px; }
 .agent-model-row .field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   font-size: 11.5px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
+}
+.agent-model-source-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.agent-model-source-badge.live {
+  border-color: var(--green-border);
+  background: var(--green-bg);
+  color: var(--green);
+}
+.agent-model-source-badge.fallback {
+  border-color: var(--amber-border, color-mix(in srgb, var(--amber) 28%, var(--border)));
+  background: var(--amber-bg);
+  color: var(--amber);
 }
 .agent-model-row .hint { margin: 0; font-size: 11.5px; }
 .agent-model-select-wrap {

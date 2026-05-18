@@ -166,8 +166,12 @@ export interface Dict {
   'settings.themeDark': string;
   'settings.agentModelHead': string;
   'settings.modelPicker': string;
+  'settings.modelSourceLive': string;
+  'settings.modelSourceFallback': string;
   'settings.reasoningPicker': string;
   'settings.modelPickerHint': string;
+  'settings.modelPickerLiveHint': string;
+  'settings.modelPickerFallbackHint': string;
   'settings.cliEnvTitle': string;
   'settings.cliEnvHint': string;
   'settings.cliEnvClaudeConfigDir': string;
