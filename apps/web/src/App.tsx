@@ -28,6 +28,10 @@ import {
   DesignSystemDetailView,
 } from './components/DesignSystemFlow';
 import {
+  IframeKeepAliveProvider,
+  useIframeKeepAlivePool,
+} from './components/IframeKeepAlivePool';
+import {
   SettingsDialog,
   switchApiProtocolConfig,
   updateCurrentApiProtocolConfig,
@@ -171,7 +175,16 @@ export function resolveSettingsCloseConfig(
 }
 
 export function App() {
+  return (
+    <IframeKeepAliveProvider>
+      <AppInner />
+    </IframeKeepAliveProvider>
+  );
+}
+
+function AppInner() {
   const { t } = useI18n();
+  const iframeKeepAlivePool = useIframeKeepAlivePool();
   const clientType = useMemo(() => detectClientType(), []);
   // Observability marker. `apps/web/src/observability/white-screen.ts`
   // keys its "app actually mounted" success condition on this attribute
@@ -1076,12 +1089,13 @@ export function App() {
   const handleDeleteProject = useCallback(async (id: string) => {
     const ok = await deleteProjectApi(id);
     if (!ok) return false;
+    iframeKeepAlivePool.evictProject(id, { includeActive: true });
     setProjects((curr) => curr.filter((p) => p.id !== id));
     if (route.kind === 'project' && route.projectId === id) {
       navigate({ kind: 'home', view: 'home' });
     }
     return true;
-  }, [route]);
+  }, [iframeKeepAlivePool, route]);
 
   const handleRenameProject = useCallback(async (id: string, name: string) => {
     const trimmed = name.trim();
@@ -1118,8 +1132,21 @@ export function App() {
   }, [route]);
 
   const handleProjectChange = useCallback((updated: Project) => {
-    setProjects((curr) => curr.map((p) => (p.id === updated.id ? updated : p)));
-  }, []);
+    setProjects((curr) => {
+      const previous = curr.find((p) => p.id === updated.id);
+      if (
+        previous
+        && (
+          previous.skillId !== updated.skillId
+          || previous.designSystemId !== updated.designSystemId
+          || previous.customInstructions !== updated.customInstructions
+        )
+      ) {
+        iframeKeepAlivePool.evictProject(updated.id);
+      }
+      return curr.map((p) => (p.id === updated.id ? updated : p));
+    });
+  }, [iframeKeepAlivePool]);
 
   const activeProject =
     route.kind === 'project'

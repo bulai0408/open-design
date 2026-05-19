@@ -100,6 +100,11 @@ import {
 } from '../comments';
 import { applyPodMemberRemoval } from '../lib/pod-members';
 import { AnnotationHoverPopover, BoardComposerPopover } from './BoardComposerPopover';
+import {
+  OD_PREVIEW_KEEP_ALIVE,
+  PooledIframe,
+  previewIframeKeepAliveKey,
+} from './IframeKeepAlivePool';
 import type {
   ChatCommentAttachment,
   PreviewComment,
@@ -4367,6 +4372,7 @@ function HtmlViewer({
   const [srcDocTransportResetKey, setSrcDocTransportResetKey] = useState(0);
   const [srcDocShellReady, setSrcDocShellReady] = useState(false);
   const wasUrlLoadPreviewRef = useRef(useUrlLoadPreview);
+  const urlPreviewKeepAliveKey = previewIframeKeepAliveKey(projectId, file.name);
   // Reset the shell-ready latch whenever the srcDoc iframe re-mounts. The
   // next shell will post `od:srcdoc-transport-ready` (or fire onLoad) and
   // flip this back to true. See #2253.
@@ -6700,28 +6706,54 @@ function HtmlViewer({
                   sendDisabledReason="当前正有任务在执行"
                 >
                   <div className="artifact-preview-transport-stack">
-                    <iframe
-                      ref={urlPreviewIframeRef}
-                      data-testid={useUrlLoadPreview ? 'artifact-preview-frame' : 'artifact-preview-frame-url-load'}
-                      data-od-render-mode="url-load"
-                      data-od-active={useUrlLoadPreview ? 'true' : 'false'}
-                      aria-hidden={useUrlLoadPreview ? undefined : true}
-                      tabIndex={useUrlLoadPreview ? 0 : -1}
-                      title={file.name}
-                      sandbox="allow-scripts allow-downloads"
-                      src={urlTransportSrc}
-                      onLoad={() => {
-                        const frame = urlPreviewIframeRef.current;
-                        if (useUrlLoadPreview) iframeRef.current = frame;
-                        dcViewportRestoreAtRef.current = Date.now();
-                        frame?.contentWindow?.postMessage({
-                          type: '__dc_set_viewport',
-                          ...dcViewportRef.current,
-                        }, '*');
-                        syncBridgeModes(frame);
-                        if (useUrlLoadPreview) restorePreviewScrollPosition();
-                      }}
-                    />
+                    {OD_PREVIEW_KEEP_ALIVE ? (
+                      <PooledIframe
+                        ref={urlPreviewIframeRef}
+                        cacheKey={urlPreviewKeepAliveKey}
+                        data-testid={useUrlLoadPreview ? 'artifact-preview-frame' : 'artifact-preview-frame-url-load'}
+                        data-od-render-mode="url-load"
+                        data-od-active={useUrlLoadPreview ? 'true' : 'false'}
+                        aria-hidden={useUrlLoadPreview ? undefined : true}
+                        tabIndex={useUrlLoadPreview ? 0 : -1}
+                        title={file.name}
+                        sandbox="allow-scripts allow-downloads"
+                        src={urlTransportSrc}
+                        onLoad={() => {
+                          const frame = urlPreviewIframeRef.current;
+                          if (useUrlLoadPreview) iframeRef.current = frame;
+                          dcViewportRestoreAtRef.current = Date.now();
+                          frame?.contentWindow?.postMessage({
+                            type: '__dc_set_viewport',
+                            ...dcViewportRef.current,
+                          }, '*');
+                          syncBridgeModes(frame);
+                          if (useUrlLoadPreview) restorePreviewScrollPosition();
+                        }}
+                      />
+                    ) : (
+                      <iframe
+                        ref={urlPreviewIframeRef}
+                        data-testid={useUrlLoadPreview ? 'artifact-preview-frame' : 'artifact-preview-frame-url-load'}
+                        data-od-render-mode="url-load"
+                        data-od-active={useUrlLoadPreview ? 'true' : 'false'}
+                        aria-hidden={useUrlLoadPreview ? undefined : true}
+                        tabIndex={useUrlLoadPreview ? 0 : -1}
+                        title={file.name}
+                        sandbox="allow-scripts allow-downloads"
+                        src={urlTransportSrc}
+                        onLoad={() => {
+                          const frame = urlPreviewIframeRef.current;
+                          if (useUrlLoadPreview) iframeRef.current = frame;
+                          dcViewportRestoreAtRef.current = Date.now();
+                          frame?.contentWindow?.postMessage({
+                            type: '__dc_set_viewport',
+                            ...dcViewportRef.current,
+                          }, '*');
+                          syncBridgeModes(frame);
+                          if (useUrlLoadPreview) restorePreviewScrollPosition();
+                        }}
+                      />
+                    )}
                     <iframe
                       key={srcDocTransportResetKey}
                       ref={srcDocPreviewIframeRef}
