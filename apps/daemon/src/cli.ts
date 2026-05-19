@@ -9,6 +9,8 @@ import { runDesignSystemsToolCli } from './tools-design-systems-cli.js';
 import { runLiveArtifactsToolCli } from './tools-live-artifacts-cli.js';
 import { splitResearchSubcommand } from './research/cli-args.js';
 import { resolveDaemonUrl } from './daemon-url.js';
+import { requestJsonIpc } from '@open-design/sidecar';
+import { SIDECAR_ENV, SIDECAR_MESSAGES } from '@open-design/sidecar-proto';
 
 const argv = process.argv.slice(2);
 
@@ -192,6 +194,7 @@ const RECOVERABLE_EXIT_CODES = {
   'plugin-requires-daemon':   71,
   'snapshot-stale':           72,
   'genui-surface-awaiting':   73,
+  'desktop-auth-pending':     74,
 };
 const PLUGIN_LIST_FILTER_FLAGS = new Set([
   ...PLUGIN_STRING_FLAGS,
@@ -4326,19 +4329,25 @@ Common options:
     }
     case 'import': {
       const [baseDir] = positionalArgs(rest, PROJECT_STRING_FLAGS);
-      if (!baseDir) {
+      const importBaseDir = typeof baseDir === 'string' ? baseDir.trim() : '';
+      if (!importBaseDir) {
         console.error('Usage: od project import <baseDir> [--name "<title>"]');
         process.exit(2);
       }
-      const body = { baseDir };
+      const body = { baseDir: importBaseDir };
       if (typeof flags.name === 'string' && flags.name.length > 0) body.name = flags.name;
       if (typeof flags.skill === 'string' && flags.skill.length > 0) body.skillId = flags.skill;
       if (typeof flags['design-system'] === 'string' && flags['design-system'].length > 0) {
         body.designSystemId = flags['design-system'];
       }
+      const headers = { 'content-type': 'application/json' };
+      const importToken = await mintCliImportToken(importBaseDir);
+      if (importToken != null) {
+        headers['x-od-desktop-import-token'] = importToken;
+      }
       const resp = await fetch(`${base}/api/import/folder`, {
         method:  'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body:    JSON.stringify(body),
       });
       if (!resp.ok) return structuredHttpFailure(resp);
@@ -4729,6 +4738,32 @@ async function readStdinUtf8() {
   return fs.readFileSync(0, 'utf8');
 }
 
+async function mintCliImportToken(baseDir) {
+  const socketPath = process.env[SIDECAR_ENV.IPC_PATH];
+  if (typeof socketPath !== 'string' || socketPath.length === 0) return null;
+  let result;
+  try {
+    result = await requestJsonIpc(
+      socketPath,
+      { type: SIDECAR_MESSAGES.MINT_IMPORT_TOKEN, input: { baseDir } },
+      { timeoutMs: 800 },
+    );
+  } catch {
+    return null;
+  }
+  if (result?.ok === true && typeof result.token === 'string' && result.token.length > 0) {
+    return result.token;
+  }
+  if (result?.ok === false && result.code === 'DESKTOP_AUTH_PENDING') {
+    exitWithStructuredError({
+      code: 'desktop-auth-pending',
+      message: result.message ?? 'desktop auth required but secret not yet registered',
+      data: { retryable: result.retryable === true },
+    });
+  }
+  return null;
+}
+
 function createUnifiedDiff(leftLabel, rightLabel, leftText, rightText) {
   if (leftText === rightText) return '';
   const leftLines = splitDiffLines(leftText);
@@ -4755,7 +4790,7 @@ function createUnifiedDiff(leftLabel, rightLabel, leftText, rightText) {
   const newMid = rightLines.slice(prefix, rightEnd);
   const body = diffLineBody(oldMid, newMid);
   if (body.length === 0) {
-    body.push(...oldMid.map((line) => `-${line}`), ...newMid.map((line) => `+${line}`));
+    body.push(...oldMid.map((line) => diffLine('-', line)), ...newMid.map((line) => diffLine('+', line)));
   }
   const oldStart = oldMid.length === 0 ? prefix : prefix + 1;
   const newStart = newMid.length === 0 ? prefix : prefix + 1;
@@ -4770,9 +4805,7 @@ function createUnifiedDiff(leftLabel, rightLabel, leftText, rightText) {
 function splitDiffLines(text) {
   const normalized = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   if (normalized.length === 0) return [];
-  const lines = normalized.split('\n');
-  if (lines[lines.length - 1] === '') lines.pop();
-  return lines;
+  return normalized.match(/[^\n]*(?:\n|$)/g).filter((line) => line.length > 0);
 }
 
 function formatDiffRange(start, length) {
@@ -4780,10 +4813,10 @@ function formatDiffRange(start, length) {
 }
 
 function diffLineBody(oldLines, newLines) {
-  if (oldLines.length === 0) return newLines.map((line) => `+${line}`);
-  if (newLines.length === 0) return oldLines.map((line) => `-${line}`);
+  if (oldLines.length === 0) return newLines.map((line) => diffLine('+', line));
+  if (newLines.length === 0) return oldLines.map((line) => diffLine('-', line));
   if (oldLines.length * newLines.length > 1_000_000) {
-    return [...oldLines.map((line) => `-${line}`), ...newLines.map((line) => `+${line}`)];
+    return [...oldLines.map((line) => diffLine('-', line)), ...newLines.map((line) => diffLine('+', line))];
   }
   const width = newLines.length + 1;
   const lcs = Array.from(
@@ -4802,20 +4835,25 @@ function diffLineBody(oldLines, newLines) {
   let j = 0;
   while (i < oldLines.length && j < newLines.length) {
     if (oldLines[i] === newLines[j]) {
-      out.push(` ${oldLines[i]}`);
+      out.push(diffLine(' ', oldLines[i]));
       i++;
       j++;
     } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
-      out.push(`-${oldLines[i]}`);
+      out.push(diffLine('-', oldLines[i]));
       i++;
     } else {
-      out.push(`+${newLines[j]}`);
+      out.push(diffLine('+', newLines[j]));
       j++;
     }
   }
-  while (i < oldLines.length) out.push(`-${oldLines[i++]}`);
-  while (j < newLines.length) out.push(`+${newLines[j++]}`);
+  while (i < oldLines.length) out.push(diffLine('-', oldLines[i++]));
+  while (j < newLines.length) out.push(diffLine('+', newLines[j++]));
   return out;
+}
+
+function diffLine(prefix, line) {
+  if (String(line).endsWith('\n')) return `${prefix}${String(line).slice(0, -1)}`;
+  return `${prefix}${line}\n\\ No newline at end of file`;
 }
 
 async function runConversation(args) {

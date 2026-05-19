@@ -1,13 +1,18 @@
 import type http from 'node:http';
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { createJsonIpcServer } from '@open-design/sidecar';
+import { SIDECAR_MESSAGES, normalizeDaemonSidecarMessage } from '@open-design/sidecar-proto';
 
 import { startServer } from '../src/server.js';
+import { resetDesktopAuthForTests, setDesktopAuthSecret } from '../src/desktop-auth.js';
+import { mintImportTokenForCli } from '../src/sidecar/server.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../..');
@@ -19,6 +24,7 @@ describe('Phase 2C CLI wrappers', () => {
   let baseUrl: string;
   let shutdown: (() => Promise<void> | void) | undefined;
   const tempDirs: string[] = [];
+  const sidecarServers: { close(): Promise<void> }[] = [];
 
   beforeAll(async () => {
     const started = (await startServer({ port: 0, returnServer: true })) as {
@@ -31,10 +37,14 @@ describe('Phase 2C CLI wrappers', () => {
     shutdown = started.shutdown;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    for (const sidecar of sidecarServers.splice(0)) {
+      await sidecar.close();
+    }
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
+    resetDesktopAuthForTests();
   });
 
   afterAll(async () => {
@@ -50,11 +60,12 @@ describe('Phase 2C CLI wrappers', () => {
 
   async function runCli(
     args: string[],
-    options: { input?: string; timeout?: number } = {},
+    options: { input?: string; timeout?: number; env?: NodeJS.ProcessEnv } = {},
   ): Promise<{ stdout: string; stderr: string }> {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       OD_DAEMON_URL: baseUrl,
+      ...options.env,
     };
     delete env.NODE_OPTIONS;
 
@@ -129,6 +140,60 @@ describe('Phase 2C CLI wrappers', () => {
     expect(conversationBody.conversation.title).toBe('Follow-up');
   });
 
+  it('imports through the CLI when desktop import auth gate is active', async () => {
+    const folder = makeFolder();
+    await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+    const secret = randomBytes(32);
+    setDesktopAuthSecret(secret);
+
+    try {
+      const ipcRoot = makeFolder();
+      const ipcPath = path.join(ipcRoot, 'daemon.sock');
+      const sidecar = await createJsonIpcServer({
+        socketPath: ipcPath,
+        handler: async (message) => {
+          const request = normalizeDaemonSidecarMessage(message);
+          switch (request.type) {
+            case SIDECAR_MESSAGES.STATUS:
+              return { desktopAuthGateActive: true, state: 'running', url: baseUrl };
+            case SIDECAR_MESSAGES.MINT_IMPORT_TOKEN:
+              return mintImportTokenForCli(request.input.baseDir);
+            default:
+              throw new Error(`unexpected test IPC message: ${request.type}`);
+          }
+        },
+      });
+      sidecarServers.push(sidecar);
+
+      const imported = await runCli(
+        ['project', 'import', `  ${folder}  `, '--name', 'Gated CLI Import', '--json'],
+        {
+          env: {
+            OD_SIDECAR_IPC_PATH: ipcPath,
+          },
+        },
+      );
+      const importBody = JSON.parse(imported.stdout) as {
+        project: {
+          id: string;
+          name: string;
+          metadata?: { importedFrom?: string; fromTrustedPicker?: boolean };
+        };
+        conversationId: string;
+        entryFile: string | null;
+      };
+
+      expect(importBody.project.id).toBeTruthy();
+      expect(importBody.project.name).toBe('Gated CLI Import');
+      expect(importBody.project.metadata?.importedFrom).toBe('folder');
+      expect(importBody.project.metadata?.fromTrustedPicker).toBe(true);
+      expect(importBody.conversationId).toBeTruthy();
+      expect(importBody.entryFile).toBe('index.html');
+    } finally {
+      resetDesktopAuthForTests();
+    }
+  });
+
   it('prints unified diffs for project files and stdin comparisons', async () => {
     const folder = makeFolder();
     await writeFile(path.join(folder, 'a.txt'), 'one\ntwo\n');
@@ -151,5 +216,56 @@ describe('Phase 2C CLI wrappers', () => {
     expect(stdinDiff.stdout).toContain('+++ b/-');
     expect(stdinDiff.stdout).toContain('-two');
     expect(stdinDiff.stdout).toContain('+four');
+  });
+
+  it('prints EOF-newline-only file diffs', async () => {
+    const folder = makeFolder();
+    await writeFile(path.join(folder, 'with-newline.txt'), 'same\n');
+    await writeFile(path.join(folder, 'without-newline.txt'), 'same');
+    const imported = await runCli(['project', 'import', folder, '--json']);
+    const importBody = JSON.parse(imported.stdout) as { project: { id: string } };
+
+    const fileDiff = await runCli([
+      'files',
+      'diff',
+      importBody.project.id,
+      'with-newline.txt',
+      'without-newline.txt',
+    ]);
+
+    expect(fileDiff.stdout).toContain('--- a/with-newline.txt');
+    expect(fileDiff.stdout).toContain('+++ b/without-newline.txt');
+    expect(fileDiff.stdout).toContain('\\ No newline at end of file');
+    expect(fileDiff.stdout).toContain('-same');
+    expect(fileDiff.stdout).toContain('+same');
+  });
+});
+
+describe('mintImportTokenForCli', () => {
+  afterEach(() => {
+    resetDesktopAuthForTests();
+  });
+
+  it('reports inactive when desktop import auth gate is dormant', () => {
+    const result = mintImportTokenForCli('/tmp/open-design-cli-import');
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'DESKTOP_AUTH_INACTIVE',
+      retryable: false,
+    });
+  });
+
+  it('returns a desktop import token bound to a requested baseDir', () => {
+    const secret = randomBytes(32);
+    setDesktopAuthSecret(secret);
+
+    const result = mintImportTokenForCli('/tmp/open-design-cli-import');
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.token).toMatch(/~/);
+      expect(result.expiresAt).toMatch(/Z$/);
+    }
   });
 });
