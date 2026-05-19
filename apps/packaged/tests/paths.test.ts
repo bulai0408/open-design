@@ -62,13 +62,28 @@ describe("resolvePackagedNamespacePaths", () => {
     );
   });
 
-  it("uses OD_DATA_DIR as the packaged daemon dataRoot when provided", () => {
+  it("uses OD_DATA_DIR as a base for the namespace-scoped packaged daemon dataRoot", () => {
     const config = fakeConfig();
     const override = join("C:", "Users", "Fred", "MyProject", "design", ".od");
 
     expect(
       resolvePackagedNamespacePaths(config, config.namespace, { OD_DATA_DIR: override }).dataRoot,
-    ).toBe(override);
+    ).toBe(join(override, "namespaces", config.namespace, "data"));
+  });
+
+  it("keeps shared OD_DATA_DIR overrides isolated across packaged namespaces", () => {
+    const config = fakeConfig();
+    const override = join("C:", "Users", "Fred", "MyProject", "design", ".od");
+    const stable = resolvePackagedNamespacePaths(config, "release-stable-win", {
+      OD_DATA_DIR: override,
+    });
+    const beta = resolvePackagedNamespacePaths(config, "release-beta-win", {
+      OD_DATA_DIR: override,
+    });
+
+    expect(stable.dataRoot).toBe(join(override, "namespaces", "release-stable-win", "data"));
+    expect(beta.dataRoot).toBe(join(override, "namespaces", "release-beta-win", "data"));
+    expect(stable.dataRoot).not.toBe(beta.dataRoot);
   });
 
   it("forwards the OD_DATA_DIR-resolved dataRoot into sidecar launch paths", () => {
@@ -78,7 +93,7 @@ describe("resolvePackagedNamespacePaths", () => {
       OD_DATA_DIR: override,
     });
 
-    expect(paths.dataRoot).toBe(override);
+    expect(paths.dataRoot).toBe(join(override, "namespaces", config.namespace, "data"));
     expect(paths.namespaceRoot).toBe(join(config.namespaceBaseRoot, config.namespace));
     expect(paths.runtimeRoot).toBe(join(config.namespaceBaseRoot, config.namespace, "runtime"));
   });
@@ -102,6 +117,6 @@ describe("resolvePackagedNamespacePaths", () => {
 
     expect(
       resolvePackagedNamespacePaths(config, config.namespace, { OD_DATA_DIR: "project/.od" }).dataRoot,
-    ).toBe(resolve("project/.od"));
+    ).toBe(join(resolve("project/.od"), "namespaces", config.namespace, "data"));
   });
 });
