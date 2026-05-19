@@ -115,6 +115,11 @@ function normalizeSavedComposioConfig(config: AppConfig['composio']): AppConfig[
   return { ...(config ?? {}) };
 }
 
+type ProjectListRequest = {
+  generation: number;
+  mutationVersion: number;
+};
+
 export async function persistComposioConfigChange(
   current: AppConfig,
   composio: AppConfig['composio'],
@@ -210,6 +215,10 @@ export function App() {
     queued: [],
     recent: [],
   });
+  const pendingLocalProjectIdsRef = useRef<Set<string>>(new Set());
+  const projectListMutationVersionRef = useRef(0);
+  const projectListRequestGenerationRef = useRef(0);
+  const latestAppliedProjectListGenerationRef = useRef(0);
   const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
   const [promptTemplates, setPromptTemplates] = useState<
     PromptTemplateSummary[]
@@ -256,6 +265,46 @@ export function App() {
   // automations / plugins / design_systems / integrations) instead.
   // `detectClientType` still feeds analytics identity via the provider.
   void detectClientType;
+
+  const rememberLocalProject = useCallback((projectId: string) => {
+    pendingLocalProjectIdsRef.current.add(projectId);
+    projectListMutationVersionRef.current += 1;
+  }, []);
+
+  const clearLocalProject = useCallback((projectId: string) => {
+    pendingLocalProjectIdsRef.current.delete(projectId);
+    projectListMutationVersionRef.current += 1;
+  }, []);
+
+  const beginProjectListRequest = useCallback((): ProjectListRequest => {
+    projectListRequestGenerationRef.current += 1;
+    return {
+      generation: projectListRequestGenerationRef.current,
+      mutationVersion: projectListMutationVersionRef.current,
+    };
+  }, []);
+
+  const reconcileFetchedProjects = useCallback((list: Project[], request: ProjectListRequest) => {
+    if (request.generation < latestAppliedProjectListGenerationRef.current) {
+      return false;
+    }
+    latestAppliedProjectListGenerationRef.current = request.generation;
+    const pendingLocalProjectIds = pendingLocalProjectIdsRef.current;
+    const fetchedIds = new Set(list.map((project) => project.id));
+    for (const id of fetchedIds) pendingLocalProjectIds.delete(id);
+    const preserveLocalProjects =
+      request.mutationVersion < projectListMutationVersionRef.current;
+    setProjects((current) => {
+      const preserved = current.filter(
+        (project) =>
+          preserveLocalProjects &&
+          pendingLocalProjectIds.has(project.id) &&
+          !fetchedIds.has(project.id),
+      );
+      return preserved.length > 0 ? [...preserved, ...list] : list;
+    });
+    return true;
+  }, []);
 
   // Propagate the Privacy toggle through to PostHog without a reload —
   // posthog-js's opt_out_capturing flips a localStorage flag that makes
@@ -425,9 +474,10 @@ export function App() {
         setDsLoading(false);
       });
 
+      const request = beginProjectListRequest();
       void listProjects().then((list) => {
         if (cancelled) return;
-        setProjects(list);
+        reconcileFetchedProjects(list, request);
         setProjectsLoading(false);
       });
 
@@ -531,7 +581,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [beginProjectListRequest, reconcileFetchedProjects]);
 
   // Auto-pick the first available agent once both the daemon-stored config
   // and the agents listing have landed. Splitting this out of bootstrap
@@ -598,9 +648,10 @@ export function App() {
   }, []);
 
   const refreshProjects = useCallback(async () => {
+    const request = beginProjectListRequest();
     const list = await listProjects();
-    setProjects(list);
-  }, []);
+    reconcileFetchedProjects(list, request);
+  }, [beginProjectListRequest, reconcileFetchedProjects]);
 
   const refreshDesignSystems = useCallback(async () => {
     const list = await fetchDesignSystems();
@@ -927,6 +978,7 @@ export function App() {
             appliedPluginSnapshotId: result.appliedPluginSnapshotId,
           }
         : result.project;
+      rememberLocalProject(project.id);
       flushSync(() => {
         setProjects((curr) => [
           project,
@@ -942,7 +994,7 @@ export function App() {
       navigate(projectRoute);
       return true;
     },
-    [analytics.track],
+    [analytics.track, rememberLocalProject],
   );
 
   const handleCreatePluginShareProject = useCallback(
@@ -968,6 +1020,7 @@ export function App() {
             appliedPluginSnapshotId: outcome.appliedPluginSnapshotId,
           }
         : outcome.project;
+      rememberLocalProject(project.id);
       setProjects((curr) => [
         project,
         ...curr.filter((p) => p.id !== project.id),
@@ -979,12 +1032,13 @@ export function App() {
       });
       return outcome;
     },
-    [],
+    [rememberLocalProject],
   );
 
   const handleImportClaudeDesign = useCallback(async (file: File) => {
     const result = await importClaudeDesignZip(file);
     if (!result) return;
+    rememberLocalProject(result.project.id);
     setProjects((curr) => [
       result.project,
       ...curr.filter((p) => p.id !== result.project.id),
@@ -994,36 +1048,39 @@ export function App() {
       projectId: result.project.id,
       fileName: result.entryFile,
     });
-  }, []);
+  }, [rememberLocalProject]);
 
   const handleImportFolder = useCallback(async (baseDir: string) => {
     const result = await importFolderProject({ baseDir });
+    rememberLocalProject(result.project.id);
     setProjects((curr) => [result.project, ...curr.filter((p) => p.id !== result.project.id)]);
     navigate({
       kind: 'project',
       projectId: result.project.id,
       fileName: result.entryFile,
     });
-  }, []);
+  }, [rememberLocalProject]);
 
   // PR #974: on desktop, the host bridge owns the picker and import POST
   // atomically. The renderer never sees the path, token, or daemon DTO;
   // it receives host-owned project identifiers and refreshes project state
   // through the normal daemon API.
   const handleImportFolderResponse = useCallback(async (result: OpenDesignHostProjectImportSuccess) => {
+    rememberLocalProject(result.projectId);
     const project = await getProject(result.projectId);
     if (project != null) {
       setProjects((curr) => [project, ...curr.filter((p) => p.id !== project.id)]);
     } else {
+      const request = beginProjectListRequest();
       const list = await listProjects();
-      setProjects(list);
+      reconcileFetchedProjects(list, request);
     }
     navigate({
       kind: 'project',
       projectId: result.projectId,
       fileName: result.entryFile,
     });
-  }, []);
+  }, [beginProjectListRequest, rememberLocalProject, reconcileFetchedProjects]);
 
   const handleOpenProject = useCallback((id: string) => {
     navigate({ kind: 'project', projectId: id, fileName: null });
@@ -1062,12 +1119,13 @@ export function App() {
   const handleDeleteProject = useCallback(async (id: string) => {
     const ok = await deleteProjectApi(id);
     if (!ok) return false;
+    clearLocalProject(id);
     setProjects((curr) => curr.filter((p) => p.id !== id));
     if (route.kind === 'project' && route.projectId === id) {
       navigate({ kind: 'home', view: 'home' });
     }
     return true;
-  }, [route]);
+  }, [route, clearLocalProject]);
 
   const handleRenameProject = useCallback(async (id: string, name: string) => {
     const trimmed = name.trim();
@@ -1134,17 +1192,23 @@ export function App() {
         });
         return;
       }
+      const request = beginProjectListRequest();
       const list = await listProjects();
       if (cancelled) return;
-      setProjects(list);
-      if (!list.find((p) => p.id === route.projectId)) {
+      const fetchedProject = list.find((p) => p.id === route.projectId);
+      const applied = reconcileFetchedProjects(list, request);
+      if (!applied) return;
+      const staleRequest = request.mutationVersion < projectListMutationVersionRef.current;
+      const knownLocalProject =
+        staleRequest && pendingLocalProjectIdsRef.current.has(route.projectId);
+      if (!fetchedProject && !knownLocalProject) {
         navigate({ kind: 'home', view: 'home' }, { replace: true });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [route, activeProject, projects, daemonLive]);
+  }, [route, activeProject, projects, daemonLive, beginProjectListRequest, reconcileFetchedProjects]);
 
   const openSettings = useCallback((section: SettingsSection = 'execution') => {
     if (section === 'composio' || section === 'mcpClient' || section === 'integrations') {
