@@ -9,6 +9,7 @@ import {
   copyResourceTree,
   createMacElectronRebuildOptions,
   renderMacPackagedConfig,
+  validateMacNativeRebuildOutput,
 } from "../src/mac/app.js";
 import { resolveSeededAppConfigPaths, seedPackagedAppConfig, writeLaunchPackagedConfig } from "../src/mac/index.js";
 import { resolveMacPaths } from "../src/mac/paths.js";
@@ -217,6 +218,35 @@ describe("createMacElectronRebuildOptions", () => {
         platform: "darwin",
         projectRootPath: appRoot,
       });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("validateMacNativeRebuildOutput", () => {
+  it("reports a missing rebuilt native module as missing output", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      await expect(validateMacNativeRebuildOutput(root)).resolves.toBe(
+        `native module output is missing: ${join(root, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node")}`,
+      );
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("preserves non-ENOENT filesystem diagnostics from stat failures", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const buildPath = join(root, "node_modules", "better-sqlite3", "build");
+      const nativePath = join(buildPath, "Release", "better_sqlite3.node");
+      await mkdir(dirname(buildPath), { recursive: true });
+      await writeFile(buildPath, "not a directory", "utf8");
+
+      await expect(validateMacNativeRebuildOutput(root)).resolves.toContain(
+        `native module output could not be inspected: ${nativePath}: ENOTDIR: not a directory, stat '${nativePath}'`,
+      );
     } finally {
       await rm(root, { force: true, recursive: true });
     }
