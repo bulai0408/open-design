@@ -519,6 +519,17 @@ export type {
   UpdateDeployConfigRequest,
 };
 
+export interface CreateProjectFolderResponse {
+  folder: ProjectFile & { type: 'dir'; path: string };
+}
+
+export interface MoveProjectFileResponse {
+  file: ProjectFile;
+  oldName: string;
+  newName: string;
+  folder: string;
+}
+
 export interface OpenTabsState {
   tabs: ProjectWorkspaceTabId[];
   active: ProjectWorkspaceTabId | null;

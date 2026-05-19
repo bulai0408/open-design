@@ -4,7 +4,12 @@ import { trackFileManagerClick } from '../analytics/events';
 import { useT } from '../i18n';
 import type { Dict } from '../i18n/types';
 import { projectFileUrl } from '../providers/registry';
-import type { LiveArtifactWorkspaceEntry, ProjectFile, ProjectFileKind } from '../types';
+import type {
+  LiveArtifactWorkspaceEntry,
+  MoveProjectFileResponse,
+  ProjectFile,
+  ProjectFileKind,
+} from '../types';
 import {
   createFileSystemReadError,
   FILE_SYSTEM_READ_ERROR_MESSAGE,
@@ -26,6 +31,11 @@ interface Props {
   onOpenFile: (name: string) => void;
   onOpenLiveArtifact: (tabId: LiveArtifactWorkspaceEntry['tabId']) => void;
   onRenameFile: (from: string, to: string) => Promise<ProjectFile | null> | ProjectFile | null;
+  onCreateFolder?: (path: string) => Promise<void> | void;
+  onMoveFilesToFolder?: (
+    names: string[],
+    toFolder: string,
+  ) => Promise<MoveProjectFileResponse[]> | MoveProjectFileResponse[];
   onDeleteFile: (name: string) => void;
   onDeleteFiles: (names: string[]) => Promise<void> | void;
   onUpload: () => void;
@@ -122,6 +132,8 @@ export function DesignFilesPanel({
   onOpenFile,
   onOpenLiveArtifact,
   onRenameFile,
+  onCreateFolder,
+  onMoveFilesToFolder,
   onDeleteFile,
   onDeleteFiles,
   onUpload,
@@ -158,6 +170,8 @@ export function DesignFilesPanel({
     Set<ModifiedSection>
   >(new Set());
   const [renaming, setRenaming] = useState<{ name: string; draft: string; saving: boolean } | null>(null);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [dayBoundary, setDayBoundary] = useState(() => Date.now());
   const [kindFilter, setKindFilter] = useState<Set<ProjectFileKind>>(() => new Set());
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
@@ -490,6 +504,14 @@ export function DesignFilesPanel({
     setMenuPos({ name, top, left });
   }
 
+  function openMenuAt(name: string, top: number, left: number) {
+    setMenuPos({
+      name,
+      top: Math.max(MENU_SAFE_PADDING, top),
+      left: Math.max(MENU_SAFE_PADDING, left),
+    });
+  }
+
   function startRename(name: string) {
     setMenuPos(null);
     setPreview(name);
@@ -524,6 +546,51 @@ export function DesignFilesPanel({
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
       setRenaming({ name, draft, saving: false });
+    }
+  }
+
+  async function handleCreateFolder() {
+    if (!onCreateFolder || creatingFolder) return;
+    const folderPath = window.prompt(t('designFiles.folderPathPrompt'), 'assets')?.trim();
+    if (!folderPath) return;
+    setCreatingFolder(true);
+    try {
+      await onCreateFolder(folderPath);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingFolder(false);
+    }
+  }
+
+  async function handleMoveFilesToFolder(names: string[]) {
+    if (!onMoveFilesToFolder || moving || names.length === 0) return;
+    const folderPath = window.prompt(t('designFiles.folderPathPrompt'), 'assets')?.trim();
+    if (!folderPath) return;
+    setMoving(true);
+    try {
+      const results = await onMoveFilesToFolder(names, folderPath);
+      const moved = new Map(results.map((result) => [result.oldName, result.newName]));
+      if (moved.size > 0) {
+        setPreview((curr) => (curr ? moved.get(curr) ?? curr : curr));
+        setSelected((prev) => {
+          if (prev.size === 0) return prev;
+          const next = new Set(prev);
+          let changed = false;
+          for (const [oldName, newName] of moved) {
+            if (next.delete(oldName)) {
+              next.add(newName);
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      }
+      setMenuPos(null);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMoving(false);
     }
   }
 
@@ -566,6 +633,10 @@ export function DesignFilesPanel({
         className={`df-file-row ${active ? 'active' : ''} ${selected.has(f.name) ? 'selected' : ''}`}
         onMouseEnter={() => setHover(f.name)}
         onMouseLeave={() => setHover((c) => (c === f.name ? null : c))}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          openMenuAt(f.name, e.clientY, e.clientX);
+        }}
       >
         <td className="df-cell-check">
           <span
@@ -876,6 +947,17 @@ export function DesignFilesPanel({
   const fileActions =
     selected.size > 0 ? (
       <div className="df-actions">
+        {onMoveFilesToFolder ? (
+          <button
+            type="button"
+            disabled={moving}
+            onClick={() => void handleMoveFilesToFolder([...selected])}
+            title={t('designFiles.moveToFolder')}
+          >
+            <Icon name="folder" size={13} />
+            <span>{t('designFiles.moveToFolder')}</span>
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => {
@@ -904,6 +986,17 @@ export function DesignFilesPanel({
       </div>
     ) : (
       <div className="df-actions">
+        {onCreateFolder ? (
+          <button
+            type="button"
+            onClick={() => void handleCreateFolder()}
+            disabled={creatingFolder}
+            title={t('designFiles.newFolder')}
+          >
+            <Icon name="folder" size={13} />
+            <span>{t('designFiles.newFolder')}</span>
+          </button>
+        ) : null}
         <button type="button" onClick={onNewSketch} title={t('designFiles.newSketch')}>
           <Icon name="pencil" size={13} />
           <span>{t('designFiles.newSketch')}</span>
@@ -1430,6 +1523,18 @@ export function DesignFilesPanel({
           >
             {t('common.rename')}
           </button>
+          {onMoveFilesToFolder ? (
+            <button
+              type="button"
+              disabled={moving}
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleMoveFilesToFolder([menuPos.name]);
+              }}
+            >
+              {t('designFiles.moveToFolder')}
+            </button>
+          ) : null}
           <a
             href={projectFileUrl(projectId, menuPos.name)}
             download={menuPos.name}

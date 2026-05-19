@@ -42,7 +42,10 @@ function generateFiles(count: number): ProjectFile[] {
   });
 }
 
-function renderPanel(files: ProjectFile[]) {
+function renderPanel(
+  files: ProjectFile[],
+  overrides: Partial<Parameters<typeof DesignFilesPanel>[0]> = {},
+) {
   const onOpenFile = vi.fn();
   const onDeleteFiles = vi.fn();
   const result = render(
@@ -60,6 +63,7 @@ function renderPanel(files: ProjectFile[]) {
       onUploadFiles={vi.fn()}
       onPaste={vi.fn()}
       onNewSketch={vi.fn()}
+      {...overrides}
     />,
   );
   return { ...result, onDeleteFiles, onOpenFile };
@@ -297,6 +301,12 @@ describe('DesignFilesPanel grouping', () => {
 });
 
 describe('DesignFilesPanel large-list regression', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
   it('renders only the default page size (30) rows with 500 files', () => {
     const files = generateFiles(500);
     const { container } = renderPanel(files);
@@ -484,6 +494,57 @@ describe('DesignFilesPanel large-list regression', () => {
 
     expect(onDeleteFiles).toHaveBeenCalledTimes(1);
     expect(onDeleteFiles).toHaveBeenCalledWith([firstName, secondName]);
+  });
+
+  it('creates a folder from the toolbar prompt', async () => {
+    const onCreateFolder = vi.fn(async () => undefined);
+    const prompt = vi.fn(() => 'assets');
+    vi.stubGlobal('prompt', prompt);
+
+    renderPanel(generateFiles(1), { onCreateFolder });
+
+    fireEvent.click(screen.getByRole('button', { name: 'New folder' }));
+
+    await waitFor(() => {
+      expect(onCreateFolder).toHaveBeenCalledWith('assets');
+    });
+    expect(prompt).toHaveBeenCalledWith('Folder path', 'assets');
+  });
+
+  it('moves selected files into a prompted folder from the toolbar', async () => {
+    const movedFile = file({ name: 'assets/file-1.html', kind: 'html', mime: 'text/html' });
+    const onMoveFilesToFolder = vi.fn(async () => [
+      { oldName: 'file-1.html', newName: 'assets/file-1.html', folder: 'assets', file: movedFile },
+    ]);
+    vi.stubGlobal('prompt', vi.fn(() => 'assets'));
+
+    const { container } = renderPanel(generateFiles(2), { onMoveFilesToFolder });
+    const firstRow = container.querySelector('.df-file-row')!;
+    fireEvent.click(firstRow.querySelector('.df-row-check')!);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to folder' }));
+
+    await waitFor(() => {
+      expect(onMoveFilesToFolder).toHaveBeenCalledWith(['file-1.html'], 'assets');
+    });
+  });
+
+  it('opens the move action from the row context menu', async () => {
+    const movedFile = file({ name: 'archive/file-1.html', kind: 'html', mime: 'text/html' });
+    const onMoveFilesToFolder = vi.fn(async () => [
+      { oldName: 'file-1.html', newName: 'archive/file-1.html', folder: 'archive', file: movedFile },
+    ]);
+    vi.stubGlobal('prompt', vi.fn(() => 'archive'));
+
+    const { container } = renderPanel(generateFiles(1), { onMoveFilesToFolder });
+
+    fireEvent.contextMenu(screen.getByTestId('design-file-row-file-1.html'));
+    fireEvent.click(screen.getByRole('button', { name: 'Move to folder' }));
+
+    await waitFor(() => {
+      expect(onMoveFilesToFolder).toHaveBeenCalledWith(['file-1.html'], 'archive');
+    });
+    expect(container.querySelector('[data-testid="design-file-menu-popover"]')).toBeNull();
   });
 
   it('renders 500 files within a reasonable time', () => {

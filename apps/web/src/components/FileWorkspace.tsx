@@ -16,8 +16,10 @@ import { deriveUploadCohort } from '../analytics/upload-tracking';
 import { useT } from '../i18n';
 import { isMacPlatform } from '../utils/platform';
 import {
+  createProjectFolder,
   deleteProjectFile,
   fetchProjectFileText,
+  moveProjectFile,
   projectFileUrl,
   renameProjectFile,
   updateDesignSystemDraft,
@@ -35,6 +37,7 @@ import {
   type LiveArtifactSummary,
   type LiveArtifactEventItem,
   type LiveArtifactWorkspaceEntry,
+  type MoveProjectFileResponse,
   type OpenTabsState,
   type PreviewComment,
   type PreviewCommentTarget,
@@ -640,6 +643,55 @@ export function FileWorkspace({
     return renamed;
   }
 
+  async function handleCreateFolder(folderPath: string) {
+    await createProjectFolder(projectId, folderPath);
+    await onRefreshFiles();
+  }
+
+  async function handleMoveFilesToFolder(
+    names: string[],
+    folderPath: string,
+  ): Promise<MoveProjectFileResponse[]> {
+    const results: MoveProjectFileResponse[] = [];
+    for (const name of names) {
+      results.push(await moveProjectFile(projectId, name, folderPath));
+    }
+
+    await onRefreshFiles();
+
+    const moveMap = new Map(results.map((result) => [result.oldName, result.newName]));
+    if (moveMap.size > 0) {
+      const nextTabs: string[] = [];
+      const seen = new Set<string>();
+      for (const name of persistedTabs) {
+        const nextName = moveMap.get(name) ?? name;
+        if (!seen.has(nextName)) {
+          seen.add(nextName);
+          nextTabs.push(nextName);
+        }
+      }
+      const nextActive = tabsState.active
+        ? moveMap.get(tabsState.active) ?? tabsState.active
+        : tabsState.active;
+      onTabsStateChange({ tabs: nextTabs, active: nextActive });
+      setActiveTab((current) => moveMap.get(current) ?? current);
+      setSketches((curr) => {
+        let changed = false;
+        const next = { ...curr };
+        for (const [oldName, newName] of moveMap) {
+          const entry = next[oldName];
+          if (!entry) continue;
+          delete next[oldName];
+          next[newName] = entry;
+          changed = true;
+        }
+        return changed ? next : curr;
+      });
+    }
+
+    return results;
+  }
+
   function startNewSketch() {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const name = `sketch-${stamp}.sketch.json`;
@@ -1006,6 +1058,8 @@ export function FileWorkspace({
               });
               fileInputRef.current?.click();
             }}
+            onCreateFolder={handleCreateFolder}
+            onMoveFilesToFolder={handleMoveFilesToFolder}
             onUploadFiles={(picked) => void uploadFiles(picked)}
             onPaste={() => {
               trackFileManagerClick(analytics.track, {

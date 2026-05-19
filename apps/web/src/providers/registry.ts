@@ -30,6 +30,7 @@ import type {
   PreviewCommentUpsertRequest,
   CloudflarePagesDeploySelection,
   CloudflarePagesZonesResponse,
+  CreateProjectFolderResponse,
   DeployConfigResponse,
   DeployProjectFileResponse,
   DesignSystemDetail,
@@ -46,6 +47,7 @@ import type {
   LiveArtifactRefreshLogEntry,
   LiveArtifactSummary,
   Project,
+  MoveProjectFileResponse,
   ProjectDeploymentsResponse,
   PromptTemplateDetail,
   PromptTemplateSummary,
@@ -1774,6 +1776,39 @@ export async function renameProjectFile(
     throw new Error(errorBody.message);
   }
   return (await resp.json()) as RenameProjectFileResponse;
+}
+
+export async function createProjectFolder(
+  projectId: string,
+  path: string,
+): Promise<CreateProjectFolderResponse> {
+  const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files/folders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  if (!resp.ok) {
+    const errorBody = await readApiErrorBody(resp);
+    throw new Error(errorBody.message);
+  }
+  return (await resp.json()) as CreateProjectFolderResponse;
+}
+
+export async function moveProjectFile(
+  projectId: string,
+  from: string,
+  toFolder: string,
+): Promise<MoveProjectFileResponse> {
+  const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, toFolder }),
+  });
+  if (!resp.ok) {
+    const errorBody = await readApiErrorBody(resp);
+    throw new Error(errorBody.message);
+  }
+  return (await resp.json()) as MoveProjectFileResponse;
 }
 
 export async function openFolderDialog(): Promise<string | null> {
