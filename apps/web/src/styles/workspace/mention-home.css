@@ -673,7 +673,10 @@
    narrow viewports. The kicker/title/subtitle should keep their
    normal width but reserve right-side gutter for the chrome. */
 .modal-settings .modal-head {
+  position: relative;
+  z-index: 2;
   padding-right: calc(var(--modal-padding) + 56px);
+  background: var(--bg-elevated);
 }
 
 /* Compact settings header: place subtitle on the same line as the h2
@@ -1005,6 +1008,8 @@
   display: none;
 }
 .settings-content {
+  position: relative;
+  z-index: 1;
   min-width: 0;
   min-height: 0;
   /* Top inset matches `.settings-sidebar`'s `padding-top: 16` so the first
