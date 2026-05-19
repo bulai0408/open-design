@@ -73,7 +73,7 @@ async function main(): Promise<void> {
   const config = await readPackagedConfig();
   const argvStamp = readProcessStamp(process.argv.slice(1), OPEN_DESIGN_SIDECAR_CONTRACT);
   const namespace = argvStamp?.namespace ?? config.namespace;
-  const paths = resolvePackagedNamespacePaths(config, namespace);
+  const paths = resolvePackagedNamespacePaths(config, namespace, process.env);
   const stamp = argvStamp ?? createPackagedDesktopStamp(namespace);
 
   await ensurePackagedNamespacePaths(paths);
