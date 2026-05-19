@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { JSDOM, VirtualConsole } from 'jsdom';
+import type { DOMWindow } from 'jsdom';
 
 const tasteEditorialExamplePath = fileURLToPath(
   new URL('../../../../design-templates/html-ppt-taste-editorial/example.html', import.meta.url),
@@ -18,12 +19,12 @@ function setupTasteEditorialDeck() {
   return dom;
 }
 
-function activeSlideIndex(win: Window) {
+function activeSlideIndex(win: DOMWindow) {
   const slides = Array.from(win.document.querySelectorAll<HTMLElement>('.deck > .slide'));
   return slides.findIndex((slide) => slide.classList.contains('active'));
 }
 
-function fireTouch(win: Window, startX: number, endX: number) {
+function fireTouch(win: DOMWindow, startX: number, endX: number) {
   const start = new win.Event('touchstart', { bubbles: true, cancelable: true });
   Object.defineProperty(start, 'touches', {
     value: [{ clientX: startX, clientY: 120 }],
