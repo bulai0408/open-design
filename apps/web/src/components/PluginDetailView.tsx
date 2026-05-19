@@ -21,6 +21,8 @@ interface Props {
   pluginId: string;
 }
 
+type ConnectorRef = { id?: string; tools?: string[] };
+
 export function PluginDetailView(props: Props) {
   const { locale } = useI18n();
   const [plugin, setPlugin] = useState<InstalledPluginRecord | null>(null);
@@ -75,7 +77,7 @@ export function PluginDetailView(props: Props) {
   const surfaces = od.genui?.surfaces ?? [];
   const required = od.connectors?.required ?? [];
   const optional = od.connectors?.optional ?? [];
-  const capabilities = od.capabilities ?? [];
+  const capabilities = requiredGrantableCapabilities(plugin);
   const capabilitiesGranted = new Set(plugin.capabilitiesGranted ?? []);
   const declaredGrantedCount = capabilities.filter((cap: string) => capabilitiesGranted.has(cap)).length;
   const selectedGrantedCount = selectedCapabilities.filter((cap) => capabilitiesGranted.has(cap)).length;
@@ -258,7 +260,7 @@ export function PluginDetailView(props: Props) {
             <>
               <h3>Required</h3>
               <ul>
-                {required.map((c: { id: string; tools?: string[] }) => (
+                {required.map((c: ConnectorRef) => (
                   <li key={c.id}>
                     <code>{c.id}</code>
                     {c.tools && c.tools.length > 0 ? ` · ${c.tools.join(', ')}` : ''}
@@ -271,7 +273,7 @@ export function PluginDetailView(props: Props) {
             <>
               <h3>Optional</h3>
               <ul>
-                {optional.map((c: { id: string; tools?: string[] }) => (
+                {optional.map((c: ConnectorRef) => (
                   <li key={c.id}>
                     <code>{c.id}</code>
                     {c.tools && c.tools.length > 0 ? ` · ${c.tools.join(', ')}` : ''}
@@ -367,4 +369,24 @@ export function PluginDetailView(props: Props) {
       </footer>
     </div>
   );
+}
+
+function requiredGrantableCapabilities(plugin: InstalledPluginRecord): string[] {
+  const od = plugin.manifest?.od;
+  const capabilities = new Set<string>();
+
+  for (const capability of od?.capabilities ?? []) {
+    if (typeof capability === 'string' && capability.length > 0) {
+      capabilities.add(capability);
+    }
+  }
+
+  for (const connector of od?.connectors?.required ?? []) {
+    const id = connector?.id;
+    if (typeof id === 'string' && id.length > 0) {
+      capabilities.add(`connector:${id}`);
+    }
+  }
+
+  return Array.from(capabilities.values()).sort();
 }

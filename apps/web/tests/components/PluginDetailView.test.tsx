@@ -33,6 +33,23 @@ function makePlugin(capabilitiesGranted: string[]): InstalledPluginRecord {
   };
 }
 
+function makeConnectorOnlyPlugin(capabilitiesGranted: string[]): InstalledPluginRecord {
+  return {
+    ...makePlugin(capabilitiesGranted),
+    manifest: {
+      name: 'sample-plugin',
+      version: '1.0.0',
+      description: 'A restricted connector plugin fixture.',
+      od: {
+        kind: 'scenario',
+        connectors: {
+          required: [{ id: 'slack', tools: ['channels.list'] }],
+        },
+      },
+    },
+  };
+}
+
 let currentPlugin: InstalledPluginRecord;
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -121,6 +138,30 @@ describe('PluginDetailView trust controls', () => {
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ capabilities: ['fs:read'], action: 'revoke' }),
+      }),
+    );
+  });
+
+  it('grants a capability derived from required connectors', async () => {
+    currentPlugin = makeConnectorOnlyPlugin(['prompt:inject']);
+
+    render(<PluginDetailView pluginId="sample-plugin" />);
+
+    const slack = await screen.findByLabelText('connector:slack');
+    expect(screen.getByTestId('plugin-capability-connector:slack').textContent).toContain('Requested');
+    expect(screen.getByRole('button', { name: 'Grant selected capabilities' })).toHaveProperty('disabled', true);
+
+    fireEvent.click(slack);
+    fireEvent.click(screen.getByRole('button', { name: 'Grant selected capabilities' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plugin-capability-connector:slack').textContent).toContain('Granted');
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/plugins/sample-plugin/trust',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ capabilities: ['connector:slack'], action: 'grant' }),
       }),
     );
   });
