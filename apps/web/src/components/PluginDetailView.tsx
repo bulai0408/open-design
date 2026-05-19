@@ -9,7 +9,11 @@
 
 import { useEffect, useState } from 'react';
 import type { ApplyResult, InstalledPluginRecord } from '@open-design/contracts';
-import { applyPlugin } from '../state/projects';
+import {
+  applyPlugin,
+  grantPluginCapabilities,
+  type PluginCapabilityTrustAction,
+} from '../state/projects';
 import { navigate } from '../router';
 import { useI18n } from '../i18n';
 
@@ -23,6 +27,10 @@ export function PluginDetailView(props: Props) {
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState<ApplyResult | null>(null);
+  const [selectedCapabilities, setSelectedCapabilities] = useState<string[]>([]);
+  const [pendingTrustAction, setPendingTrustAction] = useState<PluginCapabilityTrustAction | null>(null);
+  const [trustMessage, setTrustMessage] = useState<string | null>(null);
+  const [trustError, setTrustError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,6 +76,13 @@ export function PluginDetailView(props: Props) {
   const required = od.connectors?.required ?? [];
   const optional = od.connectors?.optional ?? [];
   const capabilities = od.capabilities ?? [];
+  const capabilitiesGranted = new Set(plugin.capabilitiesGranted ?? []);
+  const declaredGrantedCount = capabilities.filter((cap: string) => capabilitiesGranted.has(cap)).length;
+  const selectedGrantedCount = selectedCapabilities.filter((cap) => capabilitiesGranted.has(cap)).length;
+  const selectedRequestedCount = selectedCapabilities.length - selectedGrantedCount;
+  const selectedGrantableCapabilities = selectedCapabilities.filter((cap) => !capabilitiesGranted.has(cap));
+  const selectedRevokableCapabilities = selectedCapabilities.filter((cap) => capabilitiesGranted.has(cap));
+  const trustPending = pendingTrustAction !== null;
   // Plan §6 Phase 2B / spec §11.6 — show a sandboxed iframe of the
   // plugin's preview entry when one is declared. The daemon serves
   // it under `/api/plugins/:id/preview` with the §9.2 CSP +
@@ -93,6 +108,46 @@ export function PluginDetailView(props: Props) {
     // applied snapshot. Inside an existing project, the ChatComposer
     // mount of PluginsSection consumes the same ApplyResult.
     navigate({ kind: 'home', view: 'home' });
+  };
+
+  const toggleCapability = (capability: string, checked: boolean) => {
+    setSelectedCapabilities((current) => (
+      checked
+        ? Array.from(new Set([...current, capability]))
+        : current.filter((entry) => entry !== capability)
+    ));
+    setTrustMessage(null);
+    setTrustError(null);
+  };
+
+  const onCapabilityAction = async (action: PluginCapabilityTrustAction) => {
+    const capabilitiesForAction =
+      action === 'grant' ? selectedGrantableCapabilities : selectedRevokableCapabilities;
+    if (capabilitiesForAction.length === 0) return;
+    setPendingTrustAction(action);
+    setTrustMessage(null);
+    setTrustError(null);
+    const outcome = await grantPluginCapabilities(
+      plugin.id,
+      capabilitiesForAction,
+      action,
+    );
+    setPendingTrustAction(null);
+    if (!outcome.ok) {
+      setTrustError(outcome.message);
+      return;
+    }
+    if (outcome.plugin) {
+      setPlugin(outcome.plugin);
+    } else {
+      setPlugin({
+        ...plugin,
+        capabilitiesGranted: outcome.capabilitiesGranted,
+      });
+    }
+    const completed = new Set(capabilitiesForAction);
+    setSelectedCapabilities((current) => current.filter((cap) => !completed.has(cap)));
+    setTrustMessage(outcome.message);
   };
 
   return (
@@ -124,13 +179,75 @@ export function PluginDetailView(props: Props) {
         {capabilities.length === 0 ? (
           <div>None declared (defaults to <code>prompt:inject</code>).</div>
         ) : (
-          <ul>
-            {capabilities.map((c: string) => (
-              <li key={c}>
-                <code>{c}</code>
-              </li>
-            ))}
-          </ul>
+          <>
+            <div className="plugin-detail__trust-toolbar" role="group" aria-label="Capability trust action">
+              <button
+                type="button"
+                className="plugin-detail__trust-action"
+                onClick={() => onCapabilityAction('grant')}
+                disabled={trustPending || selectedGrantableCapabilities.length === 0}
+              >
+                {pendingTrustAction === 'grant'
+                  ? 'Granting...'
+                  : 'Grant selected capabilities'}
+              </button>
+              <button
+                type="button"
+                className="plugin-detail__trust-action plugin-detail__trust-action--revoke"
+                onClick={() => onCapabilityAction('revoke')}
+                disabled={trustPending || selectedRevokableCapabilities.length === 0}
+              >
+                {pendingTrustAction === 'revoke'
+                  ? 'Revoking...'
+                  : 'Revoke selected capabilities'}
+              </button>
+            </div>
+            <ul className="plugin-detail__capability-list">
+              {capabilities.map((c: string) => {
+                const granted = capabilitiesGranted.has(c);
+                return (
+                  <li
+                    key={c}
+                    className="plugin-detail__capability-row"
+                    data-granted={granted}
+                    data-testid={`plugin-capability-${c}`}
+                  >
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={selectedCapabilities.includes(c)}
+                        onChange={(event) => toggleCapability(c, event.currentTarget.checked)}
+                        disabled={trustPending}
+                      />
+                      <code>{c}</code>
+                    </label>
+                    <span className="plugin-detail__capability-status">
+                      {granted ? 'Granted' : 'Requested'}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="plugin-detail__trust-summary">
+              {plugin.trust === 'restricted' ? (
+                <span>{capabilities.length - declaredGrantedCount} requested · {declaredGrantedCount} granted</span>
+              ) : (
+                <span>{plugin.trust} plugin · {declaredGrantedCount} granted</span>
+              )}
+              {selectedCapabilities.length > 0 ? (
+                <span>{selectedRequestedCount} grantable · {selectedGrantedCount} revokable</span>
+              ) : null}
+              {selectedCapabilities.length > 0 && selectedRequestedCount === 0 ? (
+                <span>Selected capabilities are already granted</span>
+              ) : null}
+            </div>
+            {trustMessage ? (
+              <div className="plugin-detail__trust-message" role="status">{trustMessage}</div>
+            ) : null}
+            {trustError ? (
+              <div className="plugin-detail__trust-error" role="alert">{trustError}</div>
+            ) : null}
+          </>
         )}
       </section>
 

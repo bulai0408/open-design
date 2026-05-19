@@ -3,6 +3,7 @@ import {
   applyPlugin,
   contributeGeneratedPluginToOpenDesign,
   createPluginShareProject,
+  grantPluginCapabilities,
   importFolderProject,
   installGeneratedPluginFolder,
   listPlugins,
@@ -55,6 +56,71 @@ describe('applyPlugin', () => {
       inputs: {},
       grantCaps: [],
       locale: 'zh-CN',
+    });
+  });
+});
+
+describe('grantPluginCapabilities', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts selected capabilities to the daemon trust endpoint', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(
+      JSON.stringify({
+        ok: true,
+        id: 'sample-plugin',
+        action: 'grant',
+        capabilitiesGranted: ['fs:read'],
+        plugin: {
+          id: 'sample-plugin',
+          title: 'Sample Plugin',
+          version: '1.0.0',
+          sourceKind: 'local',
+          source: '/tmp/sample',
+          trust: 'restricted',
+          capabilitiesGranted: ['fs:read'],
+          manifest: { name: 'sample-plugin', version: '1.0.0' },
+          fsPath: '/tmp/sample',
+          installedAt: 0,
+          updatedAt: 0,
+        },
+      }),
+      { status: 201, headers: { 'content-type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const outcome = await grantPluginCapabilities('sample-plugin', ['fs:read'], 'grant');
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.capabilitiesGranted).toEqual(['fs:read']);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/plugins/sample-plugin/trust',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capabilities: ['fs:read'], action: 'grant' }),
+      }),
+    );
+  });
+
+  it('preserves daemon validation errors for rejected capabilities', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => new Response(
+      JSON.stringify({
+        error: {
+          message: 'Capability validation failed',
+          data: { errors: ['bad-cap'] },
+        },
+      }),
+      { status: 400, headers: { 'content-type': 'application/json' } },
+    )));
+
+    const outcome = await grantPluginCapabilities('sample-plugin', ['bad-cap'], 'revoke');
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      message: 'Capability validation failed: bad-cap',
+      capabilitiesGranted: [],
     });
   });
 });

@@ -876,6 +876,55 @@ export async function setPluginMarketplaceTrust(
   }
 }
 
+export type PluginCapabilityTrustAction = 'grant' | 'revoke';
+
+export interface PluginCapabilityTrustOutcome {
+  ok: boolean;
+  plugin?: InstalledPluginRecord;
+  capabilitiesGranted: string[];
+  message: string;
+}
+
+export async function grantPluginCapabilities(
+  pluginId: string,
+  capabilities: string[],
+  action: PluginCapabilityTrustAction = 'grant',
+): Promise<PluginCapabilityTrustOutcome> {
+  try {
+    const resp = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/trust`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ capabilities, action }),
+    });
+    if (!resp.ok) {
+      return {
+        ok: false,
+        capabilitiesGranted: [],
+        message: await readErrorMessage(resp),
+      };
+    }
+    const json = (await resp.json().catch(() => null)) as {
+      plugin?: InstalledPluginRecord;
+      capabilitiesGranted?: string[];
+      message?: string;
+    } | null;
+    return {
+      ok: true,
+      ...(json?.plugin ? { plugin: json.plugin } : {}),
+      capabilitiesGranted: json?.capabilitiesGranted ?? json?.plugin?.capabilitiesGranted ?? [],
+      message: json?.message ?? (
+        action === 'revoke' ? 'Capabilities revoked.' : 'Capabilities granted.'
+      ),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      capabilitiesGranted: [],
+      message: (err as Error).message,
+    };
+  }
+}
+
 async function readPluginMarketplaceOutcome(
   resp: Response,
   successMessage: string,

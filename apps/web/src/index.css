@@ -22668,6 +22668,115 @@ body.desktop-pet-shell .pet-task-item {
   outline-offset: 1px;
 }
 
+/* Marketplace detail trust controls — compact, operational styling
+   that keeps capability review readable without turning the detail
+   page into another card surface. */
+.plugin-detail__capabilities {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.plugin-detail__trust-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.plugin-detail__trust-action {
+  appearance: none;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: white;
+  border-radius: var(--radius-sm, 6px);
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.plugin-detail__trust-action--revoke {
+  border-color: var(--border);
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+.plugin-detail__trust-action:hover:not(:disabled) {
+  filter: brightness(0.96);
+}
+.plugin-detail__trust-action--revoke:hover:not(:disabled) {
+  border-color: var(--danger, #c33);
+  color: var(--danger, #c33);
+}
+.plugin-detail__trust-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.plugin-detail__capability-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.plugin-detail__capability-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg);
+  padding: 8px 10px;
+}
+.plugin-detail__capability-row[data-granted='true'] {
+  border-color: color-mix(in srgb, var(--green) 22%, var(--border));
+  background: color-mix(in srgb, var(--green-bg) 55%, var(--bg));
+}
+.plugin-detail__capability-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.plugin-detail__capability-row input {
+  flex: 0 0 auto;
+}
+.plugin-detail__capability-row code {
+  overflow-wrap: anywhere;
+}
+.plugin-detail__capability-status {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+.plugin-detail__capability-row[data-granted='true'] .plugin-detail__capability-status {
+  border-color: color-mix(in srgb, var(--green) 24%, var(--border));
+  color: var(--green);
+  background: var(--green-bg);
+}
+.plugin-detail__trust-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.plugin-detail__trust-message,
+.plugin-detail__trust-error {
+  font-size: 12px;
+  line-height: 1.45;
+}
+.plugin-detail__trust-message {
+  color: var(--green);
+}
+.plugin-detail__trust-error {
+  color: var(--danger, #c33);
+}
+
 /* PluginDetailsModal — manifest inspector launched from each card on
    PluginLoopHome. Single-scroll layout with sticky header + footer so
    long manifests (workflow stages, context bundles, surfaces) remain
