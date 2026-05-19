@@ -60,6 +60,10 @@ function truncateForTranscript(content: string): string {
   return `${content.slice(0, MAX_TRANSCRIPT_MESSAGE_CHARS)}\n\n[Open Design truncated ${omitted} chars from this prior message before sending it to the agent. Full content remains in persisted history.]`;
 }
 
+function escapeTranscriptRoleDelimiters(content: string): string {
+  return content.replace(/^(## (?:user|assistant)[ \t]*)(\r?)$/gm, '\\$1$2');
+}
+
 function compactInput(input: unknown): string {
   if (typeof input === 'string') return input;
   try {
@@ -131,7 +135,7 @@ function scopeHistoryToAgent(history: ChatMessage[], targetAgentId?: string): Ch
 export function buildDaemonTranscript(history: ChatMessage[], targetAgentId?: string): string {
   const scopedHistory = scopeHistoryToAgent(history, targetAgentId);
   const transcript = scopedHistory
-    .map((m) => `## ${m.role}\n${truncateForTranscript(m.content.trim())}`)
+    .map((m) => `## ${m.role}\n${escapeTranscriptRoleDelimiters(truncateForTranscript(m.content.trim()))}`)
     .join('\n\n');
   const warning = buildPriorRunContextWarning(scopedHistory);
   return warning ? `${warning}\n\n${transcript}` : transcript;
