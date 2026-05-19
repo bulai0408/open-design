@@ -1,11 +1,26 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os, { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ToolPackConfig } from "../src/config.js";
+import {
+  copyResourceTree,
+  createMacElectronRebuildOptions,
+  renderMacPackagedConfig,
+} from "../src/mac/app.js";
 import { resolveSeededAppConfigPaths, seedPackagedAppConfig, writeLaunchPackagedConfig } from "../src/mac/index.js";
+import { resolveMacPaths } from "../src/mac/paths.js";
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function makeConfig(root: string, overrides: Partial<ToolPackConfig> = {}): ToolPackConfig {
   return {
@@ -127,6 +142,81 @@ describe("seedPackagedAppConfig", () => {
       await expect(
         readFile(join(config.roots.runtime.namespaceRoot, "data", "app-config.json"), "utf8"),
       ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("copyResourceTree", () => {
+  it("does not embed the build machine Node launcher into mac resources", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const config = makeConfig(root);
+      const paths = resolveMacPaths(config);
+      const resourceNames = [
+        "skills",
+        "design-templates",
+        "design-systems",
+        "craft",
+        "plugins/_official",
+        "plugins/registry",
+        "assets/frames",
+        "assets/community-pets",
+        "prompt-templates",
+      ];
+
+      for (const name of resourceNames) {
+        await mkdir(join(root, name), { recursive: true });
+      }
+
+      await copyResourceTree(config, paths);
+
+      expect(await pathExists(join(paths.resourceRoot, "bin", "node"))).toBe(false);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("renderMacPackagedConfig", () => {
+  it("omits nodeCommandRelative so packaged mac sidecars use Electron as Node", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const config = makeConfig(root);
+
+      const packagedConfig = JSON.parse(
+        renderMacPackagedConfig({
+          appVersion: "1.2.3",
+          config,
+          usePrebundledStandaloneWeb: true,
+        }),
+      ) as Record<string, unknown>;
+      expect(packagedConfig).not.toHaveProperty("nodeCommandRelative");
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("createMacElectronRebuildOptions", () => {
+  it("targets the packaged Electron ABI for required native modules", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const config = makeConfig(root, { electronVersion: "41.3.0" });
+      const appRoot = join(root, "assembled", "app");
+
+      expect(createMacElectronRebuildOptions(config, appRoot)).toMatchObject({
+        arch: process.arch,
+        buildFromSource: false,
+        buildPath: appRoot,
+        electronVersion: "41.3.0",
+        force: true,
+        mode: "sequential",
+        onlyModules: ["better-sqlite3"],
+        platform: "darwin",
+        projectRootPath: appRoot,
+      });
     } finally {
       await rm(root, { force: true, recursive: true });
     }
