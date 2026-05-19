@@ -5,7 +5,7 @@
 // trust UI, but the storage layout here is the contract that lookup
 // will read against.
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,6 +25,16 @@ import {
   resolveMarketplaceFetchUrl,
   setMarketplaceTrust,
 } from '../src/plugins/marketplaces.js';
+
+const execFileMock = vi.hoisted(() => vi.fn());
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    execFile: execFileMock,
+  };
+});
 
 let db: Database.Database;
 let tmpDir: string;
@@ -58,6 +68,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  execFileMock.mockReset();
+  vi.unstubAllGlobals();
   db.close();
   await rm(tmpDir, { recursive: true, force: true });
 });
@@ -177,6 +189,64 @@ describe('marketplaces', () => {
       expect(result.status).toBe(422);
       expect(result.message).toMatch(/validation/i);
     }
+  });
+
+  it('adds and refreshes GitHub raw marketplaces with a gh auth token after anonymous fetch fails', async () => {
+    const updatedManifest = JSON.stringify({
+      specVersion: '1.0.0',
+      name: 'private-marketplace',
+      version: '1.0.1',
+      metadata: { description: 'fixture', version: '1.0.1' },
+      plugins: [
+        { name: 'private-plugin', source: 'github:acme/private-plugin', version: '0.2.0' },
+      ],
+    });
+    const authedBodies = [VALID_MANIFEST, updatedManifest];
+    const fetchCalls: Array<{ url: string; authorization?: string }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      let authorization: string | undefined;
+      if (init?.headers instanceof Headers) {
+        authorization = init.headers.get('authorization') ?? undefined;
+      } else if (init?.headers && typeof init.headers === 'object' && !Array.isArray(init.headers)) {
+        const headers = init.headers as Record<string, string>;
+        authorization = headers.Authorization ?? headers.authorization;
+      }
+      fetchCalls.push({ url, ...(authorization ? { authorization } : {}) });
+      if (authorization !== 'Bearer github-token') {
+        return {
+          ok: false,
+          status: 404,
+          text: async () => 'not found',
+        };
+      }
+      const body = authedBodies.shift() ?? updatedManifest;
+      return {
+        ok: true,
+        status: 200,
+        text: async () => body,
+      };
+    }));
+    execFileMock.mockImplementation((_command, args, _opts, callback) => {
+      expect(args).toEqual(['auth', 'token', '--hostname', 'github.com']);
+      callback(null, 'github-token\n', '');
+    });
+
+    const url = 'https://raw.githubusercontent.com/acme/private-registry/main/open-design-marketplace.json';
+    const added = await addMarketplace(db, { url });
+    if (!added.ok) throw new Error(`add failed: ${added.message}`);
+    expect(added.row.manifest.name).toBe('test-marketplace');
+
+    const refreshed = await refreshMarketplace(db, added.row.id);
+    if (!refreshed.ok) throw new Error(`refresh failed: ${refreshed.message}`);
+    expect(refreshed.row.version).toBe('1.0.1');
+
+    expect(fetchCalls).toEqual([
+      { url },
+      { url, authorization: 'Bearer github-token' },
+      { url },
+      { url, authorization: 'Bearer github-token' },
+    ]);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
   it('refresh re-fetches and updates refreshed_at', async () => {
@@ -303,10 +373,12 @@ describe('marketplaces', () => {
       host: 'github.enterprise.example',
       status: 'started',
     });
+    if (!login.ok) throw new Error('login failed');
+    expect(login.message).toMatch(/clipboard/i);
     expect(spawned).toEqual([
       {
         command: 'gh',
-        args: ['auth', 'login', '--hostname', 'github.enterprise.example', '--web'],
+        args: ['auth', 'login', '--hostname', 'github.enterprise.example', '--web', '--clipboard'],
       },
     ]);
   });

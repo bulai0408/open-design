@@ -127,7 +127,8 @@ beforeEach(() => {
   mockedLoginMarketplaceAuth.mockResolvedValue({
     ok: true,
     status: 'started',
-    message: 'Started GitHub CLI web login for github.com. Tokens stay in gh, not Open Design.',
+    message:
+      'Started GitHub CLI web login for github.com. The one-time device code was copied to the clipboard; tokens stay in gh, not Open Design.',
   });
   mockedRefreshMarketplace.mockResolvedValue({
     ok: true,
@@ -631,6 +632,7 @@ describe('PluginsView', () => {
     await waitFor(() =>
       expect(mockedLoginMarketplaceAuth).toHaveBeenCalledWith('catalog-1'),
     );
+    expect(await screen.findByText(/one-time device code was copied to the clipboard/i)).toBeTruthy();
   });
 
   it('localizes private team marketplace controls', async () => {

@@ -48,9 +48,17 @@ export interface AddMarketplaceInput {
   url: string;
   // Pluggable HTTPS fetcher; tests inject a stub. Production injects the
   // global fetch.
-  fetcher?: (url: string) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
+  fetcher?: MarketplaceFetcher;
   trust?: MarketplaceTrustTier;
 }
+
+export type MarketplaceFetchResponse = {
+  ok: boolean;
+  status: number;
+  text: () => Promise<string>;
+};
+
+export type MarketplaceFetcher = (url: string) => Promise<MarketplaceFetchResponse>;
 
 export interface AddMarketplaceResult {
   ok: true;
@@ -478,7 +486,7 @@ export async function loginMarketplaceAuth(
     };
   }
   const start = deps.spawnDetached ?? spawnDetached;
-  const started = await start('gh', ['auth', 'login', '--hostname', host, '--web']);
+  const started = await start('gh', ['auth', 'login', '--hostname', host, '--web', '--clipboard']);
   if (!started.ok) {
     return {
       ok: false,
@@ -494,7 +502,7 @@ export async function loginMarketplaceAuth(
     marketplaceId: id,
     host,
     status: 'started',
-    message: `Started GitHub CLI web login for ${host}. Tokens stay in gh, not Open Design.`,
+    message: `Started GitHub CLI web login for ${host}. The one-time device code was copied to the clipboard; tokens stay in gh, not Open Design.`,
   };
 }
 
@@ -542,13 +550,41 @@ export async function refreshMarketplace(
   };
 }
 
-async function defaultFetcher(url: string) {
+export async function fetchMarketplaceUrl(url: string): Promise<MarketplaceFetchResponse> {
   const response = await fetch(url, { redirect: 'follow' });
+  if (response.ok || !shouldRetryMarketplaceFetchWithGh(url, response.status)) {
+    return {
+      ok: response.ok,
+      status: response.status,
+      text: () => response.text(),
+    };
+  }
+
+  const host = inferMarketplaceGithubHost(url);
+  const token = await readGhAuthToken(host);
+  if (!token) {
+    return {
+      ok: response.ok,
+      status: response.status,
+      text: () => response.text(),
+    };
+  }
+
+  const authed = await fetch(url, {
+    redirect: 'follow',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
   return {
-    ok: response.ok,
-    status: response.status,
-    text: () => response.text(),
+    ok: authed.ok,
+    status: authed.status,
+    text: () => authed.text(),
   };
+}
+
+async function defaultFetcher(url: string) {
+  return fetchMarketplaceUrl(url);
 }
 
 function inferMarketplaceGithubHost(rawUrl: string): string {
@@ -561,6 +597,27 @@ function inferMarketplaceGithubHost(rawUrl: string): string {
   } catch {
     return 'github.com';
   }
+}
+
+function shouldRetryMarketplaceFetchWithGh(rawUrl: string, status: number): boolean {
+  if (![401, 403, 404].includes(status)) return false;
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.hostname === 'raw.githubusercontent.com'
+      || parsed.hostname === 'api.github.com'
+      || parsed.hostname === 'github.com'
+      || parsed.hostname.endsWith('.github.com')
+      || /github/i.test(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function readGhAuthToken(host: string): Promise<string | null> {
+  const result = await execFileBuffered('gh', ['auth', 'token', '--hostname', host], { timeout: 10_000 });
+  if (!result.ok) return null;
+  const token = String(result.stdout ?? '').trim();
+  return token.length > 0 ? token : null;
 }
 
 function compactLog(...values: Array<string | undefined>): string[] {

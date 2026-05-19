@@ -114,6 +114,7 @@ import {
   uninstallPlugin,
 } from './plugins/index.js';
 import {
+  fetchMarketplaceUrl,
   marketplaceManifestUrlForRegistry,
   marketplaceRegistryIdFromUrl,
 } from './plugins/marketplaces.js';
@@ -1158,12 +1159,7 @@ function createMarketplaceFetcher(seedId, bundledMarketplaceEntries) {
         };
       }
     }
-    const response = await fetch(url, { redirect: 'follow' });
-    return {
-      ok:     response.ok,
-      status: response.status,
-      text:   () => response.text(),
-    };
+    return fetchMarketplaceUrl(url);
   };
 }
 
