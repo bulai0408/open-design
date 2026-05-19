@@ -73,11 +73,15 @@ describe('GET /api/runs/:id/log', () => {
     expect(createResponse.status).toBe(202);
     const { runId } = await createResponse.json() as { runId: string };
 
-    const response = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/log?since=not-a-date`);
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({
-      error: { code: 'BAD_REQUEST' },
-    });
+    for (const since of ['not-a-date', '2026-02-31T00:00:00Z']) {
+      const response = await fetch(
+        `${baseUrl}/api/runs/${encodeURIComponent(runId)}/log?since=${encodeURIComponent(since)}`,
+      );
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'BAD_REQUEST' },
+      });
+    }
   });
 });
 

@@ -105,6 +105,52 @@ describe('CLI startup boundaries', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it('reports invalid run log cursors as input errors', async () => {
+    const server = http.createServer((req, res) => {
+      if (req.url?.startsWith('/api/runs/run-1/log')) {
+        res.statusCode = 400;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ error: { code: 'BAD_REQUEST', message: 'invalid since: expected an RFC3339 timestamp' } }));
+        return;
+      }
+      res.statusCode = 404;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'run not found' } }));
+    });
+
+    try {
+      const baseUrl = await listen(server);
+      await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          cliEntry,
+          'run',
+          'logs',
+          '--daemon-url',
+          baseUrl,
+          '--since',
+          '2026-02-31T00:00:00Z',
+          'run-1',
+        ],
+        { cwd: daemonRoot },
+      );
+      throw new Error('od run logs unexpectedly succeeded');
+    } catch (error: unknown) {
+      const failed = error as { code?: number; stderr?: string };
+      expect(failed.code).toBe(2);
+      expect(readStructuredError(failed.stderr ?? '')).toMatchObject({
+        error: {
+          code:    'invalid-input',
+          message: 'invalid since: expected an RFC3339 timestamp',
+        },
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
 
 async function listen(server: http.Server): Promise<string> {
@@ -112,4 +158,10 @@ async function listen(server: http.Server): Promise<string> {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('server did not bind to a TCP port');
   return `http://127.0.0.1:${address.port}`;
+}
+
+function readStructuredError(stderr: string) {
+  const line = stderr.split('\n').find((entry) => entry.trim().startsWith('{'));
+  if (!line) throw new Error(`missing structured error in stderr: ${stderr}`);
+  return JSON.parse(line);
 }

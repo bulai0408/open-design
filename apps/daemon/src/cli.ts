@@ -180,6 +180,7 @@ const AUTOMATION_WEEKDAY_TOKENS = {
   sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
 };
 const RECOVERABLE_EXIT_CODES = {
+  'invalid-input':            2,
   'daemon-not-running':       64,
   'plugin-not-found':         65,
   'snapshot-not-found':       65,
@@ -4442,7 +4443,12 @@ Common options:
       const suffix = params.size ? `?${params.toString()}` : '';
       const resp = await fetch(`${base}/api/runs/${encodeURIComponent(id)}/log${suffix}`);
       if (!resp.ok) {
-        return structuredHttpFailure(resp, resp.status === 404 ? 'run-not-found' : 'daemon-not-running');
+        return structuredHttpFailure(
+          resp,
+          resp.status === 404 ? 'run-not-found'
+            : resp.status === 400 ? 'invalid-input'
+              : 'daemon-not-running',
+        );
       }
       const data = await resp.json();
       if (flags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');

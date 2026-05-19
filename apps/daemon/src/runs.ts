@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 
 export const TERMINAL_RUN_STATUSES = new Set(['succeeded', 'failed', 'canceled']);
-const RFC3339_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const RFC3339_TIMESTAMP_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/;
 
 function readString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -15,6 +15,24 @@ function extractErrorDetails(data) {
     error: readString(nested.message) ?? readString(payload.message),
     errorCode: readString(nested.code) ?? readString(payload.code),
   };
+}
+
+function isLeapYear(year) {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+function daysInMonth(year, month) {
+  switch (month) {
+    case 2:
+      return isLeapYear(year) ? 29 : 28;
+    case 4:
+    case 6:
+    case 9:
+    case 11:
+      return 30;
+    default:
+      return 31;
+  }
 }
 
 export function createChatRunService({
@@ -31,7 +49,27 @@ export function createChatRunService({
     if (typeof since !== 'string') {
       throw new RangeError('invalid since: expected an RFC3339 timestamp');
     }
-    if (!RFC3339_TIMESTAMP_RE.test(since)) {
+    const match = RFC3339_TIMESTAMP_RE.exec(since);
+    if (!match) {
+      throw new RangeError('invalid since: expected an RFC3339 timestamp');
+    }
+    const [, yearRaw, monthRaw, dayRaw, hourRaw, minuteRaw, secondRaw, zoneRaw, offsetHourRaw, offsetMinuteRaw] = match;
+    const year = Number(yearRaw);
+    const month = Number(monthRaw);
+    const day = Number(dayRaw);
+    const hour = Number(hourRaw);
+    const minute = Number(minuteRaw);
+    const second = Number(secondRaw);
+    const offsetHour = offsetHourRaw == null ? 0 : Number(offsetHourRaw);
+    const offsetMinute = offsetMinuteRaw == null ? 0 : Number(offsetMinuteRaw);
+    if (
+      month < 1 || month > 12
+      || day < 1 || day > daysInMonth(year, month)
+      || hour > 23
+      || minute > 59
+      || second > 59
+      || (zoneRaw !== 'Z' && (offsetHour > 23 || offsetMinute > 59))
+    ) {
       throw new RangeError('invalid since: expected an RFC3339 timestamp');
     }
     const timestamp = Date.parse(since);

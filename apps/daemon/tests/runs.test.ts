@@ -74,6 +74,7 @@ describe('chat run service shutdown', () => {
     const run = runs.create();
 
     expect(() => runs.log(run, { since: 'not-a-date' })).toThrow(/invalid since/i);
+    expect(() => runs.log(run, { since: '2026-02-31T00:00:00Z' })).toThrow(/invalid since/i);
   });
 
   it('cancels active runs and terminates their child process during daemon shutdown', async () => {
