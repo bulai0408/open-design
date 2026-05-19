@@ -11950,6 +11950,29 @@ export async function startServer({
     design.runs.stream(run, req, res);
   });
 
+  app.get('/api/runs/:id/log', (req, res) => {
+    const run = design.runs.get(req.params.id);
+    if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
+    const since = req.query.since;
+    if (since !== undefined && typeof since !== 'string') {
+      return sendApiError(res, 400, 'BAD_REQUEST', 'since must be a single RFC3339 timestamp');
+    }
+    let events;
+    try {
+      events = design.runs.log(run, { since });
+    } catch (err) {
+      return sendApiError(
+        res,
+        400,
+        'BAD_REQUEST',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    /** @type {import('@open-design/contracts').ChatRunLogResponse} */
+    const body = { runId: run.id, events };
+    res.json(body);
+  });
+
   // Phase 4 / spec §10.3.5 — AG-UI canonical stream.
   //
   // Same data plane as /api/runs/:id/events but every record passes

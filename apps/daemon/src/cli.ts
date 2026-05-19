@@ -147,7 +147,7 @@ const LIBRARY_BOOLEAN_FLAGS = new Set(['help', 'h', 'json']);
 const PROJECT_STRING_FLAGS = new Set([
   'daemon-url', 'name', 'skill', 'design-system', 'plugin', 'metadata-json',
   'pending-prompt', 'project', 'conversation', 'message', 'path', 'as',
-  'agent', 'model', 'snapshot-id', 'inputs', 'grant-caps', 'editor',
+  'agent', 'model', 'snapshot-id', 'inputs', 'grant-caps', 'editor', 'since',
 ]);
 const PROJECT_BOOLEAN_FLAGS = new Set(['help', 'h', 'json', 'follow']);
 // `od automation …` mirrors the Automations tab. Same surface, same
@@ -4368,6 +4368,7 @@ async function runRun(args) {
                [--plugin <id>] [--inputs <json>] [--grant-caps a,b]
                [--agent claude|codex|gemini] [--model <id>] [--follow] [--json]
   od run watch  <runId>                     ND-JSON event stream on stdout.
+  od run logs   <runId> [--since <RFC3339>] Historical run events.
   od run cancel <runId>                     Request cancellation.
   od run list   [--project <id>]            List recent runs.
   od run info   <runId>                     One run's status.
@@ -4426,6 +4427,28 @@ Common options:
         process.exit(2);
       }
       await streamRunEvents(base, id);
+      return;
+    }
+    case 'logs': {
+      const id = rest.find((a) => !a.startsWith('-')
+        && a !== flags.since
+        && a !== flags['daemon-url']);
+      if (!id) {
+        console.error('Usage: od run logs <runId> [--since <RFC3339>]');
+        process.exit(2);
+      }
+      const params = new URLSearchParams();
+      if (flags.since) params.set('since', flags.since);
+      const suffix = params.size ? `?${params.toString()}` : '';
+      const resp = await fetch(`${base}/api/runs/${encodeURIComponent(id)}/log${suffix}`);
+      if (!resp.ok) {
+        return structuredHttpFailure(resp, resp.status === 404 ? 'run-not-found' : 'daemon-not-running');
+      }
+      const data = await resp.json();
+      if (flags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+      for (const record of data?.events ?? []) {
+        process.stdout.write(JSON.stringify(record) + '\n');
+      }
       return;
     }
     case 'start': {

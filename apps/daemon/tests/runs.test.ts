@@ -43,6 +43,39 @@ describe('chat run service shutdown', () => {
     ).toEqual([runB]);
   });
 
+  it('returns historical event records filtered strictly after an RFC3339 cursor', () => {
+    vi.useFakeTimers();
+    try {
+      const runs = createRuns();
+      const run = runs.create({ projectId: 'project-1' });
+
+      vi.setSystemTime(new Date('2026-05-19T00:00:00.000Z'));
+      runs.emit(run, 'status', { kind: 'status', label: 'queued' });
+      vi.setSystemTime(new Date('2026-05-19T00:00:02.000Z'));
+      runs.emit(run, 'text', { kind: 'text', text: 'hello' });
+      vi.setSystemTime(new Date('2026-05-19T00:00:03.000Z'));
+      runs.finish(run, 'succeeded', 0, null);
+
+      expect(runs.log(run, { since: '2026-05-19T00:00:02.000Z' })).toEqual([
+        expect.objectContaining({
+          id: 3,
+          event: 'end',
+          data: { code: 0, signal: null, status: 'succeeded' },
+          timestamp: Date.parse('2026-05-19T00:00:03.000Z'),
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects invalid historical event cursors', () => {
+    const runs = createRuns();
+    const run = runs.create();
+
+    expect(() => runs.log(run, { since: 'not-a-date' })).toThrow(/invalid since/i);
+  });
+
   it('cancels active runs and terminates their child process during daemon shutdown', async () => {
     const runs = createRuns();
     const child = new FakeChildProcess({ closeOn: 'SIGTERM' });

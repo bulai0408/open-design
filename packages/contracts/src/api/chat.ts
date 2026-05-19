@@ -189,6 +189,18 @@ export interface ChatRunListResponse {
   runs: ChatRunStatusResponse[];
 }
 
+export interface ChatRunLogEvent {
+  id: number;
+  event: string;
+  data: unknown;
+  timestamp: number;
+}
+
+export interface ChatRunLogResponse {
+  runId: string;
+  events: ChatRunLogEvent[];
+}
+
 export interface ChatRunCancelResponse {
   ok: true;
 }

@@ -1,4 +1,5 @@
 import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,4 +58,58 @@ describe('CLI startup boundaries', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('routes od run logs to the requested run id when flags precede the positional id', async () => {
+    const requests: string[] = [];
+    const server = http.createServer((req, res) => {
+      requests.push(req.url ?? '');
+      if (req.url?.startsWith('/api/runs/run-1/log')) {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          runId:  'run-1',
+          events: [{ id: 1, event: 'text', data: { kind: 'text', text: 'hello' }, timestamp: 1779148801000 }],
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'run not found' } }));
+    });
+
+    try {
+      const baseUrl = await listen(server);
+      const { stdout } = await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          cliEntry,
+          'run',
+          'logs',
+          '--daemon-url',
+          baseUrl,
+          '--since',
+          '2026-05-19T00:00:00.000Z',
+          'run-1',
+          '--json',
+        ],
+        { cwd: daemonRoot },
+      );
+
+      expect(JSON.parse(stdout)).toMatchObject({
+        runId:  'run-1',
+        events: [{ id: 1, event: 'text' }],
+      });
+      expect(requests[0]).toBe('/api/runs/run-1/log?since=2026-05-19T00%3A00%3A00.000Z');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
+
+async function listen(server: http.Server): Promise<string> {
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('server did not bind to a TCP port');
+  return `http://127.0.0.1:${address.port}`;
+}

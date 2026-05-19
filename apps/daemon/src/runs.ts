@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 
 export const TERMINAL_RUN_STATUSES = new Set(['succeeded', 'failed', 'canceled']);
+const RFC3339_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 function readString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -24,6 +25,21 @@ export function createChatRunService({
   shutdownGraceMs = 3_000,
 }) {
   const runs = new Map();
+
+  const parseLogSince = (since) => {
+    if (since == null || since === '') return null;
+    if (typeof since !== 'string') {
+      throw new RangeError('invalid since: expected an RFC3339 timestamp');
+    }
+    if (!RFC3339_TIMESTAMP_RE.test(since)) {
+      throw new RangeError('invalid since: expected an RFC3339 timestamp');
+    }
+    const timestamp = Date.parse(since);
+    if (!Number.isFinite(timestamp)) {
+      throw new RangeError('invalid since: expected an RFC3339 timestamp');
+    }
+    return timestamp;
+  };
 
   const create = (meta = {}) => {
     const now = Date.now();
@@ -158,6 +174,13 @@ export function createChatRunService({
     });
   };
 
+  const log = (run, { since } = {}) => {
+    const sinceTimestamp = parseLogSince(since);
+    return run.events.filter((record) => (
+      sinceTimestamp == null || record.timestamp > sinceTimestamp
+    ));
+  };
+
   const list = ({ projectId, conversationId, status } = {}) => Array.from(runs.values()).filter((run) => {
     if (typeof projectId === 'string' && projectId && run.projectId !== projectId) return false;
     if (typeof conversationId === 'string' && conversationId && run.conversationId !== conversationId) return false;
@@ -250,6 +273,7 @@ export function createChatRunService({
     get,
     list,
     stream,
+    log,
     cancel,
     shutdownActive,
     wait,
