@@ -7183,6 +7183,43 @@ export async function startServer({
     }
   });
 
+  app.get('/api/marketplaces/:id/auth', async (req, res) => {
+    try {
+      const { getMarketplaceAuthStatus } = await import('./plugins/marketplaces.js');
+      const result = await getMarketplaceAuthStatus(db, req.params.id);
+      if (!result.ok) {
+        return res.status(result.status).json({
+          error: { code: result.code, message: result.message },
+        });
+      }
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.post('/api/marketplaces/:id/auth', async (req, res) => {
+    try {
+      const { loginMarketplaceAuth } = await import('./plugins/marketplaces.js');
+      const result = await loginMarketplaceAuth(db, req.params.id);
+      if (!result.ok) {
+        return res.status(result.status).json({
+          error: {
+            code: result.code,
+            message: result.message,
+            data: {
+              host: result.host,
+              log: result.log ?? [],
+            },
+          },
+        });
+      }
+      res.status(202).json(result);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   app.get('/api/marketplaces/:id/plugins', async (req, res) => {
     try {
       const { getMarketplace } = await import('./plugins/marketplaces.js');

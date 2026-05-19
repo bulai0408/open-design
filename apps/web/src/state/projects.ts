@@ -900,6 +900,34 @@ export interface PluginMarketplaceMutationOutcome {
   message: string;
 }
 
+export type PluginMarketplaceAuthState =
+  | 'authenticated'
+  | 'not-authenticated'
+  | 'not-installed'
+  | 'unknown';
+
+export interface PluginMarketplaceAuthStatus {
+  ok: true;
+  marketplaceId: string;
+  host: string;
+  authenticated: boolean;
+  status: PluginMarketplaceAuthState;
+  login?: string;
+  message: string;
+  log?: string[];
+}
+
+export interface PluginMarketplaceAuthOutcome {
+  ok: boolean;
+  status?: 'started' | PluginMarketplaceAuthState;
+  marketplaceId?: string;
+  host?: string;
+  message: string;
+  authenticated?: boolean;
+  login?: string;
+  log?: string[];
+}
+
 export async function listPluginMarketplaces(): Promise<PluginMarketplace[]> {
   try {
     const resp = await fetch('/api/marketplaces');
@@ -908,6 +936,45 @@ export async function listPluginMarketplaces(): Promise<PluginMarketplace[]> {
     return json.marketplaces ?? [];
   } catch {
     return [];
+  }
+}
+
+export async function getPluginMarketplaceAuth(
+  id: string,
+): Promise<PluginMarketplaceAuthOutcome> {
+  try {
+    const resp = await fetch(`/api/marketplaces/${encodeURIComponent(id)}/auth`);
+    if (!resp.ok) {
+      return { ok: false, message: await readErrorMessage(resp) };
+    }
+    return (await resp.json()) as PluginMarketplaceAuthStatus;
+  } catch (err) {
+    return { ok: false, message: (err as Error).message };
+  }
+}
+
+export async function loginPluginMarketplaceAuth(
+  id: string,
+): Promise<PluginMarketplaceAuthOutcome> {
+  try {
+    const resp = await fetch(`/api/marketplaces/${encodeURIComponent(id)}/auth`, {
+      method: 'POST',
+    });
+    if (!resp.ok) {
+      return { ok: false, message: await readErrorMessage(resp) };
+    }
+    const json = (await resp.json().catch(() => null)) as
+      | Partial<PluginMarketplaceAuthOutcome>
+      | null;
+    return {
+      ok: true,
+      status: json?.status ?? 'started',
+      marketplaceId: json?.marketplaceId,
+      host: json?.host,
+      message: json?.message ?? 'Started GitHub CLI login.',
+    };
+  } catch (err) {
+    return { ok: false, message: (err as Error).message };
   }
 }
 

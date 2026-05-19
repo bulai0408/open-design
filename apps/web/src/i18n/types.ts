@@ -88,6 +88,26 @@ export interface Dict {
   'plugins.availableDetails.integrity': string;
   'plugins.availableDetails.permissions': string;
   'plugins.availableDetails.capabilitySummary': string;
+  'plugins.team.title': string;
+  'plugins.team.subtitle': string;
+  'plugins.team.privateCatalogUrl': string;
+  'plugins.team.privateCatalogPlaceholder': string;
+  'plugins.team.defaultTrust': string;
+  'plugins.team.addPrivateCatalog': string;
+  'plugins.team.adding': string;
+  'plugins.team.empty': string;
+  'plugins.team.catalogVersion': string;
+  'plugins.team.catalogVersionUnknown': string;
+  'plugins.team.pluginsCount': string;
+  'plugins.team.checkingAuth': string;
+  'plugins.team.authUnavailable': string;
+  'plugins.team.authenticatedAs': string;
+  'plugins.team.authenticatedFor': string;
+  'plugins.team.ghNotInstalled': string;
+  'plugins.team.notAuthenticatedFor': string;
+  'plugins.team.authUnknown': string;
+  'plugins.team.opening': string;
+  'plugins.team.authenticate': string;
 
   // App / brand
   'app.brand': string;

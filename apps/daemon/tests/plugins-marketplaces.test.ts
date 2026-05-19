@@ -13,9 +13,11 @@ import Database from 'better-sqlite3';
 import { migratePlugins } from '../src/plugins/persistence.js';
 import {
   addMarketplace,
+  getMarketplaceAuthStatus,
   ensureMarketplaceManifest,
   getMarketplace,
   listMarketplaces,
+  loginMarketplaceAuth,
   marketplaceManifestUrlForRegistry,
   refreshMarketplace,
   removeMarketplace,
@@ -243,6 +245,91 @@ describe('marketplaces', () => {
     expect(trusted?.trust).toBe('trusted');
     expect(removeMarketplace(db, added.row.id)).toBe(true);
     expect(getMarketplace(db, added.row.id)).toBeNull();
+  });
+
+  it('reports gh auth status for a marketplace host without storing tokens', async () => {
+    const seeded = ensureMarketplaceManifest(db, {
+      id: 'private',
+      url: 'https://raw.githubusercontent.com/acme/private-registry/main/open-design-marketplace.json',
+      trust: 'restricted',
+      manifestText: VALID_MANIFEST,
+    });
+    if (!seeded.ok) throw new Error('seed failed');
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    const status = await getMarketplaceAuthStatus(db, 'private', {
+      execFile: async (command, args) => {
+        calls.push({ command, args });
+        return {
+          ok: true,
+          stdout: command === 'gh' && args[0] === '--version' ? 'gh version 2.70.0' : '',
+          stderr: args.includes('status') ? 'Logged in to github.com account acme-user' : '',
+        };
+      },
+    });
+
+    expect(status).toMatchObject({
+      ok: true,
+      authenticated: true,
+      host: 'github.com',
+      login: 'acme-user',
+    });
+    expect(calls.map((call) => call.args)).toEqual([
+      ['--version'],
+      ['auth', 'status', '--hostname', 'github.com'],
+    ]);
+  });
+
+  it('starts gh web login for a marketplace host', async () => {
+    const seeded = ensureMarketplaceManifest(db, {
+      id: 'private',
+      url: 'https://github.enterprise.example/acme/registry/raw/main/open-design-marketplace.json',
+      trust: 'restricted',
+      manifestText: VALID_MANIFEST,
+    });
+    if (!seeded.ok) throw new Error('seed failed');
+    const spawned: Array<{ command: string; args: string[] }> = [];
+
+    const login = await loginMarketplaceAuth(db, 'private', {
+      execFile: async () => ({ ok: true, stdout: 'gh version 2.70.0', stderr: '' }),
+      spawnDetached: async (command, args) => {
+        spawned.push({ command, args });
+        return { ok: true };
+      },
+    });
+
+    expect(login).toMatchObject({
+      ok: true,
+      host: 'github.enterprise.example',
+      status: 'started',
+    });
+    expect(spawned).toEqual([
+      {
+        command: 'gh',
+        args: ['auth', 'login', '--hostname', 'github.enterprise.example', '--web'],
+      },
+    ]);
+  });
+
+  it('returns not-installed auth status when gh is missing', async () => {
+    const seeded = ensureMarketplaceManifest(db, {
+      id: 'private',
+      url: 'https://github.com/acme/registry/raw/main/open-design-marketplace.json',
+      trust: 'restricted',
+      manifestText: VALID_MANIFEST,
+    });
+    if (!seeded.ok) throw new Error('seed failed');
+
+    const status = await getMarketplaceAuthStatus(db, 'private', {
+      execFile: async () => ({ ok: false, stdout: '', stderr: 'gh: command not found' }),
+    });
+
+    expect(status).toMatchObject({
+      ok: true,
+      authenticated: false,
+      status: 'not-installed',
+      host: 'github.com',
+    });
   });
 
   it('upserts a fixed built-in marketplace manifest', () => {

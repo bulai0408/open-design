@@ -4,12 +4,15 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InstalledPluginRecord, PluginSourceKind, TrustTier } from '@open-design/contracts';
 import { PluginsView } from '../../src/components/PluginsView';
+import { I18nProvider } from '../../src/i18n';
 import {
   addPluginMarketplace,
   applyPlugin,
+  getPluginMarketplaceAuth,
   installPluginSource,
   listPluginMarketplaces,
   listPlugins,
+  loginPluginMarketplaceAuth,
   refreshPluginMarketplace,
   removePluginMarketplace,
   setPluginMarketplaceTrust,
@@ -25,9 +28,11 @@ vi.mock('../../src/router', () => ({
 vi.mock('../../src/state/projects', () => ({
   addPluginMarketplace: vi.fn(),
   applyPlugin: vi.fn(),
+  getPluginMarketplaceAuth: vi.fn(),
   installPluginSource: vi.fn(),
   listPluginMarketplaces: vi.fn(),
   listPlugins: vi.fn(),
+  loginPluginMarketplaceAuth: vi.fn(),
   refreshPluginMarketplace: vi.fn(),
   removePluginMarketplace: vi.fn(),
   setPluginMarketplaceTrust: vi.fn(),
@@ -72,6 +77,8 @@ const mockedListPlugins = vi.mocked(listPlugins);
 const mockedListMarketplaces = vi.mocked(listPluginMarketplaces);
 const mockedInstallPluginSource = vi.mocked(installPluginSource);
 const mockedAddMarketplace = vi.mocked(addPluginMarketplace);
+const mockedGetMarketplaceAuth = vi.mocked(getPluginMarketplaceAuth);
+const mockedLoginMarketplaceAuth = vi.mocked(loginPluginMarketplaceAuth);
 const mockedRefreshMarketplace = vi.mocked(refreshPluginMarketplace);
 const mockedRemoveMarketplace = vi.mocked(removePluginMarketplace);
 const mockedSetMarketplaceTrust = vi.mocked(setPluginMarketplaceTrust);
@@ -106,6 +113,21 @@ beforeEach(() => {
   mockedAddMarketplace.mockResolvedValue({
     ok: true,
     message: 'Marketplace source added.',
+  });
+  mockedGetMarketplaceAuth.mockResolvedValue({
+    ok: true,
+    marketplaceId: 'catalog-1',
+    host: 'github.com',
+    authenticated: true,
+    status: 'authenticated',
+    login: 'team-user',
+    message: 'GitHub CLI is authenticated for github.com.',
+    log: [],
+  });
+  mockedLoginMarketplaceAuth.mockResolvedValue({
+    ok: true,
+    status: 'started',
+    message: 'Started GitHub CLI web login for github.com. Tokens stay in gh, not Open Design.',
   });
   mockedRefreshMarketplace.mockResolvedValue({
     ok: true,
@@ -578,6 +600,52 @@ describe('PluginsView', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(mockedRemoveMarketplace).toHaveBeenCalledWith('catalog-1'));
+  });
+
+  it('manages private team marketplaces with auth status from the Team tab', async () => {
+    render(<PluginsView />);
+
+    const privateUrl =
+      'https://raw.githubusercontent.com/acme/private-registry/main/open-design-marketplace.json';
+    fireEvent.click(await screen.findByTestId('plugins-tab-team'));
+
+    expect(await screen.findByText('Private team marketplaces')).toBeTruthy();
+    expect(await screen.findByText('Authenticated as team-user')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Private catalog URL'), {
+      target: { value: privateUrl },
+    });
+    fireEvent.change(screen.getByLabelText('Default trust for private catalog'), {
+      target: { value: 'trusted' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add private catalog' }));
+
+    await waitFor(() =>
+      expect(mockedAddMarketplace).toHaveBeenCalledWith({
+        url: privateUrl,
+        trust: 'trusted',
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Authenticate' }));
+    await waitFor(() =>
+      expect(mockedLoginMarketplaceAuth).toHaveBeenCalledWith('catalog-1'),
+    );
+  });
+
+  it('localizes private team marketplace controls', async () => {
+    render(
+      <I18nProvider initial="zh-CN">
+        <PluginsView />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(await screen.findByTestId('plugins-tab-team'));
+
+    expect(await screen.findByText('私有团队 marketplace')).toBeTruthy();
+    expect(screen.getByLabelText('私有 catalog URL')).toBeTruthy();
+    expect(screen.getByLabelText('私有 catalog 的默认信任级别')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '添加私有 catalog' })).toBeTruthy();
   });
 
   it('uploads zip and folder plugins from the import dialog', async () => {

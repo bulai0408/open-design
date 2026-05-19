@@ -17,13 +17,16 @@ import {
 import {
   addPluginMarketplace,
   applyPlugin,
+  getPluginMarketplaceAuth,
   installPluginSource,
   listPluginMarketplaces,
   listPlugins,
+  loginPluginMarketplaceAuth,
   refreshPluginMarketplace,
   removePluginMarketplace,
   setPluginMarketplaceTrust,
   type PluginInstallOutcome,
+  type PluginMarketplaceAuthOutcome,
   type PluginShareAction,
   type PluginShareProjectOutcome,
   type PluginMarketplaceEntry,
@@ -38,8 +41,11 @@ import { PluginDetailsModal } from './PluginDetailsModal';
 import { PluginsHomeSection } from './PluginsHomeSection';
 import { TrustBadge } from './TrustBadge';
 import { useI18n } from '../i18n';
+import type { Dict } from '../i18n/types';
 import { copyToClipboard } from '../lib/copy-to-clipboard';
 import type { PluginUseAction } from './plugins-home/useActions';
+
+type Translate = (key: keyof Dict, vars?: Record<string, string | number>) => string;
 
 type PluginsTab = 'installed' | 'available' | 'sources' | 'team';
 
@@ -520,7 +526,16 @@ export function PluginsView({
           />
         ) : null}
 
-        {activeTab === 'team' ? <TeamPanel t={t} /> : null}
+        {activeTab === 'team' ? (
+          <TeamPanel
+            marketplaces={marketplaces}
+            pendingAction={pendingSourceAction}
+            onAdd={(url, trust) =>
+              void handleMarketplaceMutation('team:add', () => addPluginMarketplace({ url, trust }))
+            }
+            onAuthOutcome={(outcome) => setNotice(outcome)}
+          />
+        ) : null}
       </div>
 
       {detailsRecord ? (
@@ -1910,19 +1925,169 @@ function normalizePluginName(name: string): string {
   return name.trim().toLowerCase();
 }
 
-function TeamPanel({ t }: { t: ReturnType<typeof useI18n>['t'] }) {
+function TeamPanel({
+  marketplaces,
+  pendingAction,
+  onAdd,
+  onAuthOutcome,
+}: {
+  marketplaces: PluginMarketplace[];
+  pendingAction: string | null;
+  onAdd: (url: string, trust: PluginMarketplaceTrust) => void;
+  onAuthOutcome: (outcome: { ok: boolean; message: string }) => void;
+}) {
+  const { t } = useI18n();
+  const [url, setUrl] = useState('');
+  const [trust, setTrust] = useState<PluginMarketplaceTrust>('restricted');
+  const [authByMarketplace, setAuthByMarketplace] = useState<Record<string, PluginMarketplaceAuthOutcome>>({});
+  const [pendingAuthId, setPendingAuthId] = useState<string | null>(null);
+  const trimmedUrl = url.trim();
+
+  useEffect(() => {
+    let cancelled = false;
+    if (marketplaces.length === 0) {
+      setAuthByMarketplace({});
+      return () => {
+        cancelled = true;
+      };
+    }
+    void Promise.all(
+      marketplaces.map(async (marketplace) => {
+        const auth = await getPluginMarketplaceAuth(marketplace.id);
+        return [marketplace.id, auth] as const;
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      setAuthByMarketplace(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [marketplaces]);
+
+  async function authenticate(marketplace: PluginMarketplace) {
+    setPendingAuthId(marketplace.id);
+    const outcome = await loginPluginMarketplaceAuth(marketplace.id);
+    setPendingAuthId(null);
+    onAuthOutcome(outcome);
+    const refreshed = await getPluginMarketplaceAuth(marketplace.id);
+    setAuthByMarketplace((current) => ({
+      ...current,
+      [marketplace.id]: refreshed,
+    }));
+  }
+
   return (
-    <section className="plugins-view__team" aria-labelledby="plugins-team-title">
-      <span className="plugins-view__future-icon" aria-hidden>
-        <Icon name="sparkles" size={18} />
-      </span>
-      <div>
-        <p className="plugins-view__kicker">{t('tasks.comingSoon')}</p>
-        <h2 id="plugins-team-title">{t('pluginsView.teamTitle')}</h2>
-        <p>
-          {t('pluginsView.teamBody')}
-        </p>
+    <section className="plugins-view__section" aria-labelledby="plugins-team-title">
+      <div className="plugins-view__section-head">
+        <div>
+          <h2 id="plugins-team-title">{t('plugins.team.title')}</h2>
+          <p>{t('plugins.team.subtitle')}</p>
+        </div>
+        <span className="plugins-view__section-count">{marketplaces.length}</span>
       </div>
+
+      <form
+        className="plugins-view__source-manager"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!trimmedUrl) return;
+          onAdd(trimmedUrl, trust);
+          setUrl('');
+        }}
+      >
+        <label htmlFor="plugin-private-marketplace-url">{t('plugins.team.privateCatalogUrl')}</label>
+        <div className="plugins-view__source-row">
+          <input
+            id="plugin-private-marketplace-url"
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            placeholder={t('plugins.team.privateCatalogPlaceholder')}
+            disabled={pendingAction === 'team:add'}
+          />
+          <select
+            value={trust}
+            onChange={(event) => setTrust(event.target.value as PluginMarketplaceTrust)}
+            disabled={pendingAction === 'team:add'}
+            aria-label={t('plugins.team.defaultTrust')}
+          >
+            <option value="restricted">Restricted</option>
+            <option value="trusted">Trusted</option>
+            <option value="official">Official</option>
+          </select>
+          <button
+            type="submit"
+            className="plugins-view__primary"
+            disabled={!trimmedUrl || pendingAction === 'team:add'}
+          >
+            {pendingAction === 'team:add' ? t('plugins.team.adding') : t('plugins.team.addPrivateCatalog')}
+          </button>
+        </div>
+      </form>
+
+      {marketplaces.length === 0 ? (
+        <div className="plugins-view__empty">
+          {t('plugins.team.empty')}
+        </div>
+      ) : (
+        <div className="plugins-view__marketplaces">
+          {marketplaces.map((marketplace) => {
+            const auth = authByMarketplace[marketplace.id];
+            return (
+              <article key={marketplace.id} className="plugins-view__marketplace">
+                <div>
+                  <h3>{marketplace.manifest.name ?? marketplace.url}</h3>
+                  <a href={marketplace.url} target="_blank" rel="noreferrer">
+                    {marketplace.url}
+                  </a>
+                  <div className="plugins-view__meta">
+                    <TrustBadge trust={marketplace.trust} />
+                    <span>{t('plugins.team.pluginsCount', { count: marketplace.manifest.plugins?.length ?? 0 })}</span>
+                    <span>
+                      {marketplace.version
+                        ? t('plugins.team.catalogVersion', { version: marketplace.version })
+                        : t('plugins.team.catalogVersionUnknown')}
+                    </span>
+                  </div>
+                </div>
+                <div className="plugins-view__team-actions">
+                  <span
+                    className={`plugins-view__auth-pill ${
+                      auth?.authenticated ? 'is-authenticated' : 'is-muted'
+                    }`}
+                  >
+                    {marketplaceAuthLabel(auth, t)}
+                  </span>
+                  <button
+                    type="button"
+                    className="plugins-view__secondary"
+                    onClick={() => void authenticate(marketplace)}
+                    disabled={pendingAuthId === marketplace.id}
+                  >
+                    <Icon name="github" size={13} />
+                    <span>{pendingAuthId === marketplace.id ? t('plugins.team.opening') : t('plugins.team.authenticate')}</span>
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
+}
+
+function marketplaceAuthLabel(auth: PluginMarketplaceAuthOutcome | undefined, t: Translate): string {
+  if (!auth) return t('plugins.team.checkingAuth');
+  if (!auth.ok) return t('plugins.team.authUnavailable');
+  if (auth.authenticated) {
+    return auth.login
+      ? t('plugins.team.authenticatedAs', { login: auth.login })
+      : t('plugins.team.authenticatedFor', { host: auth.host ?? 'GitHub' });
+  }
+  if (auth.status === 'not-installed') return t('plugins.team.ghNotInstalled');
+  if (auth.status === 'not-authenticated') {
+    return t('plugins.team.notAuthenticatedFor', { host: auth.host ?? 'GitHub' });
+  }
+  return auth.message || t('plugins.team.authUnknown');
 }

@@ -14,6 +14,7 @@
 // unless `--trust` is passed.
 
 import { randomUUID } from 'node:crypto';
+import { execFile, spawn } from 'node:child_process';
 import type Database from 'better-sqlite3';
 import {
   parseMarketplace,
@@ -71,6 +72,53 @@ export interface EnsureMarketplaceManifestInput {
   manifestText: string;
   now?: number;
 }
+
+export type MarketplaceAuthState =
+  | 'authenticated'
+  | 'not-authenticated'
+  | 'not-installed'
+  | 'unknown';
+
+export interface MarketplaceAuthStatus {
+  ok: true;
+  marketplaceId: string;
+  host: string;
+  authenticated: boolean;
+  status: MarketplaceAuthState;
+  login?: string;
+  message: string;
+  log: string[];
+}
+
+export interface MarketplaceAuthLoginStarted {
+  ok: true;
+  marketplaceId: string;
+  host: string;
+  status: 'started';
+  message: string;
+}
+
+export interface MarketplaceAuthFailure {
+  ok: false;
+  status: number;
+  code: string;
+  message: string;
+  host?: string;
+  log?: string[];
+}
+
+type ExecFileResult = {
+  ok: boolean;
+  stdout?: string;
+  stderr?: string;
+  code?: string | number;
+  error?: unknown;
+};
+
+type MarketplaceAuthDeps = {
+  execFile?: (command: string, args: string[], opts?: { timeout?: number }) => Promise<ExecFileResult>;
+  spawnDetached?: (command: string, args: string[]) => Promise<{ ok: boolean; error?: unknown }>;
+};
 
 const HTTPS_RE = /^https:\/\//i;
 const DEFAULT_MARKETPLACE_REPO = 'nexu-io/open-design';
@@ -348,6 +396,108 @@ export function setMarketplaceTrust(
   return getMarketplace(db, id);
 }
 
+export async function getMarketplaceAuthStatus(
+  db: SqliteDb,
+  id: string,
+  deps: MarketplaceAuthDeps = {},
+): Promise<MarketplaceAuthStatus | MarketplaceAuthFailure> {
+  const row = getMarketplace(db, id);
+  if (!row) {
+    return {
+      ok: false,
+      status: 404,
+      code: 'marketplace-not-found',
+      message: 'marketplace not found',
+    };
+  }
+  const host = inferMarketplaceGithubHost(row.url);
+  const run = deps.execFile ?? execFileBuffered;
+  const version = await run('gh', ['--version'], { timeout: 10_000 });
+  if (!version.ok) {
+    return {
+      ok: true,
+      marketplaceId: id,
+      host,
+      authenticated: false,
+      status: 'not-installed',
+      message: 'GitHub CLI is not installed. Install gh to authenticate private marketplace catalogs.',
+      log: compactLog(version.stderr, version.stdout, 'gh --version failed'),
+    };
+  }
+  const auth = await run('gh', ['auth', 'status', '--hostname', host], { timeout: 10_000 });
+  const log = compactLog(auth.stderr, auth.stdout);
+  if (!auth.ok) {
+    return {
+      ok: true,
+      marketplaceId: id,
+      host,
+      authenticated: false,
+      status: 'not-authenticated',
+      message: `GitHub CLI is not authenticated for ${host}.`,
+      log,
+    };
+  }
+  const login = extractGhLogin(log.join('\n'));
+  return {
+    ok: true,
+    marketplaceId: id,
+    host,
+    authenticated: true,
+    status: 'authenticated',
+    ...(login ? { login } : {}),
+    message: `GitHub CLI is authenticated for ${host}.`,
+    log,
+  };
+}
+
+export async function loginMarketplaceAuth(
+  db: SqliteDb,
+  id: string,
+  deps: MarketplaceAuthDeps = {},
+): Promise<MarketplaceAuthLoginStarted | MarketplaceAuthFailure> {
+  const row = getMarketplace(db, id);
+  if (!row) {
+    return {
+      ok: false,
+      status: 404,
+      code: 'marketplace-not-found',
+      message: 'marketplace not found',
+    };
+  }
+  const host = inferMarketplaceGithubHost(row.url);
+  const run = deps.execFile ?? execFileBuffered;
+  const version = await run('gh', ['--version'], { timeout: 10_000 });
+  if (!version.ok) {
+    return {
+      ok: false,
+      status: 424,
+      code: 'gh-not-installed',
+      host,
+      message: 'GitHub CLI is not installed. Install gh from https://cli.github.com/ and retry.',
+      log: compactLog(version.stderr, version.stdout, 'gh --version failed'),
+    };
+  }
+  const start = deps.spawnDetached ?? spawnDetached;
+  const started = await start('gh', ['auth', 'login', '--hostname', host, '--web']);
+  if (!started.ok) {
+    return {
+      ok: false,
+      status: 502,
+      code: 'gh-login-start-failed',
+      host,
+      message: `Could not start GitHub CLI login for ${host}.`,
+      log: compactLog(started.error instanceof Error ? started.error.message : String(started.error ?? '')),
+    };
+  }
+  return {
+    ok: true,
+    marketplaceId: id,
+    host,
+    status: 'started',
+    message: `Started GitHub CLI web login for ${host}. Tokens stay in gh, not Open Design.`,
+  };
+}
+
 export interface RefreshMarketplaceResult {
   ok: true;
   row: MarketplaceRow;
@@ -399,6 +549,75 @@ async function defaultFetcher(url: string) {
     status: response.status,
     text: () => response.text(),
   };
+}
+
+function inferMarketplaceGithubHost(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.hostname === 'raw.githubusercontent.com' || parsed.hostname === 'api.github.com') {
+      return 'github.com';
+    }
+    return parsed.hostname || 'github.com';
+  } catch {
+    return 'github.com';
+  }
+}
+
+function compactLog(...values: Array<string | undefined>): string[] {
+  return values
+    .map((value) => String(value ?? '').trim())
+    .filter((value) => value.length > 0);
+}
+
+function extractGhLogin(text: string): string | undefined {
+  const accountMatch = /\baccount\s+([A-Za-z0-9-]+)\b/i.exec(text);
+  if (accountMatch?.[1]) return accountMatch[1];
+  const asMatch = /\bLogged in to [^\s]+ as\s+([A-Za-z0-9-]+)\b/i.exec(text);
+  return asMatch?.[1];
+}
+
+function execFileBuffered(
+  command: string,
+  args: string[],
+  opts: { timeout?: number } = {},
+): Promise<ExecFileResult> {
+  return new Promise((resolve) => {
+    execFile(command, args, {
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024,
+      ...opts,
+    }, (error, stdout, stderr) => {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      resolve({
+        ok: !error,
+        ...(code ? { code } : {}),
+        stdout: String(stdout ?? '').trim(),
+        stderr: String(stderr ?? '').trim(),
+        error,
+      });
+    });
+  });
+}
+
+async function spawnDetached(
+  command: string,
+  args: string[],
+): Promise<{ ok: boolean; error?: unknown }> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(command, args, {
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.once('error', (error) => resolve({ ok: false, error }));
+      child.once('spawn', () => {
+        child.unref();
+        resolve({ ok: true });
+      });
+    } catch (error) {
+      resolve({ ok: false, error });
+    }
+  });
 }
 
 function safeParseManifest(raw: string): MarketplaceManifest {
