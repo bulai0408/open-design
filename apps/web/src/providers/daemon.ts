@@ -287,7 +287,7 @@ function buildDaemonAgentExitError({
     : ' Try again later, switch models, or check the provider quota.';
 
   if (
-    /\b429\b/.test(details) ||
+    hasQuotaStatusCode(details) ||
     text.includes('resource_exhausted') ||
     text.includes('rate limit') ||
     text.includes('rate_limit') ||
@@ -308,7 +308,7 @@ function buildDaemonAgentExitError({
   }
 
   if (
-    /\b(?:401|403)\b/.test(details) ||
+    hasAuthStatusCode(details) ||
     /not logged in/i.test(details) ||
     /please run\s+\/?login/i.test(details) ||
     /run\s+[`'"]?[^`'"\n]*login/i.test(details) ||
@@ -400,6 +400,14 @@ function buildDaemonAgentExitError({
     exitCode,
     exitSignal,
   });
+}
+
+function hasQuotaStatusCode(details: string): boolean {
+  return /(?:\b(?:code|status|statuscode|httpstatus|http status|last status|response status)\b\s*[:=]?\s*["']?429\b|\bhttp\s*429\b|\b429\b[^\n]{0,80}\b(?:too many requests|rate[-_ ]?limit|quota|resource[-_ ]?exhausted|capacity)\b|\b(?:too many requests|rate[-_ ]?limit|quota|resource[-_ ]?exhausted|capacity)\b[^\n]{0,80}\b429\b)/i.test(details);
+}
+
+function hasAuthStatusCode(details: string): boolean {
+  return /(?:\b(?:code|status|statuscode|httpstatus|http status|last status|response status)\b\s*[:=]?\s*["']?(?:401|403)\b|\bhttp\s*(?:401|403)\b|\b(?:401|403)\b[^\n]{0,80}\b(?:unauthorized|forbidden|auth|oauth|credential|token|api key|login)\b|\b(?:unauthorized|forbidden|auth|oauth|credential|token|api key|login)\b[^\n]{0,80}\b(?:401|403)\b)/i.test(details);
 }
 
 function runStatusDiagnostic(error: string | null | undefined, errorCode: string | null | undefined): string {
@@ -838,9 +846,10 @@ async function consumeDaemonRun({
       (!serverDeclaredSuccess &&
         (exitSignal || (exitCode !== null && exitCode !== 0)));
     if (looksLikeFailure) {
-      const diagnostic = stderrBuf.trim()
-        ? stderrBuf
-        : runStatusDiagnostic(fallbackRunError, fallbackRunErrorCode);
+      const diagnostic = combineFailureDiagnostics(
+        stderrBuf,
+        runStatusDiagnostic(fallbackRunError, fallbackRunErrorCode),
+      );
       const classified = buildDaemonAgentExitError({
         agentId,
         stderr: diagnostic,
@@ -862,6 +871,14 @@ async function consumeDaemonRun({
     // is a no-op for unknown runIds.
     trackRunTerminal(runId, endStatus ?? (canceled ? 'canceled' : 'unknown'));
   }
+}
+
+function combineFailureDiagnostics(stderr: string, statusDiagnostic: string): string {
+  const stderrDiagnostic = stderr.trim();
+  const persistedDiagnostic = statusDiagnostic.trim();
+  if (!stderrDiagnostic) return persistedDiagnostic;
+  if (!persistedDiagnostic || stderrDiagnostic.includes(persistedDiagnostic)) return stderrDiagnostic;
+  return `${stderrDiagnostic}\n${persistedDiagnostic}`;
 }
 
 function isChatRunStatus(value: unknown): value is ChatRunStatus {

@@ -502,6 +502,92 @@ describe('streamViaDaemon', () => {
     expect(handlers.onDone).not.toHaveBeenCalled();
   });
 
+  it('does not classify unrelated stack line 429 as a quota failure', async () => {
+    const handlers = createDaemonHandlers();
+    const stderr = [
+      'TypeError: Cannot read properties of undefined',
+      '    at render (file:///workspace/src/foo.ts:429:10)',
+    ].join('\n');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ runId: 'run-1' }))
+        .mockResolvedValueOnce(
+          sseResponse(
+            [
+              'event: stderr',
+              `data: ${JSON.stringify({ chunk: stderr })}`,
+              '',
+              'event: end',
+              'data: {"code":1,"status":"failed"}',
+              '',
+              '',
+            ].join('\n'),
+          ),
+        ),
+    );
+
+    await streamViaDaemon({
+      agentId: 'mock',
+      history: [{ id: '1', role: 'user', content: 'hello' }],
+      systemPrompt: '',
+      signal: new AbortController().signal,
+      handlers,
+    });
+
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      category?: string;
+      details?: string;
+    };
+    expect(error.category).toBe('agent_crashed');
+    expect(error.message).toBe('The agent process exited before finishing.');
+    expect(error.details).toBe(stderr);
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
+  it('does not classify unrelated stack line 401 as an auth failure', async () => {
+    const handlers = createDaemonHandlers();
+    const stderr = [
+      'ReferenceError: result is not defined',
+      '    at invoke (file:///workspace/src/bar.ts:401:3)',
+    ].join('\n');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ runId: 'run-1' }))
+        .mockResolvedValueOnce(
+          sseResponse(
+            [
+              'event: stderr',
+              `data: ${JSON.stringify({ chunk: stderr })}`,
+              '',
+              'event: end',
+              'data: {"code":1,"status":"failed"}',
+              '',
+              '',
+            ].join('\n'),
+          ),
+        ),
+    );
+
+    await streamViaDaemon({
+      agentId: 'mock',
+      history: [{ id: '1', role: 'user', content: 'hello' }],
+      systemPrompt: '',
+      signal: new AbortController().signal,
+      handlers,
+    });
+
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      category?: string;
+      details?: string;
+    };
+    expect(error.category).toBe('agent_crashed');
+    expect(error.message).toBe('The agent process exited before finishing.');
+    expect(error.details).toBe(stderr);
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
   it('keeps full stderr diagnostics for unclassified agent crashes without appending a 400-character tail', async () => {
     const handlers = createDaemonHandlers();
     const stderr = `${'x'.repeat(430)}\nfinal stack frame\nat main (agent.js:99:1)`;
@@ -1047,6 +1133,72 @@ describe('streamViaDaemon', () => {
     expect(error.retryDelayMs).toBe(10000);
     expect(error.message).toContain('capacity');
     expect(error.message).not.toBe('agent exited with code 1');
+    expect(error.details).toContain('AGENT_EXECUTION_FAILED');
+    expect(error.details).toContain(runError);
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
+  it('combines partial resumed stderr with fallback run status errors', async () => {
+    const handlers = createDaemonHandlers();
+    const replayedStderr = 'late stderr chunk without the provider payload';
+    const runError = [
+      'Error: request failed',
+      '  cause: {',
+      '    code: 429,',
+      "    message: 'You have exhausted your capacity on this model.'",
+      '  },',
+      '  retryDelayMs: 10000',
+      '}',
+    ].join('\n');
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/runs/run-1/events?after=7') {
+        return sseResponse([
+          'id: 8',
+          'event: stderr',
+          `data: ${JSON.stringify({ chunk: replayedStderr })}`,
+          '',
+          '',
+        ].join('\n'));
+      }
+      if (url === '/api/runs/run-1/events?after=8') return sseResponse('');
+      if (url === '/api/runs/run-1') {
+        return jsonResponse({
+          id: 'run-1',
+          projectId: null,
+          conversationId: null,
+          assistantMessageId: null,
+          agentId: 'gemini',
+          status: 'failed',
+          createdAt: 1,
+          updatedAt: 2,
+          exitCode: 1,
+          signal: null,
+          error: runError,
+          errorCode: 'AGENT_EXECUTION_FAILED',
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await reattachDaemonRun({
+      runId: 'run-1',
+      agentId: 'gemini',
+      signal: new AbortController().signal,
+      initialLastEventId: '7',
+      handlers,
+    });
+
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      category?: string;
+      details?: string;
+      retryDelayMs?: number;
+    };
+    expect(error.category).toBe('quota_exhausted');
+    expect(error.retryDelayMs).toBe(10000);
+    expect(error.message).toContain('capacity');
+    expect(error.details).toContain(replayedStderr);
     expect(error.details).toContain('AGENT_EXECUTION_FAILED');
     expect(error.details).toContain(runError);
     expect(handlers.onDone).not.toHaveBeenCalled();
