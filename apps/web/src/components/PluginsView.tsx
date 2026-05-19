@@ -522,20 +522,12 @@ export function PluginsView({
                 setPluginMarketplaceTrust(marketplace.id, trust),
               )
             }
+            onAuthOutcome={(outcome) => setNotice(outcome)}
             t={t}
           />
         ) : null}
 
-        {activeTab === 'team' ? (
-          <TeamPanel
-            marketplaces={marketplaces}
-            pendingAction={pendingSourceAction}
-            onAdd={(url, trust) =>
-              void handleMarketplaceMutation('team:add', () => addPluginMarketplace({ url, trust }))
-            }
-            onAuthOutcome={(outcome) => setNotice(outcome)}
-          />
-        ) : null}
+        {activeTab === 'team' ? <TeamPanel t={t} /> : null}
       </div>
 
       {detailsRecord ? (
@@ -1335,6 +1327,7 @@ function SourcesPanel({
   onRefresh,
   onRemove,
   onTrust,
+  onAuthOutcome,
   t,
 }: {
   marketplaces: PluginMarketplace[];
@@ -1344,12 +1337,57 @@ function SourcesPanel({
   onRefresh: (marketplace: PluginMarketplace) => void;
   onRemove: (marketplace: PluginMarketplace) => void;
   onTrust: (marketplace: PluginMarketplace, trust: PluginMarketplaceTrust) => void;
+  onAuthOutcome: (outcome: { ok: boolean; message: string }) => void;
   t: ReturnType<typeof useI18n>['t'];
 }) {
   const [url, setUrl] = useState('');
   const [trust, setTrust] = useState<PluginMarketplaceTrust>('restricted');
+  const [authByMarketplace, setAuthByMarketplace] = useState<
+    Record<string, PluginMarketplaceAuthOutcome>
+  >({});
+  const [pendingAuthId, setPendingAuthId] = useState<string | null>(null);
   const trimmedUrl = url.trim();
   const sourceUrlTrackedRef = useRef(false);
+
+  // Private catalogs are GitHub-hosted sources; only those carry a gh auth
+  // state, so the pill and Authenticate action are scoped to those rows.
+  useEffect(() => {
+    let cancelled = false;
+    const githubHosted = marketplaces.filter((marketplace) =>
+      isGithubHostedCatalog(marketplace.url),
+    );
+    if (githubHosted.length === 0) {
+      setAuthByMarketplace({});
+      return () => {
+        cancelled = true;
+      };
+    }
+    void Promise.all(
+      githubHosted.map(async (marketplace) => {
+        const auth = await getPluginMarketplaceAuth(marketplace.id);
+        return [marketplace.id, auth] as const;
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      setAuthByMarketplace(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [marketplaces]);
+
+  async function authenticate(marketplace: PluginMarketplace) {
+    setPendingAuthId(marketplace.id);
+    const outcome = await loginPluginMarketplaceAuth(marketplace.id);
+    setPendingAuthId(null);
+    onAuthOutcome(outcome);
+    const refreshed = await getPluginMarketplaceAuth(marketplace.id);
+    setAuthByMarketplace((current) => ({
+      ...current,
+      [marketplace.id]: refreshed,
+    }));
+  }
+
   return (
     <section className="plugins-view__section" aria-labelledby="plugins-sources-title">
       <div className="plugins-view__section-head">
@@ -1422,35 +1460,61 @@ function SourcesPanel({
                   {marketplace.version ? <span>{t('pluginsView.catalogVersion', { version: marketplace.version })}</span> : null}
                 </div>
               </div>
-              <div className="plugins-view__source-actions">
-                <select
-                  value={marketplace.trust}
-                  onChange={(event) =>
-                    onTrust(marketplace, event.target.value as PluginMarketplaceTrust)
-                  }
-                  aria-label={t('pluginsView.trustFor', { name: marketplace.manifest.name ?? marketplace.url })}
-                  disabled={pendingAction?.startsWith(`trust:${marketplace.id}:`)}
-                >
-                  <option value="restricted">{t('pluginsView.trust.restricted')}</option>
-                  <option value="trusted">{t('pluginsView.trust.trusted')}</option>
-                  <option value="official">{t('pluginsView.trust.official')}</option>
-                </select>
-                <button
-                  type="button"
-                  className="plugins-view__secondary"
-                  onClick={() => onRefresh(marketplace)}
-                  disabled={pendingAction === `refresh:${marketplace.id}`}
-                >
-                  {pendingAction === `refresh:${marketplace.id}` ? t('pluginsView.refreshing') : t('designFiles.refresh')}
-                </button>
-                <button
-                  type="button"
-                  className="plugins-view__danger"
-                  onClick={() => onRemove(marketplace)}
-                  disabled={pendingAction === `remove:${marketplace.id}`}
-                >
-                  {pendingAction === `remove:${marketplace.id}` ? t('pluginsView.removing') : t('chat.comments.remove')}
-                </button>
+              <div className="plugins-view__source-aside">
+                {isGithubHostedCatalog(marketplace.url) ? (
+                  <div className="plugins-view__source-auth">
+                    <span
+                      className={`plugins-view__auth-pill${
+                        authByMarketplace[marketplace.id]?.authenticated ? ' is-authenticated' : ''
+                      }`}
+                    >
+                      {marketplaceAuthLabel(authByMarketplace[marketplace.id], t)}
+                    </span>
+                    <button
+                      type="button"
+                      className="plugins-view__secondary"
+                      onClick={() => void authenticate(marketplace)}
+                      disabled={pendingAuthId === marketplace.id}
+                    >
+                      <Icon name="github" size={13} />
+                      <span>
+                        {pendingAuthId === marketplace.id
+                          ? t('pluginsView.authOpening')
+                          : t('pluginsView.authenticate')}
+                      </span>
+                    </button>
+                  </div>
+                ) : null}
+                <div className="plugins-view__source-actions">
+                  <select
+                    value={marketplace.trust}
+                    onChange={(event) =>
+                      onTrust(marketplace, event.target.value as PluginMarketplaceTrust)
+                    }
+                    aria-label={t('pluginsView.trustFor', { name: marketplace.manifest.name ?? marketplace.url })}
+                    disabled={pendingAction?.startsWith(`trust:${marketplace.id}:`)}
+                  >
+                    <option value="restricted">{t('pluginsView.trust.restricted')}</option>
+                    <option value="trusted">{t('pluginsView.trust.trusted')}</option>
+                    <option value="official">{t('pluginsView.trust.official')}</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="plugins-view__secondary"
+                    onClick={() => onRefresh(marketplace)}
+                    disabled={pendingAction === `refresh:${marketplace.id}`}
+                  >
+                    {pendingAction === `refresh:${marketplace.id}` ? t('pluginsView.refreshing') : t('designFiles.refresh')}
+                  </button>
+                  <button
+                    type="button"
+                    className="plugins-view__danger"
+                    onClick={() => onRemove(marketplace)}
+                    disabled={pendingAction === `remove:${marketplace.id}`}
+                  >
+                    {pendingAction === `remove:${marketplace.id}` ? t('pluginsView.removing') : t('chat.comments.remove')}
+                  </button>
+                </div>
               </div>
             </article>
           ))}
@@ -1925,169 +1989,50 @@ function normalizePluginName(name: string): string {
   return name.trim().toLowerCase();
 }
 
-function TeamPanel({
-  marketplaces,
-  pendingAction,
-  onAdd,
-  onAuthOutcome,
-}: {
-  marketplaces: PluginMarketplace[];
-  pendingAction: string | null;
-  onAdd: (url: string, trust: PluginMarketplaceTrust) => void;
-  onAuthOutcome: (outcome: { ok: boolean; message: string }) => void;
-}) {
-  const { t } = useI18n();
-  const [url, setUrl] = useState('');
-  const [trust, setTrust] = useState<PluginMarketplaceTrust>('restricted');
-  const [authByMarketplace, setAuthByMarketplace] = useState<Record<string, PluginMarketplaceAuthOutcome>>({});
-  const [pendingAuthId, setPendingAuthId] = useState<string | null>(null);
-  const trimmedUrl = url.trim();
-
-  useEffect(() => {
-    let cancelled = false;
-    if (marketplaces.length === 0) {
-      setAuthByMarketplace({});
-      return () => {
-        cancelled = true;
-      };
-    }
-    void Promise.all(
-      marketplaces.map(async (marketplace) => {
-        const auth = await getPluginMarketplaceAuth(marketplace.id);
-        return [marketplace.id, auth] as const;
-      }),
-    ).then((entries) => {
-      if (cancelled) return;
-      setAuthByMarketplace(Object.fromEntries(entries));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [marketplaces]);
-
-  async function authenticate(marketplace: PluginMarketplace) {
-    setPendingAuthId(marketplace.id);
-    const outcome = await loginPluginMarketplaceAuth(marketplace.id);
-    setPendingAuthId(null);
-    onAuthOutcome(outcome);
-    const refreshed = await getPluginMarketplaceAuth(marketplace.id);
-    setAuthByMarketplace((current) => ({
-      ...current,
-      [marketplace.id]: refreshed,
-    }));
-  }
-
+function TeamPanel({ t }: { t: ReturnType<typeof useI18n>['t'] }) {
   return (
-    <section className="plugins-view__section" aria-labelledby="plugins-team-title">
-      <div className="plugins-view__section-head">
-        <div>
-          <h2 id="plugins-team-title">{t('plugins.team.title')}</h2>
-          <p>{t('plugins.team.subtitle')}</p>
-        </div>
-        <span className="plugins-view__section-count">{marketplaces.length}</span>
+    <section className="plugins-view__team" aria-labelledby="plugins-team-title">
+      <span className="plugins-view__future-icon" aria-hidden>
+        <Icon name="sparkles" size={18} />
+      </span>
+      <div>
+        <p className="plugins-view__kicker">{t('tasks.comingSoon')}</p>
+        <h2 id="plugins-team-title">{t('pluginsView.teamTitle')}</h2>
+        <p>
+          {t('pluginsView.teamBody')}
+        </p>
       </div>
-
-      <form
-        className="plugins-view__source-manager"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!trimmedUrl) return;
-          onAdd(trimmedUrl, trust);
-          setUrl('');
-        }}
-      >
-        <label htmlFor="plugin-private-marketplace-url">{t('plugins.team.privateCatalogUrl')}</label>
-        <div className="plugins-view__source-row">
-          <input
-            id="plugin-private-marketplace-url"
-            value={url}
-            onChange={(event) => setUrl(event.target.value)}
-            placeholder={t('plugins.team.privateCatalogPlaceholder')}
-            disabled={pendingAction === 'team:add'}
-          />
-          <select
-            value={trust}
-            onChange={(event) => setTrust(event.target.value as PluginMarketplaceTrust)}
-            disabled={pendingAction === 'team:add'}
-            aria-label={t('plugins.team.defaultTrust')}
-          >
-            <option value="restricted">Restricted</option>
-            <option value="trusted">Trusted</option>
-            <option value="official">Official</option>
-          </select>
-          <button
-            type="submit"
-            className="plugins-view__primary"
-            disabled={!trimmedUrl || pendingAction === 'team:add'}
-          >
-            {pendingAction === 'team:add' ? t('plugins.team.adding') : t('plugins.team.addPrivateCatalog')}
-          </button>
-        </div>
-      </form>
-
-      {marketplaces.length === 0 ? (
-        <div className="plugins-view__empty">
-          {t('plugins.team.empty')}
-        </div>
-      ) : (
-        <div className="plugins-view__marketplaces">
-          {marketplaces.map((marketplace) => {
-            const auth = authByMarketplace[marketplace.id];
-            return (
-              <article key={marketplace.id} className="plugins-view__marketplace">
-                <div>
-                  <h3>{marketplace.manifest.name ?? marketplace.url}</h3>
-                  <a href={marketplace.url} target="_blank" rel="noreferrer">
-                    {marketplace.url}
-                  </a>
-                  <div className="plugins-view__meta">
-                    <TrustBadge trust={marketplace.trust} />
-                    <span>{t('plugins.team.pluginsCount', { count: marketplace.manifest.plugins?.length ?? 0 })}</span>
-                    <span>
-                      {marketplace.version
-                        ? t('plugins.team.catalogVersion', { version: marketplace.version })
-                        : t('plugins.team.catalogVersionUnknown')}
-                    </span>
-                  </div>
-                </div>
-                <div className="plugins-view__team-actions">
-                  <span
-                    className={`plugins-view__auth-pill ${
-                      auth?.authenticated ? 'is-authenticated' : 'is-muted'
-                    }`}
-                  >
-                    {marketplaceAuthLabel(auth, t)}
-                  </span>
-                  <button
-                    type="button"
-                    className="plugins-view__secondary"
-                    onClick={() => void authenticate(marketplace)}
-                    disabled={pendingAuthId === marketplace.id}
-                  >
-                    <Icon name="github" size={13} />
-                    <span>{pendingAuthId === marketplace.id ? t('plugins.team.opening') : t('plugins.team.authenticate')}</span>
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
     </section>
   );
 }
 
 function marketplaceAuthLabel(auth: PluginMarketplaceAuthOutcome | undefined, t: Translate): string {
-  if (!auth) return t('plugins.team.checkingAuth');
-  if (!auth.ok) return t('plugins.team.authUnavailable');
+  if (!auth) return t('pluginsView.authChecking');
+  if (!auth.ok) return t('pluginsView.authUnavailable');
   if (auth.authenticated) {
     return auth.login
-      ? t('plugins.team.authenticatedAs', { login: auth.login })
-      : t('plugins.team.authenticatedFor', { host: auth.host ?? 'GitHub' });
+      ? t('pluginsView.authenticatedAs', { login: auth.login })
+      : t('pluginsView.authenticatedFor', { host: auth.host ?? 'GitHub' });
   }
-  if (auth.status === 'not-installed') return t('plugins.team.ghNotInstalled');
+  if (auth.status === 'not-installed') return t('pluginsView.authGhMissing');
   if (auth.status === 'not-authenticated') {
-    return t('plugins.team.notAuthenticatedFor', { host: auth.host ?? 'GitHub' });
+    return t('pluginsView.authNotAuthenticated', { host: auth.host ?? 'GitHub' });
   }
-  return auth.message || t('plugins.team.authUnknown');
+  return auth.message || t('pluginsView.authUnknown');
+}
+
+// Private catalogs are GitHub-hosted; a gh-backed auth pill only makes sense
+// for those hosts. Public non-GitHub sources skip the auth controls entirely.
+function isGithubHostedCatalog(rawUrl: string): boolean {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    return (
+      host === 'github.com' ||
+      host === 'raw.githubusercontent.com' ||
+      host === 'api.github.com' ||
+      host.endsWith('.github.com')
+    );
+  } catch {
+    return false;
+  }
 }

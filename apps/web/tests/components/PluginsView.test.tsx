@@ -603,51 +603,69 @@ describe('PluginsView', () => {
     await waitFor(() => expect(mockedRemoveMarketplace).toHaveBeenCalledWith('catalog-1'));
   });
 
-  it('manages private team marketplaces with auth status from the Team tab', async () => {
+  it('shows GitHub auth status and authenticates private catalog sources', async () => {
+    mockedListMarketplaces.mockResolvedValue([
+      {
+        id: 'catalog-1',
+        url: 'https://raw.githubusercontent.com/acme/private-registry/main/open-design-marketplace.json',
+        trust: 'trusted',
+        manifest: {
+          name: 'Acme Private Catalog',
+          version: '2.0.0',
+          plugins: [{
+            name: 'private-plugin',
+            title: 'Private Plugin',
+            source: 'github:acme/private-plugin',
+            version: '0.2.0',
+            description: 'Private catalog plugin.',
+            tags: ['deck'],
+          }],
+        },
+      },
+    ]);
     render(<PluginsView />);
 
-    const privateUrl =
-      'https://raw.githubusercontent.com/acme/private-registry/main/open-design-marketplace.json';
-    fireEvent.click(await screen.findByTestId('plugins-tab-team'));
+    fireEvent.click(await screen.findByTestId('plugins-tab-sources'));
 
-    expect(await screen.findByText('Private team marketplaces')).toBeTruthy();
     expect(await screen.findByText('Authenticated as team-user')).toBeTruthy();
-
-    fireEvent.change(screen.getByLabelText('Private catalog URL'), {
-      target: { value: privateUrl },
-    });
-    fireEvent.change(screen.getByLabelText('Default trust for private catalog'), {
-      target: { value: 'trusted' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Add private catalog' }));
-
-    await waitFor(() =>
-      expect(mockedAddMarketplace).toHaveBeenCalledWith({
-        url: privateUrl,
-        trust: 'trusted',
-      }),
-    );
+    await waitFor(() => expect(mockedGetMarketplaceAuth).toHaveBeenCalledWith('catalog-1'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Authenticate' }));
     await waitFor(() =>
       expect(mockedLoginMarketplaceAuth).toHaveBeenCalledWith('catalog-1'),
     );
-    expect(await screen.findByText(/one-time device code was copied to the clipboard/i)).toBeTruthy();
+    expect(
+      await screen.findByText(/one-time device code was copied to the clipboard/i),
+    ).toBeTruthy();
   });
 
-  it('localizes private team marketplace controls', async () => {
+  it('omits GitHub auth controls for public non-GitHub catalog sources', async () => {
+    render(<PluginsView />);
+
+    fireEvent.click(await screen.findByTestId('plugins-tab-sources'));
+    expect(await screen.findByText('Example Catalog')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Authenticate' })).toBeNull();
+    expect(mockedGetMarketplaceAuth).not.toHaveBeenCalled();
+  });
+
+  it('localizes the private catalog auth pill', async () => {
+    mockedListMarketplaces.mockResolvedValue([
+      {
+        id: 'catalog-1',
+        url: 'https://raw.githubusercontent.com/acme/private-registry/main/open-design-marketplace.json',
+        trust: 'trusted',
+        manifest: { name: 'Acme Private Catalog', version: '2.0.0', plugins: [] },
+      },
+    ]);
     render(
       <I18nProvider initial="zh-CN">
         <PluginsView />
       </I18nProvider>,
     );
 
-    fireEvent.click(await screen.findByTestId('plugins-tab-team'));
-
-    expect(await screen.findByText('私有团队 marketplace')).toBeTruthy();
-    expect(screen.getByLabelText('私有 catalog URL')).toBeTruthy();
-    expect(screen.getByLabelText('私有 catalog 的默认信任级别')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '添加私有 catalog' })).toBeTruthy();
+    fireEvent.click(await screen.findByTestId('plugins-tab-sources'));
+    expect(await screen.findByText('已认证为 team-user')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '认证' })).toBeTruthy();
   });
 
   it('uploads zip and folder plugins from the import dialog', async () => {

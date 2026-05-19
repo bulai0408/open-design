@@ -460,18 +460,25 @@
   font-weight: 650;
 }
 
-.plugins-view__source-actions {
+.plugins-view__source-aside {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-end;
   gap: 7px;
   flex: 0 0 auto;
 }
 
-.plugins-view__team-actions {
+.plugins-view__source-auth {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 7px;
+}
+
+.plugins-view__source-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   flex: 0 0 auto;
 }
 
@@ -508,6 +515,7 @@
 
 .plugins-view__source-actions select {
   min-width: 112px;
+  width: auto;
 }
 
 .plugins-view__install-card {
@@ -812,8 +820,8 @@
   .plugins-view__marketplace,
   .plugins-view__available-card,
   .plugins-view__available-controls,
-  .plugins-view__source-actions,
-  .plugins-view__team-actions {
+  .plugins-view__source-auth,
+  .plugins-view__source-actions {
     flex-direction: column;
   }
 
@@ -828,14 +836,16 @@
   .plugins-view__available-controls,
   .plugins-view__search,
   .plugins-view__filter,
+  .plugins-view__source-aside,
+  .plugins-view__source-auth,
   .plugins-view__source-actions,
-  .plugins-view__team-actions,
   .plugins-view__auth-pill {
     width: 100%;
   }
 
   .plugins-view__available-controls,
-  .plugins-view__team-actions {
+  .plugins-view__source-auth,
+  .plugins-view__source-actions {
     align-items: stretch;
   }
 
