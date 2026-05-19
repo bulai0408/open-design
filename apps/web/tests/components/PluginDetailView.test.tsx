@@ -50,6 +50,69 @@ function makeConnectorOnlyPlugin(capabilitiesGranted: string[]): InstalledPlugin
   };
 }
 
+// Fixture matrix mirroring the daemon `requiredCapabilities()` derivation —
+// each manifest declares a required capability only through an implied
+// section (no duplicate entry in `od.capabilities`), so the checklist must
+// derive a grantable row or the restricted plugin is stuck on the CLI path.
+function makeMcpOnlyPlugin(capabilitiesGranted: string[]): InstalledPluginRecord {
+  return {
+    ...makePlugin(capabilitiesGranted),
+    manifest: {
+      name: 'sample-plugin',
+      version: '1.0.0',
+      description: 'A restricted MCP-context plugin fixture.',
+      od: {
+        kind: 'scenario',
+        context: {
+          mcp: [{ name: 'figma' }],
+        },
+      },
+    },
+  };
+}
+
+function makeGenuiComponentPlugin(capabilitiesGranted: string[]): InstalledPluginRecord {
+  return {
+    ...makePlugin(capabilitiesGranted),
+    manifest: {
+      name: 'sample-plugin',
+      version: '1.0.0',
+      description: 'A restricted GenUI custom-component plugin fixture.',
+      od: {
+        kind: 'scenario',
+        genui: {
+          surfaces: [
+            {
+              id: 'critique-panel',
+              kind: 'form',
+              persist: 'run',
+              component: { path: './surfaces/critique-panel.tsx' },
+            },
+          ],
+        },
+        capabilities: ['genui:custom-component'],
+      },
+    },
+  };
+}
+
+function makePipelinePlugin(capabilitiesGranted: string[]): InstalledPluginRecord {
+  return {
+    ...makePlugin(capabilitiesGranted),
+    manifest: {
+      name: 'sample-plugin',
+      version: '1.0.0',
+      description: 'A restricted pipeline plugin fixture.',
+      od: {
+        kind: 'scenario',
+        pipeline: {
+          stages: [{ id: 'draft', atoms: ['generate'] }],
+        },
+      },
+    },
+  };
+}
+
 let currentPlugin: InstalledPluginRecord;
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -164,5 +227,64 @@ describe('PluginDetailView trust controls', () => {
         body: JSON.stringify({ capabilities: ['connector:slack'], action: 'grant' }),
       }),
     );
+  });
+
+  it('grants a capability derived from an MCP context server', async () => {
+    currentPlugin = makeMcpOnlyPlugin(['prompt:inject']);
+
+    render(<PluginDetailView pluginId="sample-plugin" />);
+
+    const figma = await screen.findByLabelText('mcp:figma');
+    expect(screen.getByTestId('plugin-capability-mcp:figma').textContent).toContain('Requested');
+
+    fireEvent.click(figma);
+    fireEvent.click(screen.getByRole('button', { name: 'Grant selected capabilities' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plugin-capability-mcp:figma').textContent).toContain('Granted');
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/plugins/sample-plugin/trust',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ capabilities: ['mcp:figma'], action: 'grant' }),
+      }),
+    );
+  });
+
+  it('derives a GenUI surface kind row and grants the custom-component capability', async () => {
+    currentPlugin = makeGenuiComponentPlugin(['prompt:inject']);
+
+    render(<PluginDetailView pluginId="sample-plugin" />);
+
+    // The surface kind feeds `genui:<kind>` (mirroring the daemon resolver)
+    // and the manifest-declared `genui:custom-component` is the grantable row.
+    await screen.findByLabelText('genui:custom-component');
+    expect(screen.getByTestId('plugin-capability-genui:form')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('genui:custom-component'));
+    fireEvent.click(screen.getByRole('button', { name: 'Grant selected capabilities' }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('plugin-capability-genui:custom-component').textContent,
+      ).toContain('Granted');
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/plugins/sample-plugin/trust',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ capabilities: ['genui:custom-component'], action: 'grant' }),
+      }),
+    );
+  });
+
+  it('derives a pipeline:* row from declared pipeline stages', async () => {
+    currentPlugin = makePipelinePlugin(['prompt:inject']);
+
+    render(<PluginDetailView pluginId="sample-plugin" />);
+
+    await screen.findByLabelText('pipeline:*');
+    expect(screen.getByTestId('plugin-capability-pipeline:*').textContent).toContain('Requested');
   });
 });

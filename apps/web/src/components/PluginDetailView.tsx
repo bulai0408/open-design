@@ -371,13 +371,25 @@ export function PluginDetailView(props: Props) {
   );
 }
 
+// Mirror of the daemon capability resolver `requiredCapabilities()` in
+// `apps/daemon/src/plugins/trust.ts`. The apply gate in
+// `resolve-snapshot.ts` computes its 409 `capabilities-required` set from
+// that exact derivation, so the detail-page checklist must surface a
+// selectable row for every capability the gate can block on — manifest
+// `od.capabilities`, plus the implied `mcp:<name>`, `connector:<id>`,
+// `genui:<kind>`, and `pipeline:*` requirements. Two entries the daemon
+// resolver emits are intentionally omitted here: the implicit
+// `prompt:inject` floor (always granted for restricted installs, never a
+// 409 cause) and the `?`-suffixed optional-connector markers (not a
+// grantable capability shape). Keep this aligned with that resolver.
 function requiredGrantableCapabilities(plugin: InstalledPluginRecord): string[] {
   const od = plugin.manifest?.od;
   const capabilities = new Set<string>();
 
-  for (const capability of od?.capabilities ?? []) {
-    if (typeof capability === 'string' && capability.length > 0) {
-      capabilities.add(capability);
+  for (const mcp of od?.context?.mcp ?? []) {
+    const name = mcp?.name;
+    if (typeof name === 'string' && name.length > 0) {
+      capabilities.add(`mcp:${name}`);
     }
   }
 
@@ -385,6 +397,23 @@ function requiredGrantableCapabilities(plugin: InstalledPluginRecord): string[] 
     const id = connector?.id;
     if (typeof id === 'string' && id.length > 0) {
       capabilities.add(`connector:${id}`);
+    }
+  }
+
+  for (const surface of od?.genui?.surfaces ?? []) {
+    const kind = surface?.kind;
+    if (typeof kind === 'string' && kind.length > 0) {
+      capabilities.add(`genui:${kind}`);
+    }
+  }
+
+  if ((od?.pipeline?.stages?.length ?? 0) > 0) {
+    capabilities.add('pipeline:*');
+  }
+
+  for (const capability of od?.capabilities ?? []) {
+    if (typeof capability === 'string' && capability.length > 0) {
+      capabilities.add(capability);
     }
   }
 
