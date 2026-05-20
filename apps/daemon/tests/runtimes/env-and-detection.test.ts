@@ -109,6 +109,22 @@ test('inspectAgentExecutableResolution reports configured and PATH Codex binarie
         configuredOverridePath: configured,
         pathResolvedPath: fallback,
         selectedPath: configured,
+        executableCandidates: [
+          {
+            path: configured,
+            bin: 'codex-custom',
+            source: 'configured',
+            available: true,
+            selected: true,
+          },
+          {
+            path: fallback,
+            bin: 'codex',
+            source: 'path',
+            available: true,
+            selected: false,
+          },
+        ],
       });
     });
   } finally {
