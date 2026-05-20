@@ -300,6 +300,52 @@ describe('RoutineService scheduled run idempotency', () => {
       errors.mockRestore();
     }
   });
+
+  it('retries the same scheduled slot when duplicate loser cleanup fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));
+
+    const persistence = new SharedRoutinePersistence([fixtureRoutine()]);
+    persistence.claimedSlots.add('routine-1:1779012060000');
+    const service = new RoutineService(persistence);
+    let discardAttempts = 0;
+    let discardFailures = 1;
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    service.setRunHandler(async ({ runId }) => {
+      return {
+        ...handlerStart(runId),
+        discard: () => {
+          discardAttempts += 1;
+          if (discardFailures > 0) {
+            discardFailures -= 1;
+            throw new Error('duplicate loser cleanup failed');
+          }
+        },
+      };
+    });
+
+    try {
+      service.start();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(discardAttempts).toBe(1);
+      expect(persistence.runs).toHaveLength(0);
+      expect(persistence.claimedSlots).toEqual(new Set(['routine-1:1779012060000']));
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(discardAttempts).toBe(2);
+      expect(persistence.runs).toHaveLength(0);
+      expect(errors.mock.calls.some((call) =>
+        call.some((value) => String(value).includes('duplicate loser cleanup failed')),
+      )).toBe(true);
+    } finally {
+      service.stop();
+      errors.mockRestore();
+    }
+  });
 });
 
 describe('routine validation', () => {

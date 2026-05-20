@@ -77,6 +77,7 @@ export interface RoutineRunHandlerStart {
   conversationId: string;
   agentRunId: string;
   completion: Promise<RoutineRunCompletion>;
+  prepare?: (run: RoutineRun) => void | Promise<void>;
   start?: () => void;
   discard?: () => void;
 }
@@ -558,19 +559,54 @@ export class RoutineService {
         error: null,
         errorCode: null,
       };
+      const scheduledSlotAt = options.scheduledSlotAt;
+      const wasScheduled = scheduledSlotAt != null;
       let inserted = true;
       try {
         inserted = this.persistence.insertRun(run, options) !== false;
       } catch (error) {
-        handlerStart.discard?.();
-        if (options.scheduledSlotAt != null) {
-          throw new ScheduledRunPersistenceError(routine.id, options.scheduledSlotAt, error);
+        try {
+          handlerStart.discard?.();
+        } catch (discardError) {
+          if (wasScheduled) {
+            throw new ScheduledRunPersistenceError(routine.id, scheduledSlotAt, discardError);
+          }
+          throw discardError;
+        }
+        if (wasScheduled) {
+          throw new ScheduledRunPersistenceError(routine.id, scheduledSlotAt, error);
         }
         throw error;
       }
       if (!inserted) {
-        handlerStart.discard?.();
+        try {
+          handlerStart.discard?.();
+        } catch (discardError) {
+          if (wasScheduled) {
+            throw new ScheduledRunPersistenceError(routine.id, scheduledSlotAt, discardError);
+          }
+          throw discardError;
+        }
         return handlerStart;
+      }
+      try {
+        await handlerStart.prepare?.(run);
+        if (wasScheduled) {
+          this.persistence.updateRun(runId, {
+            projectId: run.projectId,
+            conversationId: run.conversationId,
+            agentRunId: run.agentRunId,
+          });
+        }
+      } catch (error) {
+        this.persistence.updateRun(runId, {
+          status: 'failed',
+          completedAt: Date.now(),
+          summary: null,
+          error: error instanceof Error ? error.message : String(error),
+          errorCode: null,
+        });
+        throw error;
       }
       handlerStart.completion
         .then((completion) => {

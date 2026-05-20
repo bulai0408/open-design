@@ -91,6 +91,93 @@ function makeRun(id: string, overrides: Record<string, unknown> = {}) {
 }
 
 describe('routine scheduled loser cleanup', () => {
+  it('prepares a winning scheduled reuse run after the slot claim is persisted', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));
+
+    const started = await startServer({ port: 0, returnServer: true }) as {
+      url: string;
+      server: http.Server;
+      shutdown?: () => Promise<void> | void;
+    };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = openDatabase(tmp, { dataDir });
+    const projectId = 'routine-winner-project';
+    const routinePlugin = pluginRecord('routine-winner-plugin');
+    upsertInstalledPlugin(db, routinePlugin);
+    insertProject(db, {
+      id: projectId,
+      name: 'Routine winner target',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    const previousSnapshot = createSnapshot(db, {
+      projectId,
+      pluginId: routinePlugin.id,
+      pluginVersion: routinePlugin.version,
+      manifestSourceDigest: '2'.repeat(64),
+      taskKind: 'new-generation',
+      inputs: { prompt: 'previous prompt' },
+      resolvedContext: { items: [] },
+      capabilitiesGranted: ['prompt:inject'],
+      capabilitiesRequired: ['prompt:inject'],
+      assetsStaged: [],
+      connectorsRequired: [],
+      connectorsResolved: [],
+      mcpServers: [],
+      query: 'Previous {{prompt}}',
+    });
+    linkSnapshotToProject(db, previousSnapshot.snapshotId, projectId);
+
+    try {
+      const createRoutine = await fetch(`${started.url}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Scheduled winner routine',
+          prompt: 'fresh prompt',
+          schedule: { kind: 'hourly', minute: 1 },
+          target: { mode: 'reuse', projectId },
+          context: { pluginIds: [routinePlugin.id] },
+          agentId: 'codex',
+          enabled: true,
+        }),
+      });
+      expect(createRoutine.status).toBe(201);
+      const created = await createRoutine.json() as { routine: { id: string } };
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      vi.useRealTimers();
+      let run: { projectId: string; conversationId: string; agentRunId: string } | undefined;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        run = db.prepare(
+          `SELECT project_id AS projectId, conversation_id AS conversationId, agent_run_id AS agentRunId
+             FROM routine_runs
+            WHERE routine_id = ?`,
+        ).get(created.routine.id) as typeof run;
+        if (run?.conversationId?.startsWith('routine-conv-')) break;
+        await sleep(10);
+      }
+      expect(run).toBeDefined();
+      if (!run) return;
+      expect(run.projectId).toBe(projectId);
+      expect(run.conversationId).toMatch(/^routine-conv-/);
+      expect(run.agentRunId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(db.prepare(
+        `SELECT COUNT(*) AS n FROM conversations WHERE project_id = ?`,
+      ).get(projectId)).toEqual({ n: 1 });
+      expect(db.prepare(
+        `SELECT COUNT(*) AS n FROM applied_plugin_snapshots WHERE project_id = ?`,
+      ).get(projectId)).toEqual({ n: 2 });
+      expect(getProject(db, projectId)?.appliedPluginSnapshotId)
+        .not.toBe(previousSnapshot.snapshotId);
+    } finally {
+      await Promise.resolve(started.shutdown?.());
+      await new Promise<void>((resolve) => started.server.close(() => resolve()));
+    }
+  });
+
   it('does not let a discarded reuse-mode loser replace the shared project snapshot pin', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));
@@ -148,7 +235,7 @@ describe('routine scheduled loser cleanup', () => {
       const created = await createRoutine.json() as { routine: { id: string } };
       const slotAt = Date.UTC(2026, 4, 17, 10, 1);
       insertScheduledRoutineRun(db, {
-        ...makeRun('winning-run', {
+        ...makeRun('rollback-winning-run', {
           routineId: created.routine.id,
           projectId,
           conversationId: 'winning-conversation',
@@ -157,30 +244,93 @@ describe('routine scheduled loser cleanup', () => {
       }, slotAt);
 
       await vi.advanceTimersByTimeAsync(60_000);
-      vi.useRealTimers();
-      let snapshotCount = 0;
-      for (let attempt = 0; attempt < 200; attempt += 1) {
-        await sleep(10);
-        snapshotCount = (db.prepare(
-          `SELECT COUNT(*) AS n FROM applied_plugin_snapshots WHERE project_id = ?`,
-        ).get(projectId) as { n: number }).n;
-        if (snapshotCount > 1) break;
-      }
-
-      expect(snapshotCount).toBeGreaterThan(1);
+      const snapshotCount = (db.prepare(
+        `SELECT COUNT(*) AS n FROM applied_plugin_snapshots WHERE project_id = ?`,
+      ).get(projectId) as { n: number }).n;
+      expect(snapshotCount).toBe(1);
       expect(getProject(db, projectId)?.appliedPluginSnapshotId)
         .toBe(previousSnapshot.snapshotId);
-      const loserSnapshot = db.prepare(
-        `SELECT run_id AS runId, expires_at AS expiresAt
-           FROM applied_plugin_snapshots
-          WHERE project_id = ?
-            AND id <> ?`,
-      ).get(projectId, previousSnapshot.snapshotId) as {
-        runId: string | null;
-        expiresAt: number | null;
-      };
-      expect(loserSnapshot.runId).toBeNull();
-      expect(loserSnapshot.expiresAt).not.toBeNull();
+    } finally {
+      await Promise.resolve(started.shutdown?.());
+      await new Promise<void>((resolve) => started.server.close(() => resolve()));
+    }
+  });
+
+  it('does not create provisional database state for a reuse-mode loser before the slot is won', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));
+
+    const started = await startServer({ port: 0, returnServer: true }) as {
+      url: string;
+      server: http.Server;
+      shutdown?: () => Promise<void> | void;
+    };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = openDatabase(tmp, { dataDir });
+    const projectId = 'routine-rollback-failure-project';
+    const routinePlugin = pluginRecord('routine-rollback-plugin');
+    upsertInstalledPlugin(db, routinePlugin);
+    insertProject(db, {
+      id: projectId,
+      name: 'Routine rollback target',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    const previousSnapshot = createSnapshot(db, {
+      projectId,
+      pluginId: routinePlugin.id,
+      pluginVersion: routinePlugin.version,
+      manifestSourceDigest: '1'.repeat(64),
+      taskKind: 'new-generation',
+      inputs: { prompt: 'previous prompt' },
+      resolvedContext: { items: [] },
+      capabilitiesGranted: ['prompt:inject'],
+      capabilitiesRequired: ['prompt:inject'],
+      assetsStaged: [],
+      connectorsRequired: [],
+      connectorsResolved: [],
+      mcpServers: [],
+      query: 'Previous {{prompt}}',
+    });
+    linkSnapshotToProject(db, previousSnapshot.snapshotId, projectId);
+
+    try {
+      const createRoutine = await fetch(`${started.url}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Scheduled rollback routine',
+          prompt: 'fresh prompt',
+          schedule: { kind: 'hourly', minute: 1 },
+          target: { mode: 'reuse', projectId },
+          context: { pluginIds: [routinePlugin.id] },
+          agentId: 'codex',
+          enabled: true,
+        }),
+      });
+      expect(createRoutine.status).toBe(201);
+      const created = await createRoutine.json() as { routine: { id: string } };
+      const slotAt = Date.UTC(2026, 4, 17, 10, 1);
+      insertScheduledRoutineRun(db, {
+        ...makeRun('winning-run', {
+          routineId: created.routine.id,
+          projectId,
+          conversationId: 'rollback-winning-conversation',
+          agentRunId: 'rollback-winning-agent-run',
+        }),
+      }, slotAt);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(getProject(db, projectId)?.appliedPluginSnapshotId)
+        .toBe(previousSnapshot.snapshotId);
+      expect(db.prepare(
+        `SELECT COUNT(*) AS n FROM conversations WHERE project_id = ?`,
+      ).get(projectId)).toEqual({ n: 0 });
+      expect(db.prepare(
+        `SELECT COUNT(*) AS n FROM applied_plugin_snapshots WHERE project_id = ?`,
+      ).get(projectId)).toEqual({ n: 1 });
     } finally {
       await Promise.resolve(started.shutdown?.());
       await new Promise<void>((resolve) => started.server.close(() => resolve()));

@@ -12064,16 +12064,13 @@ export async function startServer({
     const stamp = formatLocalProjectTimestamp(new Date(now).toISOString());
     let projectId;
     let projectName;
+    const scheduledPlaceholderProjectId = `routine-pending-project-${runId}`;
+    const scheduledPlaceholderConversationId = `routine-pending-conv-${runId}`;
     let createdProjectId: string | null = null;
     let createdConversationId: string | null = null;
     let previousProjectSnapshotId: string | null = null;
-    if (routine.target.mode === 'reuse') {
-      const project = getProject(db, routine.target.projectId);
-      if (!project) throw new Error(`Routine target project ${routine.target.projectId} not found`);
-      projectId = project.id;
-      projectName = project.name;
-      previousProjectSnapshotId = project.appliedPluginSnapshotId ?? null;
-    } else {
+    const createRoutineProject = () => {
+      if (createdProjectId) return;
       projectId = `routine-${randomUUID()}`;
       projectName = `${routine.name} · ${stamp}`;
       insertProject(db, {
@@ -12094,34 +12091,52 @@ export async function startServer({
         updatedAt: now,
       });
       createdProjectId = projectId;
+    };
+    if (routine.target.mode === 'reuse') {
+      const project = getProject(db, routine.target.projectId);
+      if (!project) throw new Error(`Routine target project ${routine.target.projectId} not found`);
+      projectId = project.id;
+      projectName = project.name;
+      previousProjectSnapshotId = project.appliedPluginSnapshotId ?? null;
+    } else if (trigger !== 'scheduled') {
+      createRoutineProject();
     }
 
-    const conversationId = `routine-conv-${randomUUID()}`;
-    const conversationTitle = routine.target.mode === 'reuse'
+    let conversationId = `routine-conv-${randomUUID()}`;
+    let conversationCreatedEvent: ProjectConversationCreatedSsePayload | null = null;
+    const routineConversationTitle = () => routine.target.mode === 'reuse'
       ? `${routine.name} · ${stamp}`
       : projectName;
-    insertConversation(db, {
-      id: conversationId,
-      projectId,
-      title: conversationTitle,
-      createdAt: now,
-      updatedAt: now,
-    });
-    createdConversationId = conversationId;
-
-    /** @type {ProjectConversationCreatedSsePayload} */
-    const conversationCreatedEvent = {
-      type: 'conversation-created',
-      projectId,
-      conversationId,
-      title: conversationTitle,
-      createdAt: now,
+    const createRoutineConversation = () => {
+      if (createdConversationId) return;
+      if (!projectId) createRoutineProject();
+      if (!projectId) throw new Error('Routine project could not be prepared');
+      conversationId = `routine-conv-${randomUUID()}`;
+      insertConversation(db, {
+        id: conversationId,
+        projectId,
+        title: routineConversationTitle(),
+        createdAt: now,
+        updatedAt: now,
+      });
+      createdConversationId = conversationId;
+      conversationCreatedEvent = {
+        type: 'conversation-created',
+        projectId,
+        conversationId,
+        title: routineConversationTitle(),
+        createdAt: now,
+      };
     };
+    if (trigger !== 'scheduled') {
+      createRoutineConversation();
+    }
 
     const assistantMessageId = `routine-assistant-${randomUUID()}`;
     let resolvedRoutineSnapshot = null;
     const primaryPluginId = routineContext.pluginIds?.[0] ?? null;
-    if (primaryPluginId) {
+    const resolveRoutinePluginSnapshot = async () => {
+      if (!primaryPluginId || resolvedRoutineSnapshot) return;
       const registry = await loadPluginRegistryView();
       const resolved = resolvePluginSnapshot({
         db,
@@ -12141,11 +12156,14 @@ export async function startServer({
         throw new Error(`Automation plugin ${primaryPluginId} could not be applied: ${JSON.stringify(resolved.body)}`);
       }
       resolvedRoutineSnapshot = resolved;
+    };
+    if (trigger !== 'scheduled') {
+      await resolveRoutinePluginSnapshot();
     }
 
     const run = design.runs.create({
-      projectId,
-      conversationId,
+      projectId: projectId ?? scheduledPlaceholderProjectId,
+      conversationId: createdConversationId ? conversationId : scheduledPlaceholderConversationId,
       assistantMessageId,
       clientRequestId: `routine-${trigger}-${randomUUID()}`,
       agentId,
@@ -12156,36 +12174,48 @@ export async function startServer({
           }
         : {}),
     });
-    if (resolvedRoutineSnapshot?.ok) {
-      try {
+    const persistPreparedRun = async (routineRun = null) => {
+      createRoutineConversation();
+      run.projectId = projectId;
+      run.conversationId = conversationId;
+      if (routineRun) {
+        routineRun.projectId = projectId;
+        routineRun.conversationId = conversationId;
+        routineRun.agentRunId = run.id;
+      }
+      await resolveRoutinePluginSnapshot();
+      if (resolvedRoutineSnapshot?.ok) {
+        run.appliedPluginSnapshotId = resolvedRoutineSnapshot.snapshotId;
+        run.pluginId = resolvedRoutineSnapshot.snapshot.pluginId;
         const { linkSnapshotToRun } = await import('./plugins/snapshots.js');
         linkSnapshotToRun(db, resolvedRoutineSnapshot.snapshotId, run.id);
-      } catch {
-        // Snapshot linking is best-effort; the in-memory run still carries it.
       }
+      upsertMessage(db, conversationId, {
+        id: `routine-user-${run.id}`,
+        role: 'user',
+        content: routine.prompt,
+      });
+      upsertMessage(db, conversationId, {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        agentId,
+        agentName: getAgentDef(agentId)?.name ?? agentId,
+        runId: run.id,
+        runStatus: 'queued',
+        startedAt: now,
+      });
+    };
+    if (trigger !== 'scheduled') {
+      await persistPreparedRun();
     }
-    upsertMessage(db, conversationId, {
-      id: `routine-user-${run.id}`,
-      role: 'user',
-      content: routine.prompt,
-    });
-    upsertMessage(db, conversationId, {
-      id: assistantMessageId,
-      role: 'assistant',
-      content: '',
-      agentId,
-      agentName: getAgentDef(agentId)?.name ?? agentId,
-      runId: run.id,
-      runStatus: 'queued',
-      startedAt: now,
-    });
 
     const modelPrefs = appConfig.agentModels?.[agentId] ?? {};
     const start = () => {
       // Notify any open `ProjectView` only after the scheduled run row has
       // been accepted, so duplicate scheduled slots do not surface phantom
       // conversations (#1361).
-      emitProjectEvent(projectId, conversationCreatedEvent);
+      if (conversationCreatedEvent) emitProjectEvent(projectId, conversationCreatedEvent);
       design.runs.start(run, () => startChatRun({
         agentId,
         projectId,
@@ -12206,29 +12236,21 @@ export async function startServer({
     };
 
     const discard = () => {
-      try {
-        design.runs.finish(run, 'canceled');
-      } catch {
-        // best-effort cleanup for an unstarted duplicate scheduled run
-      }
+      design.runs.finish(run, 'canceled');
       if (resolvedRoutineSnapshot?.ok && routine.target.mode === 'reuse') {
-        try {
-          restoreProjectSnapshotLink(
-            db,
-            projectId,
-            resolvedRoutineSnapshot.snapshotId,
-            previousProjectSnapshotId,
-            run.id,
-          );
-        } catch {
-          // best-effort cleanup for an unstarted duplicate scheduled run
-        }
+        restoreProjectSnapshotLink(
+          db,
+          projectId,
+          resolvedRoutineSnapshot.snapshotId,
+          previousProjectSnapshotId,
+          run.id,
+        );
       }
       if (createdConversationId) {
-        try { deleteConversation(db, createdConversationId); } catch {}
+        deleteConversation(db, createdConversationId);
       }
       if (createdProjectId) {
-        try { dbDeleteProject(db, createdProjectId); } catch {}
+        dbDeleteProject(db, createdProjectId);
       }
     };
 
@@ -12280,7 +12302,15 @@ export async function startServer({
       };
     })();
 
-    return { projectId, conversationId, agentRunId: run.id, completion, start, discard };
+    return {
+      projectId: run.projectId,
+      conversationId: run.conversationId,
+      agentRunId: run.id,
+      completion,
+      prepare: persistPreparedRun,
+      start,
+      discard,
+    };
   });
   routineService.start();
 

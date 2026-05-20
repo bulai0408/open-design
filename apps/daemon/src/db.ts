@@ -1504,10 +1504,14 @@ export function updateRoutineRun(db: SqliteDb, id: string, patch: DbRow) {
   };
   db.prepare(
     `UPDATE routine_runs
-        SET status = ?, completed_at = ?, summary = ?, error = ?, error_code = ?
+        SET status = ?, project_id = ?, conversation_id = ?, agent_run_id = ?,
+            completed_at = ?, summary = ?, error = ?, error_code = ?
       WHERE id = ?`,
   ).run(
     merged.status,
+    merged.projectId,
+    merged.conversationId,
+    merged.agentRunId,
     merged.completedAt ?? null,
     merged.summary ?? null,
     merged.error ?? null,
