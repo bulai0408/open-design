@@ -4369,7 +4369,7 @@ async function runRun(args) {
                [--plugin <id>] [--inputs <json>] [--grant-caps a,b]
                [--agent claude|codex|gemini] [--model <id>] [--follow] [--json]
   od run watch  <runId>                     ND-JSON event stream on stdout.
-  od run logs   <runId> [--since <RFC3339>] Historical run events.
+  od run logs   <runId> [--since <eventId|RFC3339>] Historical run events.
   od run cancel <runId>                     Request cancellation.
   od run list   [--project <id>]            List recent runs.
   od run info   <runId>                     One run's status.
@@ -4435,7 +4435,7 @@ Common options:
         && a !== flags.since
         && a !== flags['daemon-url']);
       if (!id) {
-        console.error('Usage: od run logs <runId> [--since <RFC3339>]');
+        console.error('Usage: od run logs <runId> [--since <eventId|RFC3339>]');
         process.exit(2);
       }
       const params = new URLSearchParams();

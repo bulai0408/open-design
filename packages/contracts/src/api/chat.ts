@@ -198,6 +198,8 @@ export interface ChatRunLogEvent {
 
 export interface ChatRunLogResponse {
   runId: string;
+  /** Use the last event id as the next `since` cursor for lossless polling. */
+  nextSince?: string | null;
   events: ChatRunLogEvent[];
 }
 

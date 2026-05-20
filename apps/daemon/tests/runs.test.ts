@@ -69,6 +69,34 @@ describe('chat run service shutdown', () => {
     }
   });
 
+  it('returns same-millisecond event records filtered strictly after an event id cursor', () => {
+    vi.useFakeTimers();
+    try {
+      const runs = createRuns();
+      const run = runs.create({ projectId: 'project-1' });
+
+      vi.setSystemTime(new Date('2026-05-19T00:00:00.000Z'));
+      runs.emit(run, 'status', { kind: 'status', label: 'queued' });
+      runs.emit(run, 'text', { kind: 'text', text: 'hello' });
+      runs.finish(run, 'succeeded', 0, null);
+
+      expect(runs.log(run, { since: '1' })).toEqual([
+        expect.objectContaining({
+          id: 2,
+          event: 'text',
+          timestamp: Date.parse('2026-05-19T00:00:00.000Z'),
+        }),
+        expect.objectContaining({
+          id: 3,
+          event: 'end',
+          timestamp: Date.parse('2026-05-19T00:00:00.000Z'),
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects invalid historical event cursors', () => {
     const runs = createRuns();
     const run = runs.create();

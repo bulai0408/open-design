@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 export const TERMINAL_RUN_STATUSES = new Set(['succeeded', 'failed', 'canceled']);
 const RFC3339_TIMESTAMP_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/;
+const RUN_LOG_EVENT_ID_RE = /^(0|[1-9]\d*)$/;
 
 function readString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -47,11 +48,18 @@ export function createChatRunService({
   const parseLogSince = (since) => {
     if (since == null || since === '') return null;
     if (typeof since !== 'string') {
-      throw new RangeError('invalid since: expected an RFC3339 timestamp');
+      throw new RangeError('invalid since: expected an event id or RFC3339 timestamp');
+    }
+    if (RUN_LOG_EVENT_ID_RE.test(since)) {
+      const id = Number(since);
+      if (!Number.isSafeInteger(id)) {
+        throw new RangeError('invalid since: expected an event id or RFC3339 timestamp');
+      }
+      return { type: 'event-id', id };
     }
     const match = RFC3339_TIMESTAMP_RE.exec(since);
     if (!match) {
-      throw new RangeError('invalid since: expected an RFC3339 timestamp');
+      throw new RangeError('invalid since: expected an event id or RFC3339 timestamp');
     }
     const [, yearRaw, monthRaw, dayRaw, hourRaw, minuteRaw, secondRaw, zoneRaw, offsetHourRaw, offsetMinuteRaw] = match;
     const year = Number(yearRaw);
@@ -70,13 +78,13 @@ export function createChatRunService({
       || second > 59
       || (zoneRaw !== 'Z' && (offsetHour > 23 || offsetMinute > 59))
     ) {
-      throw new RangeError('invalid since: expected an RFC3339 timestamp');
+      throw new RangeError('invalid since: expected an event id or RFC3339 timestamp');
     }
     const timestamp = Date.parse(since);
     if (!Number.isFinite(timestamp)) {
-      throw new RangeError('invalid since: expected an RFC3339 timestamp');
+      throw new RangeError('invalid since: expected an event id or RFC3339 timestamp');
     }
-    return timestamp;
+    return { type: 'timestamp', timestamp };
   };
 
   const create = (meta = {}) => {
@@ -213,9 +221,12 @@ export function createChatRunService({
   };
 
   const log = (run, { since } = {}) => {
-    const sinceTimestamp = parseLogSince(since);
+    const sinceCursor = parseLogSince(since);
     return run.events.filter((record) => (
-      sinceTimestamp == null || record.timestamp > sinceTimestamp
+      sinceCursor == null
+      || (sinceCursor.type === 'event-id'
+        ? record.id > sinceCursor.id
+        : record.timestamp > sinceCursor.timestamp)
     ));
   };
 

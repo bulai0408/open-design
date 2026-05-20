@@ -66,8 +66,9 @@ describe('CLI startup boundaries', () => {
       if (req.url?.startsWith('/api/runs/run-1/log')) {
         res.setHeader('content-type', 'application/json');
         res.end(JSON.stringify({
-          runId:  'run-1',
-          events: [{ id: 1, event: 'text', data: { kind: 'text', text: 'hello' }, timestamp: 1779148801000 }],
+          runId:     'run-1',
+          nextSince: '1',
+          events:    [{ id: 1, event: 'text', data: { kind: 'text', text: 'hello' }, timestamp: 1779148801000 }],
         }));
         return;
       }
@@ -147,6 +148,56 @@ describe('CLI startup boundaries', () => {
           message: 'invalid since: expected an RFC3339 timestamp',
         },
       });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('passes event id cursors through to od run logs unchanged', async () => {
+    const requests: string[] = [];
+    const server = http.createServer((req, res) => {
+      requests.push(req.url ?? '');
+      if (req.url?.startsWith('/api/runs/run-1/log')) {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          runId:     'run-1',
+          nextSince: '3',
+          events:    [
+            { id: 2, event: 'text', data: { kind: 'text', text: 'hello' }, timestamp: 1779148800000 },
+            { id: 3, event: 'end', data: { status: 'succeeded' }, timestamp: 1779148800000 },
+          ],
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'run not found' } }));
+    });
+
+    try {
+      const baseUrl = await listen(server);
+      const { stdout } = await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          cliEntry,
+          'run',
+          'logs',
+          '--daemon-url',
+          baseUrl,
+          '--since',
+          '1',
+          'run-1',
+        ],
+        { cwd: daemonRoot },
+      );
+
+      expect(requests[0]).toBe('/api/runs/run-1/log?since=1');
+      expect(stdout.trim().split('\n').map((line) => JSON.parse(line))).toEqual([
+        expect.objectContaining({ id: 2, event: 'text', timestamp: 1779148800000 }),
+        expect.objectContaining({ id: 3, event: 'end', timestamp: 1779148800000 }),
+      ]);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

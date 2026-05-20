@@ -1,5 +1,5 @@
 import type http from 'node:http';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { startServer } from '../src/server.js';
 
@@ -48,19 +48,69 @@ describe('GET /api/runs/:id/log', () => {
     expect(logsResponse.status).toBe(200);
     const logs = await logsResponse.json() as {
       runId: string;
+      nextSince: string | null;
       events: Array<{ id: number; event: string; timestamp: number }>;
     };
     expect(logs.runId).toBe(runId);
     expect(logs.events.some((event) => event.event === 'error')).toBe(true);
     expect(logs.events.at(-1)?.event).toBe('end');
+    expect(logs.nextSince).toBe(String(logs.events.at(-1)?.id));
 
     const newestTimestamp = Math.max(...logs.events.map((event) => event.timestamp));
     const filteredResponse = await fetch(
       `${baseUrl}/api/runs/${encodeURIComponent(runId)}/log?since=${encodeURIComponent(new Date(newestTimestamp).toISOString())}`,
     );
     expect(filteredResponse.status).toBe(200);
-    const filtered = await filteredResponse.json() as { events: unknown[] };
+    const filtered = await filteredResponse.json() as { nextSince: string | null; events: unknown[] };
+    expect(filtered.nextSince).toBeNull();
     expect(filtered.events).toEqual([]);
+  });
+
+  it('returns same-millisecond buffered events filtered strictly after an event id cursor', async () => {
+    process.env.PATH = '';
+    const now = Date.parse('2026-05-19T00:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    let runId: string;
+    try {
+      const createResponse = await fetch(`${baseUrl}/api/runs`, {
+        method:  'POST',
+        headers: { 'content-type': 'application/json' },
+        body:    JSON.stringify({ agentId: 'opencode', message: 'hello' }),
+      });
+      expect(createResponse.status).toBe(202);
+      ({ runId } = await createResponse.json() as { runId: string });
+      await waitForRunStatus(baseUrl, runId);
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const logsResponse = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/log`);
+    expect(logsResponse.status).toBe(200);
+    const logs = await logsResponse.json() as {
+      events: Array<{ id: number; event: string; timestamp: number }>;
+    };
+    const consecutiveSameMillisecond = logs.events
+      .map((event, index) => ({ event, next: logs.events[index + 1] }))
+      .find(({ event, next }) => next && event.timestamp === next.timestamp);
+    expect(consecutiveSameMillisecond).toBeDefined();
+
+    const sinceId = consecutiveSameMillisecond!.event.id;
+    const filteredResponse = await fetch(
+      `${baseUrl}/api/runs/${encodeURIComponent(runId)}/log?since=${sinceId}`,
+    );
+    expect(filteredResponse.status).toBe(200);
+    const filtered = await filteredResponse.json() as {
+      nextSince: string | null;
+      events: Array<{ id: number; event: string; timestamp: number }>;
+    };
+
+    expect(filtered.events.at(0)).toMatchObject({
+      id:        consecutiveSameMillisecond!.next!.id,
+      event:     consecutiveSameMillisecond!.next!.event,
+      timestamp: consecutiveSameMillisecond!.event.timestamp,
+    });
+    expect(filtered.events.every((event) => event.id > sinceId)).toBe(true);
+    expect(filtered.nextSince).toBe(String(filtered.events.at(-1)?.id));
   });
 
   it('rejects invalid since timestamps', async () => {

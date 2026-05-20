@@ -11955,7 +11955,7 @@ export async function startServer({
     if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
     const since = req.query.since;
     if (since !== undefined && typeof since !== 'string') {
-      return sendApiError(res, 400, 'BAD_REQUEST', 'since must be a single RFC3339 timestamp');
+      return sendApiError(res, 400, 'BAD_REQUEST', 'since must be a single event id or RFC3339 timestamp');
     }
     let events;
     try {
@@ -11968,8 +11968,9 @@ export async function startServer({
         err instanceof Error ? err.message : String(err),
       );
     }
+    const lastEvent = events.length > 0 ? events[events.length - 1] : null;
     /** @type {import('@open-design/contracts').ChatRunLogResponse} */
-    const body = { runId: run.id, events };
+    const body = { runId: run.id, nextSince: lastEvent == null ? null : String(lastEvent.id), events };
     res.json(body);
   });
 
