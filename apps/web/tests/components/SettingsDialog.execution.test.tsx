@@ -1339,6 +1339,140 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
     );
     expect(testConnectionCalls).toHaveLength(1);
   });
+
+  it('lists OpenCode binary candidates and lets users switch to a detected path', async () => {
+    const opencode: AgentInfo = {
+      id: 'opencode',
+      name: 'OpenCode',
+      bin: 'opencode-cli',
+      available: true,
+      path: '/opt/homebrew/bin/opencode',
+      version: 'opencode 1.1.14',
+      models: [{ id: 'default', label: 'Default' }],
+      executableCandidates: [
+        {
+          path: '/opt/homebrew/bin/opencode',
+          bin: 'opencode',
+          version: 'opencode 1.1.14',
+          source: 'path',
+          selected: true,
+          available: true,
+        },
+        {
+          path: '/Users/mac/.opencode/bin/opencode',
+          bin: 'opencode',
+          version: 'opencode 1.2.0',
+          source: 'known',
+          selected: false,
+          available: true,
+        },
+      ],
+    };
+    const { onPersist } = renderSettingsDialog(
+      { mode: 'daemon', agentId: 'opencode' },
+      { agents: [opencode] },
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*1 installed/i }));
+
+    expect(screen.getByText('Detected OpenCode binaries')).toBeTruthy();
+    expect(screen.getByText('/opt/homebrew/bin/opencode')).toBeTruthy();
+    expect(screen.getByText('/Users/mac/.opencode/bin/opencode')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Use OpenCode binary \/Users\/mac\/\.opencode\/bin\/opencode/i }));
+
+    await waitForPersist(
+      onPersist,
+      expect.objectContaining({
+        agentCliEnv: {
+          opencode: {
+            OPENCODE_BIN: '/Users/mac/.opencode/bin/opencode',
+          },
+        },
+      }),
+      {},
+    );
+  });
+
+  it('offers Try next candidate after an OpenCode connection-test failure', async () => {
+    const opencode: AgentInfo = {
+      id: 'opencode',
+      name: 'OpenCode',
+      bin: 'opencode-cli',
+      available: true,
+      path: '/opt/homebrew/bin/opencode',
+      version: 'opencode 1.1.14',
+      models: [{ id: 'default', label: 'Default' }],
+      executableCandidates: [
+        {
+          path: '/opt/homebrew/bin/opencode',
+          bin: 'opencode',
+          version: 'opencode 1.1.14',
+          source: 'path',
+          selected: true,
+          available: true,
+        },
+        {
+          path: '/Users/mac/.opencode/bin/opencode',
+          bin: 'opencode',
+          version: 'opencode 1.2.0',
+          source: 'known',
+          selected: false,
+          available: true,
+        },
+      ],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          kind: 'agent_spawn_failed',
+          latencyMs: 14,
+          agentName: 'OpenCode',
+          model: 'default',
+          detail: 'exit 1 · stderr: incompatible OpenCode binary. Used OpenCode binary: /opt/homebrew/bin/opencode (opencode 1.1.14).',
+          usedExecutableSource: 'path',
+          usedExecutablePath: '/opt/homebrew/bin/opencode',
+          detectedExecutablePath: '/opt/homebrew/bin/opencode',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { onPersist } = renderSettingsDialog(
+      { mode: 'daemon', agentId: 'opencode' },
+      { agents: [opencode] },
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*1 installed/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Used OpenCode binary: \/opt\/homebrew\/bin\/opencode/)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Try next candidate/i }));
+
+    await waitForPersist(
+      onPersist,
+      expect.objectContaining({
+        agentCliEnv: {
+          opencode: {
+            OPENCODE_BIN: '/Users/mac/.opencode/bin/opencode',
+          },
+        },
+      }),
+      {},
+    );
+  });
 });
 
 describe('SettingsDialog media providers interactions', () => {

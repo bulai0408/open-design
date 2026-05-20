@@ -24,6 +24,7 @@ import path from 'node:path';
 import {
   applyAgentLaunchEnv,
   getAgentDef,
+  inspectAgentExecutableCandidates,
   resolveAgentLaunch,
   spawnEnvForAgent,
 } from './agents.js';
@@ -46,8 +47,12 @@ import {
   buildOpenAIChatTokenParam,
   isUnsupportedMaxTokensError,
 } from './openai-chat-token-params.js';
+import { execAgentFile } from './runtimes/invocation.js';
 import type { AgentCliEnvPrefs } from './app-config.js';
-import type { RuntimeAgentDef } from './runtimes/types.js';
+import type {
+  RuntimeAgentDef,
+  RuntimeExecutableCandidate,
+} from './runtimes/types.js';
 import {
   isBlockedExternalApiHostname,
   isLoopbackApiHost,
@@ -235,54 +240,137 @@ function formatPromptForAgentStdin(
   return prompt;
 }
 
-function codexExecutableGuidance(
+function agentBinEnvKey(agentId: string): string | null {
+  if (agentId === 'codex') return 'CODEX_BIN';
+  if (agentId === 'opencode') return 'OPENCODE_BIN';
+  return null;
+}
+
+function agentExecutableLabel(agentId: string): string {
+  if (agentId === 'opencode') return 'OpenCode';
+  if (agentId === 'codex') return 'Codex';
+  return agentId;
+}
+
+function agentExecutableGuidance(
   agentId: string,
   configuredOverridePath: string | null,
   pathResolvedPath: string | null,
 ): string {
   if (
-    agentId !== 'codex' ||
+    !agentBinEnvKey(agentId) ||
     !configuredOverridePath ||
     !pathResolvedPath ||
     configuredOverridePath === pathResolvedPath
   ) {
     return '';
   }
-  return ` Configured Codex path failed: ${configuredOverridePath}. Open Design also detected a PATH Codex CLI at ${pathResolvedPath}. Update CODEX_BIN or clear the custom path to use the detected binary.`;
+  const label = agentExecutableLabel(agentId);
+  const envKey = agentBinEnvKey(agentId);
+  return ` Configured ${label} path failed: ${configuredOverridePath}. Open Design also detected a PATH ${label} CLI at ${pathResolvedPath}. Update ${envKey} or clear the custom path to use the detected binary.`;
 }
 
-function codexExecutableFallbackSuccessDetail(
+function agentExecutableFallbackSuccessDetail(
+  agentId: string,
   configuredOverridePath: string,
   pathResolvedPath: string,
 ): string {
-  return `Configured Codex path failed: ${configuredOverridePath}. This test succeeded with the PATH Codex CLI at ${pathResolvedPath}. Update CODEX_BIN or clear the custom path to use the detected binary.`;
+  const label = agentExecutableLabel(agentId);
+  const envKey = agentBinEnvKey(agentId) ?? 'custom path';
+  return `Configured ${label} path failed: ${configuredOverridePath}. This test succeeded with the PATH ${label} CLI at ${pathResolvedPath}. Update ${envKey} or clear the custom path to use the detected binary.`;
 }
 
-function codexConfiguredPathSuccessDetail(
+function agentConfiguredPathSuccessDetail(
+  agentId: string,
   configuredOverridePath: string,
 ): string {
-  return `This test used the configured Codex path: ${configuredOverridePath}.`;
+  return `This test used the configured ${agentExecutableLabel(agentId)} path: ${configuredOverridePath}.`;
 }
 
-function codexInvalidConfiguredPathFallbackDetail(
+function agentInvalidConfiguredPathFallbackDetail(
+  agentId: string,
   configuredValue: string,
   pathResolvedPath: string,
 ): string {
-  return `Configured Codex path is invalid or not executable: ${configuredValue}. This test used the PATH Codex CLI at ${pathResolvedPath}. Update CODEX_BIN or clear the custom path to use the detected binary.`;
+  const label = agentExecutableLabel(agentId);
+  const envKey = agentBinEnvKey(agentId) ?? 'custom path';
+  return `Configured ${label} path is invalid or not executable: ${configuredValue}. This test used the PATH ${label} CLI at ${pathResolvedPath}. Update ${envKey} or clear the custom path to use the detected binary.`;
 }
 
-function stripCodexBinOverride(
+function stripAgentBinOverride(
   prefs: AgentCliEnvPrefs | undefined,
+  agentId: string,
 ): AgentCliEnvPrefs | undefined {
-  if (!prefs?.codex?.CODEX_BIN) return prefs;
-  const nextCodex = { ...prefs.codex };
-  delete nextCodex.CODEX_BIN;
+  const envKey = agentBinEnvKey(agentId);
+  if (!envKey || !prefs?.[agentId]?.[envKey]) return prefs;
+  const nextAgent = { ...prefs[agentId] };
+  delete nextAgent[envKey];
   const next: AgentCliEnvPrefs = {
     ...prefs,
-    codex: nextCodex,
+    [agentId]: nextAgent,
   };
-  if (Object.keys(nextCodex).length === 0) delete next.codex;
+  if (Object.keys(nextAgent).length === 0) delete next[agentId];
   return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function firstFallbackCandidate(
+  def: RuntimeAgentDef,
+  configuredAgentEnv: Record<string, string>,
+): RuntimeExecutableCandidate | null {
+  return inspectAgentExecutableCandidates(def, configuredAgentEnv).find(
+    (candidate) => candidate.source !== 'configured',
+  ) ?? null;
+}
+
+function usedExecutableDetail(
+  agentId: string,
+  executablePath: string | undefined,
+  version: string | null,
+): string {
+  if (!executablePath) return '';
+  const versionSuffix = version ? ` (${version})` : '';
+  return `Used ${agentExecutableLabel(agentId)} binary: ${executablePath}${versionSuffix}.`;
+}
+
+async function probeExecutableVersionForDetail(
+  def: RuntimeAgentDef | null | undefined,
+  executablePath: string | undefined,
+  configuredAgentEnv: Record<string, string>,
+): Promise<string | null> {
+  if (!def || !executablePath || !def.versionArgs?.length) return null;
+  const baseEnv = spawnEnvForAgent(
+    def.id,
+    {
+      ...process.env,
+      ...(def.env || {}),
+    },
+    configuredAgentEnv,
+  );
+  const env = applyAgentLaunchEnv(baseEnv, {
+    childPathPrepend: path.isAbsolute(executablePath)
+      ? [path.dirname(executablePath)]
+      : [],
+  });
+  try {
+    const { stdout } = await execAgentFile(executablePath, def.versionArgs, {
+      env,
+      timeout: 3000,
+    });
+    return String(stdout).trim().split('\n')[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+function shouldAppendExecutableFailureDetail(
+  result: ConnectionTestResponse,
+  agentId: string,
+  detail: string,
+): boolean {
+  if (!detail || result.ok || agentId !== 'opencode') return false;
+  if (result.kind !== 'agent_spawn_failed') return false;
+  const rawDetail = result.detail ?? '';
+  return /\bexit\s+\d+\b/.test(rawDetail) || rawDetail.includes('stderr:');
 }
 
 // Catches `Bearer …`, `x-api-key`/`api-key`/`x-goog-api-key` headers, and
@@ -311,6 +399,9 @@ export function redactSecrets(
 
 type ProviderConnectionInput = ProviderTestRequest & { signal?: AbortSignal };
 type AgentConnectionInput = AgentTestRequest & { signal?: AbortSignal };
+type AgentConnectionInternalInput = AgentConnectionInput & {
+  executableFailureDetail?: string;
+};
 
 function appendVersionedApiPath(baseUrl: string, suffix: string): string {
   const url = new URL(baseUrl);
@@ -1168,7 +1259,7 @@ function delay(ms: number): Promise<void> {
 }
 
 async function testAgentConnectionInternal(
-  input: AgentConnectionInput,
+  input: AgentConnectionInternalInput,
 ): Promise<ConnectionTestResponse> {
   const start = Date.now();
   const model =
@@ -1247,7 +1338,10 @@ async function testAgentConnectionInternal(
   const resultFromStreamError = (error: unknown): ConnectionTestResponse => {
     const latencyMs = Date.now() - start;
     const detail = redactSecrets(
-      error instanceof Error ? error.message : String(error),
+      [
+        error instanceof Error ? error.message : String(error),
+        input.executableFailureDetail,
+      ].filter(Boolean).join(' '),
     );
     const auth = classifyAgentAuthFailure(input.agentId, detail);
     if (auth?.status === 'missing') {
@@ -1384,7 +1478,7 @@ async function testAgentConnectionInternal(
         const latencyMs = Date.now() - start;
         const detail = redactSecrets(winner.error.message);
         const guidance = redactSecrets(
-          `${codexExecutableGuidance(
+          `${agentExecutableGuidance(
             input.agentId,
             executableResolution.configuredOverridePath,
             executableResolution.pathResolvedPath,
@@ -1482,11 +1576,9 @@ async function testAgentConnectionInternal(
           detail: claudeDiagnostic.detail,
         };
       }
-      const detail = redactSecrets(
-        rawDetail,
-      );
+      const detail = redactSecrets(rawDetail);
       const guidance = redactSecrets(
-        `${codexExecutableGuidance(
+        `${agentExecutableGuidance(
           input.agentId,
           executableResolution.configuredOverridePath,
           executableResolution.pathResolvedPath,
@@ -1503,7 +1595,13 @@ async function testAgentConnectionInternal(
         model,
         agentName: def.name,
         detail:
-          `${detail || 'Agent exited without producing assistant text'}${guidance}`,
+          `${
+            [
+              detail || 'Agent exited without producing assistant text',
+              guidance,
+              input.executableFailureDetail,
+            ].filter(Boolean).join(' ')
+          }`,
       };
     };
 
@@ -1613,7 +1711,11 @@ export async function testAgentConnection(
 ): Promise<ConnectionTestResponse> {
   const primaryResult = await testAgentConnectionInternal(input);
   const validatedPrefs = validateAgentCliEnv(input.agentCliEnv);
-  const configuredCodexBin = validatedPrefs?.codex?.CODEX_BIN?.trim() || '';
+  const envKey = agentBinEnvKey(input.agentId);
+  const configuredAgentBin =
+    envKey && validatedPrefs?.[input.agentId]?.[envKey]?.trim()
+      ? validatedPrefs[input.agentId]![envKey]!.trim()
+      : '';
   const configuredAgentEnv = agentCliEnvForAgent(validatedPrefs, input.agentId);
   const def = getAgentDef(input.agentId);
   const executableResolution = def
@@ -1626,12 +1728,47 @@ export async function testAgentConnection(
         launchKind: 'selected' as const,
         childPathPrepend: [],
         diagnostic: null,
+        executableCandidates: [],
       };
-  if (
-    input.agentId === 'codex' &&
-    primaryResult.ok &&
-    configuredCodexBin
-  ) {
+  const usedExecutablePath = executableResolution.launchPath ?? executableResolution.selectedPath ?? undefined;
+  const pathExecutablePath = executableResolution.pathResolvedPath
+    ?? (def ? firstFallbackCandidate(def, configuredAgentEnv)?.path ?? null : null);
+  const usedExecutableVersion =
+    executableResolution.executableCandidates?.find(
+      (candidate) => candidate.path === usedExecutablePath,
+    )?.version ?? null;
+  let executableFailureDetail = usedExecutableDetail(
+    input.agentId,
+    usedExecutablePath,
+    usedExecutableVersion,
+  );
+  const withUsedExecutableDiagnostics = (
+    result: ConnectionTestResponse,
+  ): ConnectionTestResponse => ({
+    ...result,
+    ...(executableResolution.configuredOverridePath
+      ? { configuredExecutablePath: executableResolution.configuredOverridePath }
+      : {}),
+    ...(pathExecutablePath ? { detectedExecutablePath: pathExecutablePath } : {}),
+    ...(usedExecutablePath ? { usedExecutablePath } : {}),
+    ...(usedExecutablePath
+      ? {
+          usedExecutableSource:
+            executableResolution.configuredOverridePath &&
+            usedExecutablePath === executableResolution.configuredOverridePath
+              ? 'configured'
+              : 'path',
+        }
+      : {}),
+  });
+  const executableFailureKinds = new Set<ConnectionTestKind>([
+    'agent_spawn_failed',
+    'agent_not_installed',
+    'unknown',
+  ]);
+  const supportsExecutableFallback = Boolean(agentBinEnvKey(input.agentId));
+
+  if (primaryResult.ok && configuredAgentBin) {
     if (executableResolution.configuredOverridePath) {
       return {
         ...primaryResult,
@@ -1642,7 +1779,8 @@ export async function testAgentConnection(
           ? { detectedExecutablePath: executableResolution.pathResolvedPath }
           : {}),
         detail: redactSecrets(
-          codexConfiguredPathSuccessDetail(
+          agentConfiguredPathSuccessDetail(
+            input.agentId,
             executableResolution.configuredOverridePath,
           ),
         ),
@@ -1651,13 +1789,14 @@ export async function testAgentConnection(
     if (executableResolution.pathResolvedPath) {
       return {
         ...primaryResult,
-        configuredExecutablePath: configuredCodexBin,
+        configuredExecutablePath: configuredAgentBin,
         detectedExecutablePath: executableResolution.pathResolvedPath,
         usedExecutablePath: executableResolution.launchPath ?? executableResolution.pathResolvedPath,
         usedExecutableSource: 'fallback_invalid',
         detail: redactSecrets(
-          codexInvalidConfiguredPathFallbackDetail(
-            configuredCodexBin,
+          agentInvalidConfiguredPathFallbackDetail(
+            input.agentId,
+            configuredAgentBin,
             executableResolution.pathResolvedPath,
           ),
         ),
@@ -1665,34 +1804,74 @@ export async function testAgentConnection(
     }
   }
   if (
-    input.agentId !== 'codex' ||
     primaryResult.ok ||
-    !new Set<ConnectionTestKind>(['agent_spawn_failed', 'agent_not_installed', 'unknown']).has(primaryResult.kind) ||
+    !executableFailureKinds.has(primaryResult.kind) ||
+    !supportsExecutableFallback ||
     !executableResolution.configuredOverridePath ||
-    !executableResolution.pathResolvedPath ||
-    executableResolution.configuredOverridePath === executableResolution.pathResolvedPath
+    !pathExecutablePath ||
+    executableResolution.configuredOverridePath === pathExecutablePath
   ) {
+    if (
+      !primaryResult.ok &&
+      executableFailureKinds.has(primaryResult.kind) &&
+      supportsExecutableFallback &&
+      shouldAppendExecutableFailureDetail(
+        primaryResult,
+        input.agentId,
+        executableFailureDetail,
+      )
+    ) {
+      if (!usedExecutableVersion && input.agentId === 'opencode') {
+        executableFailureDetail = usedExecutableDetail(
+          input.agentId,
+          usedExecutablePath,
+          await probeExecutableVersionForDetail(
+            def,
+            usedExecutablePath,
+            configuredAgentEnv,
+          ),
+        );
+      }
+      const detail = [
+        primaryResult.detail ?? '',
+        executableFailureDetail,
+      ].filter(Boolean).join(' ');
+      return withUsedExecutableDiagnostics({
+        ...primaryResult,
+        detail: redactSecrets(detail),
+      });
+    }
     return primaryResult;
   }
   const fallbackResult = await testAgentConnectionInternal(
     {
       ...input,
-      agentCliEnv: stripCodexBinOverride(validatedPrefs),
+      agentCliEnv: stripAgentBinOverride(validatedPrefs, input.agentId),
+      executableFailureDetail,
     },
   );
   if (!fallbackResult.ok) {
-    return primaryResult;
+    return {
+      ...withUsedExecutableDiagnostics(primaryResult),
+      detail: redactSecrets(
+        [
+          primaryResult.detail ?? '',
+          executableFailureDetail,
+        ].filter(Boolean).join(' '),
+      ),
+    };
   }
   return {
     ...fallbackResult,
     configuredExecutablePath: executableResolution.configuredOverridePath,
-    detectedExecutablePath: executableResolution.pathResolvedPath,
-    usedExecutablePath: executableResolution.launchPath ?? executableResolution.pathResolvedPath,
+    detectedExecutablePath: pathExecutablePath,
+    usedExecutablePath: fallbackResult.usedExecutablePath ?? pathExecutablePath,
     usedExecutableSource: 'fallback_failed',
     detail: redactSecrets(
-      codexExecutableFallbackSuccessDetail(
+      agentExecutableFallbackSuccessDetail(
+        input.agentId,
         executableResolution.configuredOverridePath,
-        executableResolution.pathResolvedPath,
+        pathExecutablePath,
       ),
     ),
   };

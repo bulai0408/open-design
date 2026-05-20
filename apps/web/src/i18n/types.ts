@@ -301,6 +301,7 @@ export interface Dict {
   'settings.cliEnvCodexBin': string;
   'settings.cliEnvCodexBaseUrl': string;
   'settings.cliEnvCodexApiKey': string;
+  'settings.cliEnvOpenCodeBin': string;
   'settings.modelCustom': string;
   'settings.modelCustomLabel': string;
   'settings.modelCustomPlaceholder': string;

@@ -277,6 +277,7 @@ export const ko: Dict = {
   'settings.cliEnvCodexBin': 'Codex executable path',
   'settings.cliEnvCodexBaseUrl': 'Codex/OpenAI proxy base URL',
   'settings.cliEnvCodexApiKey': 'Codex/OpenAI proxy API key',
+  'settings.cliEnvOpenCodeBin': 'OpenCode executable path',
   'settings.modelCustom': '직접 입력…',
   'settings.modelCustomLabel': '사용자 지정 모델 ID',
   'settings.modelCustomPlaceholder': '예: anthropic/claude-sonnet-4-6',

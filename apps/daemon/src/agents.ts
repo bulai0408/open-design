@@ -7,6 +7,7 @@ export {
 export { detectAgents } from './runtimes/detection.js';
 export {
   resolveOnPath,
+  inspectAgentExecutableCandidates,
   inspectAgentExecutableResolution,
   resolveAgentExecutable,
 } from './runtimes/executables.js';

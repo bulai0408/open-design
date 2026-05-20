@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { execAgentFile } from './invocation.js';
 import { AGENT_DEFS } from './registry.js';
 import { DEFAULT_MODEL_OPTION, rememberLiveModels } from './models.js';
@@ -10,6 +11,7 @@ import type {
   DetectedAgent,
   RuntimeAgentDef,
   RuntimeCapabilityMap,
+  RuntimeExecutableCandidate,
   RuntimeModelSource,
   RuntimeModelOption,
 } from './types.js';
@@ -158,6 +160,11 @@ async function probe(
   if (outcome.kind === 'not-invocable') {
     return unavailableAgent(def);
   }
+  const executableCandidates = await probeExecutableCandidates(
+    def,
+    launch.executableCandidates,
+    configuredEnv,
+  );
   // Probe `--help` once per agent and record which flags the installed CLI
   // advertises. Cached on `agentCapabilities` for buildArgs to consult.
   if (def.helpArgs && def.capabilityFlags) {
@@ -186,6 +193,7 @@ async function probe(
     available: true,
     path: launch.selectedPath,
     version: outcome.version,
+    executableCandidates,
     ...(auth
       ? {
           authStatus: auth.status,
@@ -194,6 +202,39 @@ async function probe(
       : {}),
     ...installMetaForAgent(def.id),
   };
+}
+
+async function probeExecutableCandidates(
+  def: RuntimeAgentDef,
+  candidates: RuntimeExecutableCandidate[] = [],
+  configuredEnv: Record<string, string> = {},
+): Promise<RuntimeExecutableCandidate[]> {
+  if (candidates.length === 0) return [];
+  const baseEnv = spawnEnvForAgent(
+    def.id,
+    {
+      ...process.env,
+      ...(def.env || {}),
+    },
+    configuredEnv,
+  );
+  return Promise.all(
+    candidates.map(async (candidate) => {
+      const candidateEnv = applyAgentLaunchEnv(
+        baseEnv,
+        {
+          childPathPrepend: path.isAbsolute(candidate.path)
+            ? [path.dirname(candidate.path)]
+            : [],
+        },
+      );
+      const outcome = await probeVersionAtPath(def, candidate.path, candidateEnv);
+      if (outcome.kind === 'not-invocable') {
+        return { ...candidate, available: false, version: null };
+      }
+      return { ...candidate, available: true, version: outcome.version };
+    }),
+  );
 }
 
 function stripFns(

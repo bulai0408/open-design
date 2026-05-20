@@ -22,6 +22,21 @@ export type RuntimeContext = {
 
 export type RuntimeCapabilityMap = Record<string, boolean>;
 
+export type RuntimeExecutableCandidateSource =
+  | 'configured'
+  | 'path'
+  | 'fallback'
+  | 'known';
+
+export type RuntimeExecutableCandidate = {
+  path: string;
+  bin: string;
+  source: RuntimeExecutableCandidateSource;
+  available: boolean;
+  selected: boolean;
+  version?: string | null;
+};
+
 export type RuntimeListModels = {
   args: string[];
   timeoutMs?: number;
@@ -123,6 +138,7 @@ export type DetectedAgent = Omit<
   authMessage?: string;
   path?: string;
   version?: string | null;
+  executableCandidates?: RuntimeExecutableCandidate[];
 };
 
 export type RuntimeExecOptions = ExecFileOptions & {

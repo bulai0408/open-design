@@ -267,6 +267,7 @@ export const tr: Dict = {
     'Modeller kurulu CLI\'dan yenilendi. Varsayılan seçenek hâlâ CLI yapılandırmasını kullanır.',
   'settings.modelPickerFallbackHint':
     'Yerleşik varsayılanlar gösteriliyor. CLI\'dan canlı modelleri almak için Yeniden tara\'ya tıklayın.',
+  'settings.cliEnvOpenCodeBin': 'OpenCode executable path',
   'settings.modelCustom': 'Özel (aşağıya yazın)…',
   'settings.modelCustomLabel': 'Özel model kimliği',
   'settings.modelCustomPlaceholder': 'örn. anthropic/claude-sonnet-4-6',

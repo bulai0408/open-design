@@ -277,6 +277,7 @@ export const ja: Dict = {
   'settings.cliEnvCodexBin': 'Codex executable path',
   'settings.cliEnvCodexBaseUrl': 'Codex/OpenAI proxy base URL',
   'settings.cliEnvCodexApiKey': 'Codex/OpenAI proxy API key',
+  'settings.cliEnvOpenCodeBin': 'OpenCode executable path',
   'settings.modelCustom': 'カスタム（下に入力）…',
   'settings.modelCustomLabel': 'カスタムモデル ID',
   'settings.modelCustomPlaceholder': '例: anthropic/claude-sonnet-4-6',

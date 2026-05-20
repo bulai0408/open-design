@@ -269,6 +269,7 @@ export const it: Dict = {
   'settings.cliEnvClaudeConfigDir': 'Directory di configurazione Claude Code',
   'settings.cliEnvCodexHome': 'Home di Codex',
   'settings.cliEnvCodexBin': 'Percorso eseguibile Codex',
+  'settings.cliEnvOpenCodeBin': 'OpenCode executable path',
   'settings.modelCustom': 'Personalizzato (inserisci sotto)…',
   'settings.modelCustomLabel': 'Identificatore del modello personalizzato',
   'settings.modelCustomPlaceholder': 'es. anthropic/claude-sonnet-4-6',

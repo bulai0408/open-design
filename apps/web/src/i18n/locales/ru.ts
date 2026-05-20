@@ -277,6 +277,7 @@ export const ru: Dict = {
   'settings.cliEnvCodexBin': 'Codex executable path',
   'settings.cliEnvCodexBaseUrl': 'Codex/OpenAI proxy base URL',
   'settings.cliEnvCodexApiKey': 'Codex/OpenAI proxy API key',
+  'settings.cliEnvOpenCodeBin': 'OpenCode executable path',
   'settings.modelCustom': 'Пользовательская (введите ниже)…',
   'settings.modelCustomLabel': 'Пользовательский ID модели',
   'settings.modelCustomPlaceholder': 'например, anthropic/claude-sonnet-4-6',

@@ -3,6 +3,21 @@ export interface AgentModelOption {
   label: string;
 }
 
+export type AgentExecutableCandidateSource =
+  | 'configured'
+  | 'path'
+  | 'fallback'
+  | 'known';
+
+export interface AgentExecutableCandidate {
+  path: string;
+  bin: string;
+  source: AgentExecutableCandidateSource;
+  available: boolean;
+  selected: boolean;
+  version?: string | null;
+}
+
 export interface AgentInfo {
   id: string;
   name: string;
@@ -15,6 +30,7 @@ export interface AgentInfo {
   models?: AgentModelOption[];
   /** Whether models came from the installed CLI or Open Design's static fallback. */
   modelsSource?: 'live' | 'fallback';
+  executableCandidates?: AgentExecutableCandidate[];
   reasoningOptions?: AgentModelOption[];
   /** HTTPS URL to install or download the CLI (vendor docs, GitHub README, npm). */
   installUrl?: string;

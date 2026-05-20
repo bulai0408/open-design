@@ -276,6 +276,7 @@ export const zhTW: Dict = {
   'settings.cliEnvCodexBin': 'Codex 可執行檔路徑',
   'settings.cliEnvCodexBaseUrl': 'Codex/OpenAI proxy base URL',
   'settings.cliEnvCodexApiKey': 'Codex/OpenAI proxy API key',
+  'settings.cliEnvOpenCodeBin': 'OpenCode executable path',
   'settings.modelCustom': '自訂（在下方填寫）…',
   'settings.modelCustomLabel': '自訂模型 id',
   'settings.modelCustomPlaceholder': '例如 anthropic/claude-sonnet-4-6',

@@ -266,6 +266,7 @@ export const th: Dict = {
   'settings.cliEnvClaudeConfigDir': 'ไดเรกทอรีการตั้งค่า Claude Code',
   'settings.cliEnvCodexHome': 'Codex home',
   'settings.cliEnvCodexBin': 'เส้นทางไฟล์เรียกทำงาน Codex',
+  'settings.cliEnvOpenCodeBin': 'OpenCode executable path',
   'settings.modelCustom': 'กำหนดเอง (พิมพ์ด้านล่าง)…',
   'settings.modelCustomLabel': 'ID โมเดลที่กำหนดเอง',
   'settings.modelCustomPlaceholder': 'เช่น anthropic/claude-sonnet-4-6',

@@ -1,6 +1,6 @@
 import { test } from 'vitest';
 import {
-  AGENT_DEFS, assert, chmodSync, codex, cursorAgent, detectAgents, join, mkdtempSync, rmSync, tmpdir, withEnvSnapshot, withPlatform, writeFileSync,
+  AGENT_DEFS, assert, chmodSync, codex, cursorAgent, detectAgents, join, mkdirSync, mkdtempSync, rmSync, tmpdir, withEnvSnapshot, withPlatform, writeFileSync,
 } from './helpers/test-helpers.js';
 import { readLocalAgentProfileDefs } from '../../src/runtimes/registry.js';
 
@@ -315,6 +315,49 @@ exit 2
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('opencode detection surfaces every executable candidate in PATH order plus known install dirs', async () => {
+  const pathDir = mkdtempSync(join(tmpdir(), 'od-agents-opencode-path-'));
+  const home = mkdtempSync(join(tmpdir(), 'od-agents-opencode-home-'));
+  try {
+    await withEnvSnapshot(['PATH', 'OD_AGENT_HOME'], async () => {
+      const oldOpenCode = join(pathDir, 'opencode');
+      const homeBinDir = join(home, '.opencode', 'bin');
+      mkdirSync(homeBinDir, { recursive: true });
+      const newOpenCode = join(homeBinDir, 'opencode');
+      writeFileSync(
+        oldOpenCode,
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "opencode 1.1.14"; exit 0; fi\nexit 0\n',
+      );
+      writeFileSync(
+        newOpenCode,
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "opencode 1.2.0"; exit 0; fi\nexit 0\n',
+      );
+      chmodSync(oldOpenCode, 0o755);
+      chmodSync(newOpenCode, 0o755);
+      process.env.OD_AGENT_HOME = home;
+      process.env.PATH = pathDir;
+
+      const agents = await detectAgents();
+      const detected = agents.find((agent) => agent.id === 'opencode');
+
+      assert.ok(detected);
+      assert.equal(detected.available, true);
+      assert.equal(detected.path, oldOpenCode);
+      assert.deepEqual(detected.executableCandidates?.map((candidate) => ({
+        path: candidate.path,
+        version: candidate.version,
+        selected: candidate.selected,
+      })), [
+        { path: oldOpenCode, version: 'opencode 1.1.14', selected: true },
+        { path: newOpenCode, version: 'opencode 1.2.0', selected: false },
+      ]);
+    });
+  } finally {
+    rmSync(pathDir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
   }
 });
 

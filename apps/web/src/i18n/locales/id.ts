@@ -273,6 +273,7 @@ export const id: Dict = {
   'settings.cliEnvCodexBin': 'Path executable Codex',
   'settings.cliEnvCodexBaseUrl': 'Codex/OpenAI proxy base URL',
   'settings.cliEnvCodexApiKey': 'Codex/OpenAI proxy API key',
+  'settings.cliEnvOpenCodeBin': 'OpenCode executable path',
   'settings.modelCustom': 'Kustom (isi di bawah)...',
   'settings.modelCustomLabel': 'ID model kustom',
   'settings.modelCustomPlaceholder': 'mis. anthropic/claude-sonnet-4-6',

@@ -277,6 +277,7 @@ export const hu: Dict = {
   'settings.cliEnvCodexBin': 'Codex executable path',
   'settings.cliEnvCodexBaseUrl': 'Codex/OpenAI proxy base URL',
   'settings.cliEnvCodexApiKey': 'Codex/OpenAI proxy API key',
+  'settings.cliEnvOpenCodeBin': 'OpenCode executable path',
   'settings.modelCustom': 'Egyedi (gépeld be alább)…',
   'settings.modelCustomLabel': 'Egyedi modell-id',
   'settings.modelCustomPlaceholder': 'pl. anthropic/claude-sonnet-4-6',

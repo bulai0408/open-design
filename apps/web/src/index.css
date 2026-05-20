@@ -5571,6 +5571,70 @@ a.avatar-item:visited {
 .agent-install-steps li + li {
   margin-top: 4px;
 }
+.agent-candidates {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+.agent-candidates-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.agent-candidates-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.agent-candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agent-candidate-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-soft);
+}
+.agent-candidate-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.agent-candidate-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.agent-candidate-path {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-candidate-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.agent-candidate-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agent-candidate-badge {
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 600;
+}
 .agent-card-body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .agent-card-name {
   display: flex;

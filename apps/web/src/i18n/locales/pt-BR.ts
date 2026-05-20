@@ -277,6 +277,7 @@ export const ptBR: Dict = {
   'settings.cliEnvCodexBin': 'Codex executable path',
   'settings.cliEnvCodexBaseUrl': 'Codex/OpenAI proxy base URL',
   'settings.cliEnvCodexApiKey': 'Codex/OpenAI proxy API key',
+  'settings.cliEnvOpenCodeBin': 'OpenCode executable path',
   'settings.modelCustom': 'Personalizado (digite abaixo)…',
   'settings.modelCustomLabel': 'Id do modelo personalizado',
   'settings.modelCustomPlaceholder': 'ex.: anthropic/claude-sonnet-4-6',

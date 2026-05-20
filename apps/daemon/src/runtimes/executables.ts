@@ -1,10 +1,14 @@
-import { accessSync, constants, existsSync, statSync } from 'node:fs';
+import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter } from 'node:path';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { wellKnownUserToolchainBins } from '@open-design/platform';
 import { expandHomePath } from './paths.js';
-import type { RuntimeAgentDef } from './types.js';
+import type {
+  RuntimeAgentDef,
+  RuntimeExecutableCandidate,
+  RuntimeExecutableCandidateSource,
+} from './types.js';
 
 const AGENT_BIN_ENV_KEYS = new Map<string, string>([
   ['claude', 'CLAUDE_BIN'],
@@ -58,17 +62,19 @@ function userToolchainDirs() {
   return cachedToolchainDirs;
 }
 
-function resolvePathDirs() {
+function resolvePathDirs(): Array<{ dir: string; source: 'path' | 'known' }> {
   const seen = new Set();
   const dirs = [
-    ...(process.env.PATH || '').split(delimiter),
+    ...(process.env.PATH || '')
+      .split(delimiter)
+      .map((dir) => ({ dir, source: 'path' as const })),
     // GUI launchers (macOS .app bundles, Linux .desktop files) often start
     // with a minimal PATH. Include common user-level CLI install locations
     // so agent detection matches the user's shell-installed tools,
     // especially Node version managers.
-    ...userToolchainDirs(),
+    ...userToolchainDirs().map((dir) => ({ dir, source: 'known' as const })),
   ];
-  return dirs.filter((dir) => {
+  return dirs.filter(({ dir }) => {
     if (!dir || seen.has(dir)) return false;
     seen.add(dir);
     return true;
@@ -76,18 +82,45 @@ function resolvePathDirs() {
 }
 
 export function resolveOnPath(bin: string): string | null {
+  return findExecutableCandidatesOnPath(bin, 'path')[0]?.path ?? null;
+}
+
+function findExecutableCandidatesOnPath(
+  bin: string,
+  source: RuntimeExecutableCandidateSource,
+): RuntimeExecutableCandidate[] {
   const exts =
     process.platform === 'win32'
       ? (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';')
       : [''];
-  const dirs = resolvePathDirs();
-  for (const dir of dirs) {
+  const candidates: RuntimeExecutableCandidate[] = [];
+  for (const { dir, source: dirSource } of resolvePathDirs()) {
+    const candidateSource = dirSource === 'known' ? 'known' : source;
     for (const ext of exts) {
       const full = path.join(dir, bin + ext);
-      if (full && existsSync(full)) return full;
+      if (isInvocableFile(full)) {
+        candidates.push({
+          path: full,
+          bin,
+          source: candidateSource,
+          available: true,
+          selected: false,
+        });
+      }
     }
   }
-  return null;
+  return candidates;
+}
+
+function isInvocableFile(filePath: string): boolean {
+  try {
+    if (!statSync(filePath).isFile()) return false;
+    if (process.platform === 'win32') return looksExecutableOnWindows(filePath);
+    accessSync(filePath, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function looksExecutableOnWindows(filePath: string): boolean {
@@ -128,6 +161,21 @@ function configuredExecutableOverride(
   }
 }
 
+function configuredExecutableCandidate(
+  def: RuntimeAgentDef,
+  configuredEnv: Record<string, string> = {},
+): RuntimeExecutableCandidate | null {
+  const configuredOverridePath = configuredExecutableOverride(def, configuredEnv);
+  if (!configuredOverridePath) return null;
+  return {
+    path: configuredOverridePath,
+    bin: path.basename(configuredOverridePath),
+    source: 'configured',
+    available: true,
+    selected: false,
+  };
+}
+
 export function resolveAgentExecutable(
   def: RuntimeAgentDef,
   configuredEnv: Record<string, string> = {},
@@ -142,15 +190,19 @@ export function inspectAgentExecutableResolution(
   configuredOverridePath: string | null;
   pathResolvedPath: string | null;
   selectedPath: string | null;
+  executableCandidates: RuntimeExecutableCandidate[];
 } {
   if (!def?.bin) {
     return {
       configuredOverridePath: null,
       pathResolvedPath: null,
       selectedPath: null,
+      executableCandidates: [],
     };
   }
-  const configuredOverridePath = configuredExecutableOverride(def, configuredEnv);
+  const executableCandidates = inspectAgentExecutableCandidates(def, configuredEnv);
+  const configuredOverridePath =
+    executableCandidates.find((candidate) => candidate.source === 'configured')?.path ?? null;
   const candidates = [
     def.bin,
     ...(Array.isArray(def.fallbackBins) ? def.fallbackBins : []),
@@ -167,5 +219,35 @@ export function inspectAgentExecutableResolution(
     configuredOverridePath,
     pathResolvedPath,
     selectedPath: configuredOverridePath || pathResolvedPath,
+    executableCandidates: executableCandidates.map((candidate) => ({
+      ...candidate,
+      selected: candidate.path === (configuredOverridePath || pathResolvedPath),
+    })),
   };
+}
+
+export function inspectAgentExecutableCandidates(
+  def: RuntimeAgentDef,
+  configuredEnv: Record<string, string> = {},
+): RuntimeExecutableCandidate[] {
+  if (!def?.bin) return [];
+  const seen = new Set<string>();
+  const out: RuntimeExecutableCandidate[] = [];
+  const add = (candidate: RuntimeExecutableCandidate | null) => {
+    if (!candidate || seen.has(candidate.path)) return;
+    seen.add(candidate.path);
+    out.push(candidate);
+  };
+  add(configuredExecutableCandidate(def, configuredEnv));
+  for (const bin of [
+    def.bin,
+    ...(Array.isArray(def.fallbackBins) ? def.fallbackBins : []),
+  ]) {
+    const source: RuntimeExecutableCandidateSource =
+      bin === def.bin ? 'path' : 'fallback';
+    for (const candidate of findExecutableCandidatesOnPath(bin, source)) {
+      add(candidate);
+    }
+  }
+  return out;
 }

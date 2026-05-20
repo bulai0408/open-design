@@ -187,42 +187,68 @@ export interface AgentRefreshOptions {
   agentCliEnv?: AppConfig['agentCliEnv'];
 }
 
-function codexPathStrings(locale: Locale) {
+function cliPathStrings(locale: Locale, agentName = 'Codex', envKey = 'CODEX_BIN') {
   if (locale === 'zh-CN') {
     return {
-      repairHint: '当前保存的 Codex 路径不适合继续使用。',
-      useDetected: '使用检测到的 Codex',
+      repairHint: `当前保存的 ${agentName} 路径不适合继续使用。`,
+      useDetected: `使用检测到的 ${agentName}`,
       clearCustom: '清空自定义路径',
-      configuredSuccess: (path: string) => `本次测试使用的是已配置的 Codex 路径：${path}。`,
+      configuredSuccess: (path: string) => `本次测试使用的是已配置的 ${agentName} 路径：${path}。`,
       invalidFallback: (configuredPath: string, detectedPath: string) =>
-        `已配置的 Codex 路径无效或不可执行：${configuredPath}。本次测试改用 PATH 中的 Codex CLI：${detectedPath}。建议更新 CODEX_BIN 或清空自定义路径。`,
+        `已配置的 ${agentName} 路径无效或不可执行：${configuredPath}。本次测试改用 PATH 中的 ${agentName} CLI：${detectedPath}。建议更新 ${envKey} 或清空自定义路径。`,
       failedFallback: (configuredPath: string, detectedPath: string) =>
-        `已配置的 Codex 路径启动失败：${configuredPath}。本次测试改用 PATH 中的 Codex CLI：${detectedPath}。建议更新 CODEX_BIN 或清空自定义路径。`,
+        `已配置的 ${agentName} 路径启动失败：${configuredPath}。本次测试改用 PATH 中的 ${agentName} CLI：${detectedPath}。建议更新 ${envKey} 或清空自定义路径。`,
+      candidatesTitle: `检测到的 ${agentName} binaries`,
+      current: '当前',
+      use: '使用',
+      useBinary: (path: string) => `使用 ${agentName} binary ${path}`,
+      tryNext: '试下一个 candidate',
     };
   }
   if (locale === 'zh-TW') {
     return {
-      repairHint: '目前儲存的 Codex 路徑不適合繼續使用。',
-      useDetected: '使用偵測到的 Codex',
+      repairHint: `目前儲存的 ${agentName} 路徑不適合繼續使用。`,
+      useDetected: `使用偵測到的 ${agentName}`,
       clearCustom: '清除自訂路徑',
-      configuredSuccess: (path: string) => `本次測試使用的是已設定的 Codex 路徑：${path}。`,
+      configuredSuccess: (path: string) => `本次測試使用的是已設定的 ${agentName} 路徑：${path}。`,
       invalidFallback: (configuredPath: string, detectedPath: string) =>
-        `已設定的 Codex 路徑無效或不可執行：${configuredPath}。本次測試改用 PATH 中的 Codex CLI：${detectedPath}。建議更新 CODEX_BIN 或清除自訂路徑。`,
+        `已設定的 ${agentName} 路徑無效或不可執行：${configuredPath}。本次測試改用 PATH 中的 ${agentName} CLI：${detectedPath}。建議更新 ${envKey} 或清除自訂路徑。`,
       failedFallback: (configuredPath: string, detectedPath: string) =>
-        `已設定的 Codex 路徑啟動失敗：${configuredPath}。本次測試改用 PATH 中的 Codex CLI：${detectedPath}。建議更新 CODEX_BIN 或清除自訂路徑。`,
+        `已設定的 ${agentName} 路徑啟動失敗：${configuredPath}。本次測試改用 PATH 中的 ${agentName} CLI：${detectedPath}。建議更新 ${envKey} 或清除自訂路徑。`,
+      candidatesTitle: `偵測到的 ${agentName} binaries`,
+      current: '目前',
+      use: '使用',
+      useBinary: (path: string) => `使用 ${agentName} binary ${path}`,
+      tryNext: '試下個 candidate',
     };
   }
   return {
-    repairHint: 'The saved Codex path is not the binary this test should keep using.',
-    useDetected: 'Use detected Codex',
+    repairHint: `The saved ${agentName} path is not the binary this test should keep using.`,
+    useDetected: `Use detected ${agentName}`,
     clearCustom: 'Clear custom path',
     configuredSuccess: (path: string) =>
-      `This test used the configured Codex path: ${path}.`,
+      `This test used the configured ${agentName} path: ${path}.`,
     invalidFallback: (configuredPath: string, detectedPath: string) =>
-      `Configured Codex path is invalid or not executable: ${configuredPath}. This test used the PATH Codex CLI at ${detectedPath}. Update CODEX_BIN or clear the custom path to use the detected binary.`,
+      `Configured ${agentName} path is invalid or not executable: ${configuredPath}. This test used the PATH ${agentName} CLI at ${detectedPath}. Update ${envKey} or clear the custom path to use the detected binary.`,
     failedFallback: (configuredPath: string, detectedPath: string) =>
-      `Configured Codex path failed: ${configuredPath}. This test succeeded with the PATH Codex CLI at ${detectedPath}. Update CODEX_BIN or clear the custom path to use the detected binary.`,
+      `Configured ${agentName} path failed: ${configuredPath}. This test succeeded with the PATH ${agentName} CLI at ${detectedPath}. Update ${envKey} or clear the custom path to use the detected binary.`,
+    candidatesTitle: `Detected ${agentName} binaries`,
+    current: 'Current',
+    use: 'Use',
+    useBinary: (path: string) => `Use ${agentName} binary ${path}`,
+    tryNext: 'Try next candidate',
   };
+}
+
+function cliBinaryEnvKey(agentId: string): string | null {
+  if (agentId === 'codex') return 'CODEX_BIN';
+  if (agentId === 'opencode') return 'OPENCODE_BIN';
+  return null;
+}
+
+function displayAgentName(agent: Pick<AgentInfo, 'id' | 'name'>): string {
+  if (agent.id === 'codex') return 'Codex';
+  return agent.name;
 }
 
 function sanitizeHttpsUrl(url: string | undefined): string | undefined {
@@ -497,6 +523,12 @@ const AGENT_CLI_ENV_FIELDS = [
     placeholder: 'Paste OPENAI_API_KEY',
     secret: true,
   },
+  {
+    agentId: 'opencode',
+    envKey: 'OPENCODE_BIN',
+    labelKey: 'settings.cliEnvOpenCodeBin',
+    placeholder: '/absolute/path/to/opencode',
+  },
 ] as const;
 
 function defaultApiProtocolConfig(protocol: ApiProtocol): ApiProtocolConfig {
@@ -668,7 +700,7 @@ function apiModelOptionLabel(model: ProviderModelOption): string {
     : model.id;
 }
 
-function codexPathRepairState(
+function cliPathRepairState(
   result: ConnectionTestResponse,
 ): { detectedPath: string; canUseDetected: boolean } | null {
   if (!result.ok) return null;
@@ -684,6 +716,25 @@ function codexPathRepairState(
     detectedPath,
     canUseDetected: true,
   };
+}
+
+function nextExecutableCandidatePath(
+  agent: AgentInfo,
+  result: ConnectionTestResponse,
+): string | null {
+  if (result.ok) return null;
+  const candidates = agent.executableCandidates?.filter(
+    (candidate) => candidate.available && candidate.path,
+  ) ?? [];
+  if (candidates.length < 2) return null;
+  const usedPath = result.usedExecutablePath ?? result.detectedExecutablePath ?? agent.path ?? '';
+  const usedIndex = candidates.findIndex((candidate) => candidate.path === usedPath);
+  const start = usedIndex >= 0 ? usedIndex + 1 : 0;
+  for (let offset = 0; offset < candidates.length; offset += 1) {
+    const candidate = candidates[(start + offset) % candidates.length];
+    if (candidate && candidate.path !== usedPath) return candidate.path;
+  }
+  return null;
 }
 
 /**
@@ -1412,20 +1463,25 @@ export function SettingsDialog({
       const baseMessage = kindForSuccess === 'api'
         ? t('settings.testSuccessApi', { ms, sample })
         : t('settings.testSuccessCli', { agentName, ms, sample });
-      if (kindForSuccess === 'cli' && cfg.agentId === 'codex') {
-        const codexStrings = codexPathStrings(locale);
+      if (kindForSuccess === 'cli' && cfg.agentId && cliBinaryEnvKey(cfg.agentId)) {
+        const selectedAgent = agents.find((agent) => agent.id === cfg.agentId);
+        const cliStrings = cliPathStrings(
+          locale,
+          selectedAgent ? displayAgentName(selectedAgent) : agentName,
+          cliBinaryEnvKey(cfg.agentId) ?? undefined,
+        );
         if (
           result.usedExecutableSource === 'configured' &&
           result.configuredExecutablePath
         ) {
-          return `${baseMessage} ${codexStrings.configuredSuccess(result.configuredExecutablePath)}`;
+          return `${baseMessage} ${cliStrings.configuredSuccess(result.configuredExecutablePath)}`;
         }
         if (
           result.usedExecutableSource === 'fallback_invalid' &&
           result.configuredExecutablePath &&
           result.detectedExecutablePath
         ) {
-          return `${baseMessage} ${codexStrings.invalidFallback(
+          return `${baseMessage} ${cliStrings.invalidFallback(
             result.configuredExecutablePath,
             result.detectedExecutablePath,
           )}`;
@@ -1435,7 +1491,7 @@ export function SettingsDialog({
           result.configuredExecutablePath &&
           result.detectedExecutablePath
         ) {
-          return `${baseMessage} ${codexStrings.failedFallback(
+          return `${baseMessage} ${cliStrings.failedFallback(
             result.configuredExecutablePath,
             result.detectedExecutablePath,
           )}`;
@@ -1474,13 +1530,20 @@ export function SettingsDialog({
     }
   };
 
-  const applyCodexDetectedPath = (detectedPath: string) => {
-    setCfg((c) => updateAgentCliEnvValue(c, 'codex', 'CODEX_BIN', detectedPath));
+  const applyDetectedCliPath = (
+    agentId: string,
+    detectedPath: string,
+  ) => {
+    const envKey = cliBinaryEnvKey(agentId);
+    if (!envKey) return;
+    setCfg((c) => updateAgentCliEnvValue(c, agentId, envKey, detectedPath));
     setAgentTestState({ status: 'idle' });
   };
 
-  const clearCodexCustomPath = () => {
-    setCfg((c) => updateAgentCliEnvValue(c, 'codex', 'CODEX_BIN', ''));
+  const clearCliCustomPath = (agentId: string) => {
+    const envKey = cliBinaryEnvKey(agentId);
+    if (!envKey) return;
+    setCfg((c) => updateAgentCliEnvValue(c, agentId, envKey, ''));
     setAgentTestState({ status: 'idle' });
   };
 
@@ -2488,38 +2551,69 @@ export function SettingsDialog({
                                         </div>
                                       </div>
                                     ) : null}
-                                    {cfg.agentId === 'codex' && (() => {
-                                      const repair = codexPathRepairState(
+                                    {(() => {
+                                      const envKey = cliBinaryEnvKey(a.id);
+                                      if (!envKey) return null;
+                                      const repair = cliPathRepairState(
                                         agentTestState.result,
                                       );
-                                      if (!repair) return null;
-                                      const codexStrings = codexPathStrings(locale);
+                                      const nextPath = nextExecutableCandidatePath(
+                                        a,
+                                        agentTestState.result,
+                                      );
+                                      if (!repair && !nextPath) return null;
+                                      const cliStrings = cliPathStrings(
+                                        locale,
+                                        displayAgentName(a),
+                                        envKey,
+                                      );
                                       return (
                                         <div className="settings-test-actions">
-                                          <span className="settings-test-actions-hint">
-                                            {codexStrings.repairHint}
-                                          </span>
+                                          {repair ? (
+                                            <span className="settings-test-actions-hint">
+                                              {cliStrings.repairHint}
+                                            </span>
+                                          ) : null}
                                           <div className="settings-test-actions-row">
-                                            {repair.canUseDetected ? (
+                                            {repair?.canUseDetected ? (
                                               <button
                                                 type="button"
                                                 className="settings-test-btn"
                                                 onClick={() =>
-                                                  applyCodexDetectedPath(
+                                                  applyDetectedCliPath(
+                                                    a.id,
                                                     repair.detectedPath,
                                                   )
                                                 }
                                               >
-                                                {codexStrings.useDetected}
+                                                {cliStrings.useDetected}
                                               </button>
                                             ) : null}
-                                            <button
-                                              type="button"
-                                              className="ghost icon-btn settings-rescan-btn"
-                                              onClick={clearCodexCustomPath}
-                                            >
-                                              {codexStrings.clearCustom}
-                                            </button>
+                                            {repair ? (
+                                              <button
+                                                type="button"
+                                                className="ghost icon-btn settings-rescan-btn"
+                                                onClick={() =>
+                                                  clearCliCustomPath(a.id)
+                                                }
+                                              >
+                                                {cliStrings.clearCustom}
+                                              </button>
+                                            ) : null}
+                                            {nextPath ? (
+                                              <button
+                                                type="button"
+                                                className="settings-test-btn"
+                                                onClick={() =>
+                                                  applyDetectedCliPath(
+                                                    a.id,
+                                                    nextPath,
+                                                  )
+                                                }
+                                              >
+                                                {cliStrings.tryNext}
+                                              </button>
+                                            ) : null}
                                           </div>
                                         </div>
                                       );
@@ -2539,6 +2633,92 @@ export function SettingsDialog({
                       </div>
                     )}
                   </div>
+                  {(() => {
+                    const selected = agents.find(
+                      (a) => a.id === cfg.agentId && a.available,
+                    );
+                    if (!selected) return null;
+                    const envKey = cliBinaryEnvKey(selected.id);
+                    if (!envKey) return null;
+                    const candidates =
+                      selected.executableCandidates?.filter(
+                        (candidate) => candidate.path,
+                      ) ?? [];
+                    if (candidates.length < 2) return null;
+                    const configuredPath =
+                      cfg.agentCliEnv?.[selected.id]?.[envKey]?.trim() ?? '';
+                    const currentPath =
+                      configuredPath ||
+                      candidates.find((candidate) => candidate.selected)
+                        ?.path ||
+                      selected.path ||
+                      '';
+                    const cliStrings = cliPathStrings(
+                      locale,
+                      displayAgentName(selected),
+                      envKey,
+                    );
+                    return (
+                      <div className="agent-candidates">
+                        <div className="agent-candidates-head">
+                          <span className="agent-candidates-title">
+                            {cliStrings.candidatesTitle}
+                          </span>
+                        </div>
+                        <div className="agent-candidate-list">
+                          {candidates.map((candidate) => {
+                            const isCurrent =
+                              candidate.path === currentPath ||
+                              (!currentPath && candidate.selected);
+                            return (
+                              <div
+                                key={`${candidate.source}:${candidate.path}`}
+                                className="agent-candidate-row"
+                              >
+                                <div className="agent-candidate-main">
+                                  <span
+                                    className="agent-candidate-path"
+                                    title={candidate.path}
+                                  >
+                                    {candidate.path}
+                                  </span>
+                                  <span className="agent-candidate-meta">
+                                    {candidate.version ||
+                                      t('common.installed')}
+                                    {' · '}
+                                    {candidate.source}
+                                  </span>
+                                </div>
+                                <div className="agent-candidate-actions">
+                                  {isCurrent ? (
+                                    <span className="agent-candidate-badge">
+                                      {cliStrings.current}
+                                    </span>
+                                  ) : candidate.available ? (
+                                    <button
+                                      type="button"
+                                      className="ghost icon-btn settings-rescan-btn"
+                                      aria-label={cliStrings.useBinary(
+                                        candidate.path,
+                                      )}
+                                      onClick={() =>
+                                        applyDetectedCliPath(
+                                          selected.id,
+                                          candidate.path,
+                                        )
+                                      }
+                                    >
+                                      {cliStrings.use}
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
               {(() => {
                 const selected = agents.find(
                   (a) => a.id === cfg.agentId && a.available,

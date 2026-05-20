@@ -285,6 +285,7 @@ export const zhCN: Dict = {
   'settings.cliEnvCodexBin': 'Codex 可执行文件路径',
   'settings.cliEnvCodexBaseUrl': 'Codex/OpenAI proxy base URL',
   'settings.cliEnvCodexApiKey': 'Codex/OpenAI proxy API key',
+  'settings.cliEnvOpenCodeBin': 'OpenCode executable path',
   'settings.modelCustom': '自定义（在下方填写）…',
   'settings.modelCustomLabel': '自定义模型 id',
   'settings.modelCustomPlaceholder': '例如 anthropic/claude-sonnet-4-6',

@@ -2083,6 +2083,82 @@ process.stdin.on('end', () => {
     }
   });
 
+  it('includes OpenCode executable path diagnostics on connection-test failures', async () => {
+    await withFakeOpenCode(
+      `
+const args = process.argv.slice(2);
+if (args[0] === 'models') {
+  console.log('openai/gpt-5');
+  process.exit(0);
+}
+if (args[0] === '--version') {
+  console.log('opencode 1.1.14');
+  process.exit(0);
+}
+console.error('OpenCode 1.1.14 crashed before streaming');
+process.exit(1);
+`,
+      async () => {
+        const result = await testAgentConnection({ agentId: 'opencode' });
+
+        expect(result).toMatchObject({
+          ok: false,
+          kind: 'agent_spawn_failed',
+          agentName: 'OpenCode',
+          usedExecutableSource: 'path',
+          usedExecutablePath: expect.any(String),
+          detectedExecutablePath: expect.any(String),
+        });
+        expect(result.usedExecutablePath).toContain('opencode');
+        expect(result.detail).toContain('OpenCode 1.1.14 crashed before streaming');
+        expect(result.detail).toContain('Used OpenCode binary:');
+        expect(result.detail).toContain('(opencode 1.1.14)');
+      },
+    );
+  });
+
+  it('falls back to PATH OpenCode during connection tests when configured OPENCODE_BIN fails', async () => {
+    await withFakeOpenCode(
+      `console.log(JSON.stringify({ type: 'text', part: { text: 'ok' } }));\n`,
+      async () => {
+        const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-fallback-'));
+        try {
+          const bin = path.join(dir, 'opencode-bad');
+          await fsp.writeFile(
+            bin,
+            `#!/usr/bin/env node\nconsole.error('OpenCode old binary crashed');\nprocess.exit(1);\n`,
+          );
+          await fsp.chmod(bin, 0o755);
+
+          const result = await testAgentConnection({
+            agentId: 'opencode',
+            agentCliEnv: {
+              opencode: {
+                OPENCODE_BIN: bin,
+              },
+            },
+          });
+
+          expect(result).toMatchObject({
+            ok: true,
+            kind: 'success',
+            agentName: 'OpenCode',
+            sample: 'ok',
+            usedExecutableSource: 'fallback_failed',
+            configuredExecutablePath: bin,
+            detectedExecutablePath: expect.any(String),
+            usedExecutablePath: expect.any(String),
+          });
+          expect(result.detail).toContain(`Configured OpenCode path failed: ${bin}.`);
+          expect(result.detail).toContain('This test succeeded with the PATH OpenCode CLI at');
+          expect(result.detail).toContain('Update OPENCODE_BIN or clear the custom path');
+        } finally {
+          await fsp.rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+
   it('reports Cursor Agent status auth failures before running the smoke prompt', async () => {
     await withFakeCursorAgent(
       `
