@@ -85,6 +85,26 @@ describe('validateCapabilityList', () => {
     ]);
   });
 
+  it('accepts capabilities derived by requiredCapabilities for GenUI surfaces and pipelines', () => {
+    const { accepted, rejected } = validateCapabilityList([
+      'genui:form',
+      'genui:choice',
+      'genui:confirmation',
+      'genui:oauth-prompt',
+      'genui:custom-component',
+      'pipeline:*',
+    ]);
+    expect(rejected).toEqual([]);
+    expect(accepted.sort()).toEqual([
+      'genui:choice',
+      'genui:confirmation',
+      'genui:custom-component',
+      'genui:form',
+      'genui:oauth-prompt',
+      'pipeline:*',
+    ]);
+  });
+
   it('rejects unknown shapes without dropping good entries', () => {
     const { accepted, rejected } = validateCapabilityList([
       'fs:read',

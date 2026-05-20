@@ -279,12 +279,47 @@ describe('PluginDetailView trust controls', () => {
     );
   });
 
-  it('derives a pipeline:* row from declared pipeline stages', async () => {
+  it('derives and grants GenUI surface-kind and pipeline capabilities', async () => {
     currentPlugin = makePipelinePlugin(['prompt:inject']);
 
     render(<PluginDetailView pluginId="sample-plugin" />);
 
-    await screen.findByLabelText('pipeline:*');
+    const pipeline = await screen.findByLabelText('pipeline:*');
     expect(screen.getByTestId('plugin-capability-pipeline:*').textContent).toContain('Requested');
+
+    fireEvent.click(pipeline);
+    fireEvent.click(screen.getByRole('button', { name: 'Grant selected capabilities' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plugin-capability-pipeline:*').textContent).toContain('Granted');
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/plugins/sample-plugin/trust',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ capabilities: ['pipeline:*'], action: 'grant' }),
+      }),
+    );
+
+    cleanup();
+    currentPlugin = makeGenuiComponentPlugin(['prompt:inject']);
+    render(<PluginDetailView pluginId="sample-plugin" />);
+
+    const genuiForm = await screen.findByLabelText('genui:form');
+    expect(screen.getByTestId('plugin-capability-genui:form').textContent).toContain('Requested');
+
+    fireEvent.click(genuiForm);
+    fireEvent.click(screen.getByRole('button', { name: 'Grant selected capabilities' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plugin-capability-genui:form').textContent).toContain('Granted');
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/plugins/sample-plugin/trust',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ capabilities: ['genui:form'], action: 'grant' }),
+      }),
+    );
   });
 });

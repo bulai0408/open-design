@@ -32,6 +32,7 @@ import { installFromLocalFolder } from '../src/plugins/installer.js';
 import { getInstalledPlugin } from '../src/plugins/registry.js';
 import { createSnapshot, getSnapshot } from '../src/plugins/snapshots.js';
 import { resolvePluginSnapshot, capabilitiesRequiredError } from '../src/plugins/resolve-snapshot.js';
+import { grantCapabilities } from '../src/plugins/trust.js';
 import { renderPluginBlock } from '@open-design/contracts';
 import { checkConnectorAccess, ToolTokenRegistry } from '../src/tool-tokens.js';
 import { FIRST_PARTY_ATOMS, type AtomCatalogEntry } from '../src/plugins/atoms.js';
@@ -256,6 +257,88 @@ describe('Plan §8 e2e — daemon-side anchors', () => {
     const gateResult = checkConnectorAccess(grant, 'slack');
     expect(gateResult.ok).toBe(false);
     expect(plugin.trust).toBe('restricted');
+  });
+
+  it('persistent trust grants satisfy derived GenUI surface-kind and pipeline capabilities', async () => {
+    const folder = path.join(tmpRoot, 'derived-capability-plugin');
+    await mkdir(folder, { recursive: true });
+    const manifest = {
+      $schema: 'https://open-design.ai/schemas/plugin.v1.json',
+      name: 'derived-capability-plugin',
+      title: 'Derived Capability Plugin',
+      version: '1.0.0',
+      description: 'requires GenUI and pipeline capabilities',
+      license: 'MIT',
+      od: {
+        kind: 'skill',
+        taskKind: 'new-generation',
+        useCase: { query: 'Run the guided workflow.' },
+        capabilities: ['prompt:inject'],
+        genui: {
+          surfaces: [
+            {
+              id: 'intake',
+              kind: 'form',
+              persist: 'run',
+              schema: {
+                type: 'object',
+                properties: { topic: { type: 'string' } },
+              },
+            },
+          ],
+        },
+        pipeline: {
+          stages: [{ id: 'draft', atoms: ['todo-write'] }],
+        },
+      },
+    };
+    await writeFile(path.join(folder, 'open-design.json'), JSON.stringify(manifest));
+    await writeFile(
+      path.join(folder, 'SKILL.md'),
+      '---\nname: derived-capability-plugin\ndescription: requires derived capabilities\n---\n# Derived\n',
+    );
+    await installLocal(folder);
+    db.prepare('UPDATE installed_plugins SET trust = ? WHERE id = ?')
+      .run('restricted', 'derived-capability-plugin');
+
+    const missing = resolvePluginSnapshot({
+      db,
+      body: { pluginId: 'derived-capability-plugin' },
+      projectId: 'project-1',
+      registry: REGISTRY_VIEW,
+    });
+    expect(missing).toBeDefined();
+    expect(missing?.ok).toBe(false);
+    if (missing && !missing.ok) {
+      expect(missing.status).toBe(409);
+      expect(missing.body.error.code).toBe('capabilities-required');
+      expect(missing.body.error.data?.missing).toEqual(
+        expect.arrayContaining(['genui:form', 'pipeline:*']),
+      );
+    }
+
+    const next = grantCapabilities({
+      db,
+      pluginId: 'derived-capability-plugin',
+      capabilities: ['genui:form', 'pipeline:*'],
+    });
+    expect(next).toEqual(expect.arrayContaining(['genui:form', 'pipeline:*']));
+
+    const granted = resolvePluginSnapshot({
+      db,
+      body: { pluginId: 'derived-capability-plugin' },
+      projectId: 'project-1',
+      registry: REGISTRY_VIEW,
+    });
+    expect(granted?.ok).toBe(true);
+    if (granted?.ok) {
+      expect(granted.snapshot.capabilitiesGranted).toEqual(
+        expect.arrayContaining(['genui:form', 'pipeline:*']),
+      );
+      expect(granted.snapshot.capabilitiesRequired).toEqual(
+        expect.arrayContaining(['genui:form', 'pipeline:*']),
+      );
+    }
   });
 
   it('e2e-8 apply purity regression: 100 applies → 0 FS mutation, snapshot count grows by 100', async () => {

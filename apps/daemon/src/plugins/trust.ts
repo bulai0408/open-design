@@ -65,8 +65,12 @@ export function requiredCapabilities(manifest: PluginManifest): string[] {
 export function resolveCapabilitiesGranted(args: {
   manifest: PluginManifest;
   trust: TrustTier;
+  capabilitiesGranted?: readonly string[] | undefined;
 }): string[] {
   const out = new Set(defaultCapabilities(args.trust));
+  for (const cap of args.capabilitiesGranted ?? []) {
+    if (typeof cap === 'string' && cap.length > 0) out.add(cap);
+  }
   if (args.trust === 'trusted') {
     for (const cap of requiredCapabilities(args.manifest)) {
       out.add(stripOptionalSuffix(cap));
@@ -95,6 +99,11 @@ const KNOWN_TOP_LEVEL_CAPABILITIES = new Set<string>([
   // surfaces require an explicit capability so a restricted plugin
   // cannot smuggle arbitrary UI through the GenUI layer.
   'genui:custom-component',
+  'genui:form',
+  'genui:choice',
+  'genui:confirmation',
+  'genui:oauth-prompt',
+  'pipeline:*',
 ]);
 
 const SCOPED_CONNECTOR_RE = /^connector:[a-z0-9][a-z0-9_-]*$/;

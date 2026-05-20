@@ -115,7 +115,11 @@ export function applyPlugin(input: ApplyInput): ApplyComputed {
   const { resolved: connectorsResolved, required: connectorsRequired } =
     resolveConnectorBindings(manifest, input.connectorProbe);
   const required = requiredCapabilities(manifest);
-  const granted = resolveCapabilitiesGranted({ manifest, trust });
+  const granted = resolveCapabilitiesGranted({
+    manifest,
+    trust,
+    capabilitiesGranted: input.plugin.capabilitiesGranted,
+  });
   const taskKind = (manifest.od?.taskKind ?? 'new-generation') as AppliedPluginSnapshot['taskKind'];
 
   // Spec §23.3.3: when the plugin omits `od.pipeline`, fall back to
