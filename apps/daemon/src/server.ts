@@ -106,6 +106,7 @@ import {
   registerBuiltInAtomWorkers,
   registerBundledPlugins,
   registryRootsForDataDir,
+  restoreProjectSnapshotLink,
   resolvePluginSnapshot,
   runPipelineForRun,
   runStageWithRegistry,
@@ -12065,11 +12066,13 @@ export async function startServer({
     let projectName;
     let createdProjectId: string | null = null;
     let createdConversationId: string | null = null;
+    let previousProjectSnapshotId: string | null = null;
     if (routine.target.mode === 'reuse') {
       const project = getProject(db, routine.target.projectId);
       if (!project) throw new Error(`Routine target project ${routine.target.projectId} not found`);
       projectId = project.id;
       projectName = project.name;
+      previousProjectSnapshotId = project.appliedPluginSnapshotId ?? null;
     } else {
       projectId = `routine-${randomUUID()}`;
       projectName = `${routine.name} · ${stamp}`;
@@ -12207,6 +12210,19 @@ export async function startServer({
         design.runs.finish(run, 'canceled');
       } catch {
         // best-effort cleanup for an unstarted duplicate scheduled run
+      }
+      if (resolvedRoutineSnapshot?.ok && routine.target.mode === 'reuse') {
+        try {
+          restoreProjectSnapshotLink(
+            db,
+            projectId,
+            resolvedRoutineSnapshot.snapshotId,
+            previousProjectSnapshotId,
+            run.id,
+          );
+        } catch {
+          // best-effort cleanup for an unstarted duplicate scheduled run
+        }
       }
       if (createdConversationId) {
         try { deleteConversation(db, createdConversationId); } catch {}
