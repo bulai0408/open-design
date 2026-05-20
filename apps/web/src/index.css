@@ -13590,6 +13590,14 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
   color: var(--text-muted);
 }
 
+/* Stopped — terminal fallback for a run that ended mid-task */
+.todo-stopped {
+  background: color-mix(in srgb, var(--red) 8%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--red) 24%, transparent);
+}
+.todo-stopped .todo-check { color: var(--red); font-weight: 700; }
+.todo-stopped .todo-text { color: var(--text); }
+
 /* Composer extras */
 .composer.drag-active {
   outline: 2px dashed var(--accent);
