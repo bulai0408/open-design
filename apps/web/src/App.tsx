@@ -1142,7 +1142,7 @@ function AppInner() {
           || previous.customInstructions !== updated.customInstructions
         )
       ) {
-        iframeKeepAlivePool.evictProject(updated.id);
+        iframeKeepAlivePool.evictProject(updated.id, { includeActive: true });
       }
       return curr.map((p) => (p.id === updated.id ? updated : p));
     });

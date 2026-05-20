@@ -1361,7 +1361,7 @@ export function ProjectView({
   useEffect(() => {
     if (previousPromptContextSignatureRef.current === activePromptContextSignature) return;
     previousPromptContextSignatureRef.current = activePromptContextSignature;
-    iframeKeepAlivePool.evictProject(project.id);
+    iframeKeepAlivePool.evictProject(project.id, { includeActive: true });
   }, [activePromptContextSignature, iframeKeepAlivePool, project.id]);
 
   // When the URL points at a specific file, fire an open request so the
