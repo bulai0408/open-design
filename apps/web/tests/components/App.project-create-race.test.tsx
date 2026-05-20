@@ -26,39 +26,68 @@ import {
 } from '../../src/providers/registry';
 import {
   createProject,
+  deleteProject,
   listProjects,
   listTemplates,
   patchProject,
 } from '../../src/state/projects';
 
 vi.mock('../../src/components/EntryView', () => ({
-  EntryView: ({ onCreateProject }: { onCreateProject: (input: unknown) => void }) => (
-    <button
-      type="button"
-      onClick={() =>
-        onCreateProject({
-          name: 'Fresh project',
-          skillId: null,
-          designSystemId: null,
-          metadata: { kind: 'prototype' },
-        })
-      }
-    >
-      Create project
-    </button>
+  EntryView: ({
+    onCreateProject,
+    onDeleteProject,
+    onOpenProject,
+    projects,
+  }: {
+    onCreateProject: (input: unknown) => void;
+    onDeleteProject: (id: string) => void;
+    onOpenProject: (id: string) => void;
+    projects: Project[];
+  }) => (
+    <main>
+      <button
+        type="button"
+        onClick={() =>
+          onCreateProject({
+            name: 'Fresh project',
+            skillId: null,
+            designSystemId: null,
+            metadata: { kind: 'prototype' },
+          })
+        }
+      >
+        Create project
+      </button>
+      {projects.map((project) => (
+        <div key={project.id} data-testid={`entry-project-${project.id}`}>
+          <span>{project.name}</span>
+          <button type="button" onClick={() => onOpenProject(project.id)}>
+            Open {project.name}
+          </button>
+          <button type="button" onClick={() => void onDeleteProject(project.id)}>
+            Delete {project.name}
+          </button>
+        </div>
+      ))}
+    </main>
   ),
 }));
 
 vi.mock('../../src/components/ProjectView', () => ({
   ProjectView: ({
+    onBack,
     onProjectsRefresh,
     project,
   }: {
+    onBack: () => void;
     onProjectsRefresh: () => Promise<void>;
     project: Project;
   }) => (
     <main data-testid="project-view">
       <span data-testid="project-title">{project.name}</span>
+      <button type="button" onClick={onBack}>
+        Back to projects
+      </button>
       <button type="button" onClick={() => void onProjectsRefresh()}>
         Refresh projects
       </button>
@@ -68,6 +97,7 @@ vi.mock('../../src/components/ProjectView', () => ({
 
 vi.mock('../../src/components/WorkspaceTabsBar', () => ({
   WorkspaceTabsBar: () => null,
+  openWorkspaceTab: () => {},
 }));
 
 vi.mock('../../src/components/pet/PetOverlay', () => ({
@@ -108,6 +138,7 @@ vi.mock('../../src/state/projects', async () => {
   return {
     ...actual,
     createProject: vi.fn(),
+    deleteProject: vi.fn(),
     listProjects: vi.fn(),
     listTemplates: vi.fn(),
     patchProject: vi.fn(),
@@ -139,6 +170,7 @@ const mockedFetchPromptTemplates = vi.mocked(fetchPromptTemplates);
 const mockedFetchSkills = vi.mocked(fetchSkills);
 const mockedUploadProjectFiles = vi.mocked(uploadProjectFiles);
 const mockedCreateProject = vi.mocked(createProject);
+const mockedDeleteProject = vi.mocked(deleteProject);
 const mockedListProjects = vi.mocked(listProjects);
 const mockedListTemplates = vi.mocked(listTemplates);
 const mockedPatchProject = vi.mocked(patchProject);
@@ -208,6 +240,7 @@ describe('App project creation routing', () => {
       project: freshProject,
       conversationId: 'conv-new',
     });
+    mockedDeleteProject.mockResolvedValue(true);
     mockedPatchProject.mockResolvedValue(freshProject);
     vi.stubGlobal(
       'fetch',
@@ -282,5 +315,49 @@ describe('App project creation routing', () => {
 
     expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
     expect(window.location.pathname).toBe('/projects/project-new');
+  });
+
+  it('does not re-add a locally deleted project when an older project list resolves stale', async () => {
+    const initialProjects = deferred<Project[]>();
+    const staleRefreshProjects = deferred<Project[]>();
+    mockedListProjects
+      .mockReturnValueOnce(initialProjects.promise)
+      .mockReturnValueOnce(staleRefreshProjects.promise)
+      .mockResolvedValue([]);
+
+    render(<App />);
+
+    await act(async () => {
+      initialProjects.resolve([freshProject]);
+      await initialProjects.promise;
+    });
+
+    expect(screen.getByTestId('entry-project-project-new').textContent).toContain(
+      'Fresh project',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Fresh project' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh projects' }));
+    expect(mockedListProjects).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Fresh project' }));
+
+    await waitFor(() => {
+      expect(mockedDeleteProject).toHaveBeenCalledWith('project-new');
+      expect(screen.queryByTestId('entry-project-project-new')).toBeNull();
+    });
+
+    await act(async () => {
+      staleRefreshProjects.resolve([freshProject]);
+      await staleRefreshProjects.promise;
+    });
+
+    expect(screen.queryByTestId('entry-project-project-new')).toBeNull();
   });
 });

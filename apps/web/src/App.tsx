@@ -216,6 +216,7 @@ export function App() {
     recent: [],
   });
   const pendingLocalProjectIdsRef = useRef<Set<string>>(new Set());
+  const locallyDeletedProjectIdsRef = useRef<Map<string, number>>(new Map());
   const projectListMutationVersionRef = useRef(0);
   const projectListRequestGenerationRef = useRef(0);
   const latestAppliedProjectListGenerationRef = useRef(0);
@@ -268,12 +269,19 @@ export function App() {
 
   const rememberLocalProject = useCallback((projectId: string) => {
     pendingLocalProjectIdsRef.current.add(projectId);
+    locallyDeletedProjectIdsRef.current.delete(projectId);
     projectListMutationVersionRef.current += 1;
   }, []);
 
-  const clearLocalProject = useCallback((projectId: string) => {
+  const clearLocalProject = useCallback((projectId: string, options?: { deleted?: boolean }) => {
     pendingLocalProjectIdsRef.current.delete(projectId);
     projectListMutationVersionRef.current += 1;
+    if (options?.deleted) {
+      locallyDeletedProjectIdsRef.current.set(
+        projectId,
+        projectListMutationVersionRef.current,
+      );
+    }
   }, []);
 
   const beginProjectListRequest = useCallback((): ProjectListRequest => {
@@ -290,8 +298,26 @@ export function App() {
     }
     latestAppliedProjectListGenerationRef.current = request.generation;
     const pendingLocalProjectIds = pendingLocalProjectIdsRef.current;
+    const locallyDeletedProjectIds = locallyDeletedProjectIdsRef.current;
     const fetchedIds = new Set(list.map((project) => project.id));
     for (const id of fetchedIds) pendingLocalProjectIds.delete(id);
+    for (const [id, deletedAtMutationVersion] of locallyDeletedProjectIds) {
+      if (
+        request.mutationVersion >= deletedAtMutationVersion
+        && !fetchedIds.has(id)
+      ) {
+        locallyDeletedProjectIds.delete(id);
+      }
+    }
+    const activeDeletedProjectIds = new Set(locallyDeletedProjectIds.keys());
+    const visibleList =
+      activeDeletedProjectIds.size > 0
+        ? list.filter((project) => !activeDeletedProjectIds.has(project.id))
+        : list;
+    const visibleFetchedIds =
+      activeDeletedProjectIds.size > 0
+        ? new Set(visibleList.map((project) => project.id))
+        : fetchedIds;
     const preserveLocalProjects =
       request.mutationVersion < projectListMutationVersionRef.current;
     setProjects((current) => {
@@ -299,9 +325,10 @@ export function App() {
         (project) =>
           preserveLocalProjects &&
           pendingLocalProjectIds.has(project.id) &&
-          !fetchedIds.has(project.id),
+          !visibleFetchedIds.has(project.id) &&
+          !activeDeletedProjectIds.has(project.id),
       );
-      return preserved.length > 0 ? [...preserved, ...list] : list;
+      return preserved.length > 0 ? [...preserved, ...visibleList] : visibleList;
     });
     return true;
   }, []);
@@ -1119,7 +1146,7 @@ export function App() {
   const handleDeleteProject = useCallback(async (id: string) => {
     const ok = await deleteProjectApi(id);
     if (!ok) return false;
-    clearLocalProject(id);
+    clearLocalProject(id, { deleted: true });
     setProjects((curr) => curr.filter((p) => p.id !== id));
     if (route.kind === 'project' && route.projectId === id) {
       navigate({ kind: 'home', view: 'home' });
@@ -1195,9 +1222,11 @@ export function App() {
       const request = beginProjectListRequest();
       const list = await listProjects();
       if (cancelled) return;
-      const fetchedProject = list.find((p) => p.id === route.projectId);
       const applied = reconcileFetchedProjects(list, request);
       if (!applied) return;
+      const fetchedProject = locallyDeletedProjectIdsRef.current.has(route.projectId)
+        ? undefined
+        : list.find((p) => p.id === route.projectId);
       const staleRequest = request.mutationVersion < projectListMutationVersionRef.current;
       const knownLocalProject =
         staleRequest && pendingLocalProjectIdsRef.current.has(route.projectId);
