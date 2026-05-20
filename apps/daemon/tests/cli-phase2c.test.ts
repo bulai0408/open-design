@@ -8,9 +8,9 @@ import path from 'node:path';
 import url from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createJsonIpcServer } from '@open-design/sidecar';
-import { SIDECAR_MESSAGES, normalizeDaemonSidecarMessage } from '@open-design/sidecar-proto';
+import { SIDECAR_ENV, SIDECAR_MESSAGES, normalizeDaemonSidecarMessage } from '@open-design/sidecar-proto';
 
-import { startServer } from '../src/server.js';
+import { createAgentRuntimeEnv, startServer } from '../src/server.js';
 import { resetDesktopAuthForTests, setDesktopAuthSecret } from '../src/desktop-auth.js';
 import { mintImportTokenForCli } from '../src/sidecar/server.js';
 
@@ -165,13 +165,24 @@ describe('Phase 2C CLI wrappers', () => {
       });
       sidecarServers.push(sidecar);
 
+      const previousIpcPath = process.env[SIDECAR_ENV.IPC_PATH];
+      process.env[SIDECAR_ENV.IPC_PATH] = ipcPath;
+      let wrapperEnv: NodeJS.ProcessEnv;
+      try {
+        wrapperEnv = createAgentRuntimeEnv(
+          { PATH: process.env.PATH },
+          baseUrl,
+          null,
+          process.execPath,
+        );
+      } finally {
+        if (previousIpcPath === undefined) delete process.env[SIDECAR_ENV.IPC_PATH];
+        else process.env[SIDECAR_ENV.IPC_PATH] = previousIpcPath;
+      }
+
       const imported = await runCli(
         ['project', 'import', `  ${folder}  `, '--name', 'Gated CLI Import', '--json'],
-        {
-          env: {
-            OD_SIDECAR_IPC_PATH: ipcPath,
-          },
-        },
+        { env: wrapperEnv },
       );
       const importBody = JSON.parse(imported.stdout) as {
         project: {
