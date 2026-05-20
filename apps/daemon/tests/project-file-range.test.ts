@@ -226,6 +226,30 @@ describe('GET /api/projects/:id/raw/* range request route', () => {
     expect(text).toBe('<html/>');
   });
 
+  it('injects the preview navigation reporter only when requested for HTML previews', async () => {
+    const raw = await fetch(rawUrl('page.html'));
+    expect(await raw.text()).toBe('<html/>');
+
+    const instrumented = await fetch(`${rawUrl('page.html')}?odPreviewNav=1`);
+    expect(instrumented.status).toBe(200);
+    const text = await instrumented.text();
+    expect(text).toContain('data-od-preview-navigation-bridge');
+    expect(text).toContain("type: 'od:preview-navigation'");
+    expect(text).toContain("data.type === 'od:preview-navigation-request'");
+    expect(text).toContain("data.type === 'od:preview-navigation-restore'");
+  });
+
+  it('serves a same-origin srcdoc transport shell for bridge previews', async () => {
+    const res = await fetch(`${rawUrl('page.html')}?odSrcdocTransport=1`);
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('data-od-srcdoc-transport-shell');
+    expect(text).toContain("data.type !== 'od:srcdoc-transport-activate'");
+    expect(text).toContain('history.replaceState');
+    expect(text).not.toContain('<html/>');
+  });
+
   it('returns 404 for a missing file', async () => {
     const res = await fetch(rawUrl('missing.mp4'));
     expect(res.status).toBe(404);

@@ -66,7 +66,12 @@ import {
 } from '../runtime/exports';
 import { buildReactComponentSrcdoc } from '../runtime/react-component';
 import { findHtmlEntriesReferencing } from '../runtime/jsx-module-refs';
-import { buildLazySrcdocTransport, buildSrcdoc, canActivateSrcDocTransport } from '../runtime/srcdoc';
+import {
+  buildLazySrcdocTransport,
+  buildSrcdoc,
+  canActivateSrcDocTransport,
+  type SrcdocPreviewNavigation,
+} from '../runtime/srcdoc';
 import {
   hasTweaksTemplate,
   hasUrlModeBridge,
