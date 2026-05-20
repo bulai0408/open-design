@@ -489,6 +489,48 @@ describe('ManualEditPanel', () => {
     expect(onStyleChange).toHaveBeenCalledWith('hero-title', { flexDirection: 'column' }, 'Style: Hero Title');
   });
 
+  it('keeps layout controls enabled for hidden layout containers', () => {
+    const onStyleChange = vi.fn();
+    const hiddenLayoutTarget: ManualEditTarget = {
+      ...target,
+      id: 'hidden-section',
+      label: 'Hidden Section',
+      tagName: 'section',
+      kind: 'container',
+      rect: { x: 0, y: 0, width: 0, height: 0 },
+      isHidden: true,
+      isLayoutContainer: true,
+    };
+    renderPanel({
+      onStyleChange,
+      targets: [hiddenLayoutTarget],
+      selectedTarget: hiddenLayoutTarget,
+      styles: {
+        ...emptyManualEditStyles(),
+        gap: '12px',
+        flexDirection: 'row',
+      },
+    });
+
+    const layoutSection = sectionByTitle('LAYOUT');
+    expect(layoutSection.classList.contains('cc-section-inactive')).toBe(false);
+    expect(layoutSection.textContent).not.toContain('Select a container or group to edit layout.');
+    const gapIncrease = layoutSection.querySelector('button[aria-label="Gap increase"]') as HTMLButtonElement | null;
+    const directionSelect = layoutSection.querySelector('select') as HTMLSelectElement | null;
+    if (!gapIncrease || !directionSelect) throw new Error('Layout controls not found');
+    expect(gapIncrease.disabled).toBe(false);
+    expect(directionSelect.disabled).toBe(false);
+
+    act(() => {
+      gapIncrease.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+      directionSelect.value = 'column';
+      directionSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    });
+
+    expect(onStyleChange).toHaveBeenCalledWith('hidden-section', { gap: '13px' }, 'Style: Hidden Section');
+    expect(onStyleChange).toHaveBeenCalledWith('hidden-section', { flexDirection: 'column' }, 'Style: Hidden Section');
+  });
+
   it('summarizes full-source history entries without rendering the full file', () => {
     const source = '<html><body>' + 'x'.repeat(10_000) + '</body></html>';
 

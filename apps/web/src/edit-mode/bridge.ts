@@ -119,7 +119,8 @@ export function buildManualEditBridge(enabled: boolean): string {
   }
   function isLayoutContainer(el){
     var display = window.getComputedStyle(el).display || '';
-    return display.indexOf('flex') >= 0 || display.indexOf('grid') >= 0;
+    if (display.indexOf('flex') >= 0 || display.indexOf('grid') >= 0) return true;
+    return isHiddenTarget(el) && inferKind(el) === 'container';
   }
   function isHiddenTarget(el, rect){
     var targetVisibility = window.getComputedStyle(el).visibility;

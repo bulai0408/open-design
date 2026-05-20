@@ -94,6 +94,43 @@ describe('manual edit bridge target normalization', () => {
     dom.window.close();
   });
 
+  it('treats hidden containers as layout editable targets', async () => {
+    const posts: Array<{ type?: string; targets?: Array<{ id: string; isHidden?: boolean; isLayoutContainer?: boolean }> }> = [];
+    const dom = new JSDOM(
+      `<main>
+        <section data-od-source-path="path-0-0" style="display:none">
+          <p data-od-source-path="path-0-0-0">Hidden layout copy</p>
+        </section>
+      </main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const section = dom.window.document.querySelector('section')!;
+    const paragraph = dom.window.document.querySelector('p')!;
+    section.getBoundingClientRect = () => ({
+      x: 0, y: 0, width: 0, height: 0,
+      top: 0, right: 0, bottom: 0, left: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    paragraph.getBoundingClientRect = section.getBoundingClientRect;
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string; targets?: Array<{ id: string; isHidden?: boolean; isLayoutContainer?: boolean }> });
+    }) as typeof dom.window.parent.postMessage;
+
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-mode', enabled: true },
+    }));
+    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+
+    const targetsMessage = posts.find((message) => message.type === 'od-edit-targets');
+    const hiddenSection = targetsMessage?.targets?.find((target) => target.id === 'path-0-0');
+    const hiddenParagraph = targetsMessage?.targets?.find((target) => target.id === 'path-0-0-0');
+    expect(hiddenSection?.isHidden).toBe(true);
+    expect(hiddenSection?.isLayoutContainer).toBe(true);
+    expect(hiddenParagraph?.isLayoutContainer).toBe(false);
+
+    dom.window.close();
+  });
+
   it('does not mark visibility:visible descendants as hidden', async () => {
     const posts: Array<{ type?: string; targets?: Array<{ id: string; isHidden?: boolean }> }> = [];
     const dom = new JSDOM(
