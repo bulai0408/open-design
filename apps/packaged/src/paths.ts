@@ -41,6 +41,12 @@ function expandHomePrefix(raw: string): string {
   return raw;
 }
 
+function isAlreadyScopedPackagedDataRoot(raw: string, namespace: string): boolean {
+  const parts = raw.replace(/[\\/]+$/g, "").split(/[\\/]+/);
+  const last = parts.length - 1;
+  return parts[last - 2] === "namespaces" && parts[last - 1] === namespace && parts[last] === "data";
+}
+
 function resolvePackagedDataRoot(
   config: Pick<PackagedConfig, "namespaceBaseRoot">,
   namespace: string,
@@ -51,6 +57,9 @@ function resolvePackagedDataRoot(
     const expanded = expandHomePrefix(odDataDir);
     if (!isAbsolute(expanded) && !win32.isAbsolute(expanded)) {
       throw new Error("OD_DATA_DIR must be an absolute path in packaged mode.");
+    }
+    if (isAlreadyScopedPackagedDataRoot(expanded, namespace)) {
+      return expanded;
     }
     return join(expanded, "namespaces", namespace, "data");
   }

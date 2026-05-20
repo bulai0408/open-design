@@ -86,6 +86,25 @@ describe("resolvePackagedNamespacePaths", () => {
     expect(stable.dataRoot).not.toBe(beta.dataRoot);
   });
 
+  it("preserves already-scoped packaged OD_DATA_DIR values as the final daemon dataRoot", () => {
+    const config = fakeConfig();
+    const override = join(
+      "C:",
+      "Users",
+      "Fred",
+      "AppData",
+      "Roaming",
+      "Open Design",
+      "namespaces",
+      config.namespace,
+      "data",
+    );
+
+    expect(
+      resolvePackagedNamespacePaths(config, config.namespace, { OD_DATA_DIR: override }).dataRoot,
+    ).toBe(override);
+  });
+
   it("forwards the OD_DATA_DIR-resolved dataRoot into sidecar launch paths", () => {
     const config = fakeConfig();
     const override = join("C:", "Users", "Fred", "MyProject", "design", ".od");
