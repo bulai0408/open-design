@@ -178,6 +178,48 @@ process.exit(0);
     );
   });
 
+  it('marks successful runs failed when emitted HTML still contains pitch-deck placeholders', async () => {
+    await withFakeAgent(
+      'opencode',
+      `
+console.log(JSON.stringify({ type: 'step_start' }));
+console.log(JSON.stringify({
+  type: 'text',
+  part: {
+    text: '<!doctype html><html><body><section>Name to confirm</section><section>$X.XM</section></body></html>'
+  }
+}));
+process.exit(0);
+`,
+      async () => {
+        const createResponse = await fetch(`${baseUrl}/api/runs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: 'opencode',
+            message: 'build a pitch deck',
+          }),
+        });
+        expect(createResponse.status).toBe(202);
+        const { runId } = await createResponse.json() as { runId: string };
+
+        const eventsController = new AbortController();
+        const eventsResponse = await fetch(`${baseUrl}/api/runs/${runId}/events`, {
+          signal: eventsController.signal,
+        });
+        const eventsBody = await readSseUntil(eventsResponse, 'ARTIFACT_PUBLICATION_BLOCKED');
+        eventsController.abort();
+        const statusBody = await waitForRunStatus(baseUrl, runId);
+
+        expect(eventsBody).toContain('event: error');
+        expect(eventsBody).toContain('ARTIFACT_PUBLICATION_BLOCKED');
+        expect(eventsBody).toContain('Name to confirm');
+        expect(eventsBody).toContain('$X.XM');
+        expect(statusBody.status).toBe('failed');
+      },
+    );
+  });
+
   it('classifies Cursor Agent authentication stderr as a typed run error', async () => {
     await withFakeAgent(
       'cursor-agent',

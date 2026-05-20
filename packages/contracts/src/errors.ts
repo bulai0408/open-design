@@ -23,6 +23,9 @@ export const API_ERROR_CODES = [
   // a bare filename string, an empty fallback page) instead of the full
   // document. Configurable via OD_ARTIFACT_STUB_GUARD (reject|warn|off).
   'ARTIFACT_REGRESSION',
+  // The daemon found unresolved standard placeholders in a generated HTML/deck
+  // artifact, so the result cannot be published or marked as succeeded.
+  'ARTIFACT_PUBLICATION_BLOCKED',
   'UPSTREAM_UNAVAILABLE',
   'RATE_LIMITED',
   // PR #974 round-4: desktop-paired daemon received an import request

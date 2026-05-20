@@ -290,6 +290,12 @@ import {
   writeProjectFile,
 } from './projects.js';
 import { validateArtifactManifestInput } from './artifact-manifest.js';
+import {
+  ARTIFACT_PUBLICATION_BLOCKED_CODE,
+  buildArtifactPublicationBlockedMessage,
+  findUnresolvedArtifactPlaceholders,
+  isPublicationGuardedArtifactKind,
+} from './artifact-publication-guard.js';
 import { readCurrentAppVersionInfo } from './app-version.js';
 import {
   appendMessageStatusEvent,
@@ -1839,6 +1845,60 @@ async function ensureGhReady() {
 }
 
 const TERMINAL_RUN_STATUSES = new Set(['succeeded', 'failed', 'canceled']);
+
+async function findProjectPublicationPlaceholders(projectId, metadata, preRunFileKeys = null) {
+  if (typeof projectId !== 'string' || projectId.length === 0) return [];
+  let files;
+  try {
+    files = await listFiles(PROJECTS_DIR, projectId, { metadata });
+  } catch {
+    return [];
+  }
+  const seen = new Set();
+  const placeholders = [];
+  for (const file of files) {
+    if (
+      preRunFileKeys instanceof Set &&
+      preRunFileKeys.has(`${file?.name}:${file?.mtime}:${file?.size}`)
+    ) {
+      continue;
+    }
+    if (
+      file?.kind !== 'html' &&
+      !isPublicationGuardedArtifactKind(file?.artifactKind)
+    ) {
+      continue;
+    }
+    let body;
+    try {
+      const entry = await readProjectFile(PROJECTS_DIR, projectId, file.name, metadata);
+      body = entry.buffer;
+    } catch {
+      continue;
+    }
+    for (const placeholder of findUnresolvedArtifactPlaceholders(body)) {
+      if (seen.has(placeholder)) continue;
+      seen.add(placeholder);
+      placeholders.push(placeholder);
+    }
+  }
+  return placeholders;
+}
+
+async function findRunPublicationPlaceholders({ projectId, metadata, assistantOutput, preRunFileKeys }) {
+  const seen = new Set();
+  const placeholders = [];
+  const add = (matches) => {
+    for (const placeholder of matches) {
+      if (seen.has(placeholder)) continue;
+      seen.add(placeholder);
+      placeholders.push(placeholder);
+    }
+  };
+  add(findUnresolvedArtifactPlaceholders(assistantOutput));
+  add(await findProjectPublicationPlaceholders(projectId, metadata, preRunFileKeys));
+  return placeholders;
+}
 
 function reconcileAssistantMessageOnRunEnd(db, runs, run) {
   if (!run.assistantMessageId) return;
@@ -9015,6 +9075,9 @@ export async function startServer({
           .map((f) => `- ${f.name}`)
           .join('\n')}`
       : '\nThis folder is empty. Choose a clear, descriptive filename for whatever you create.';
+    const preRunFileKeys = new Set(
+      existingProjectFiles.map((file) => `${file.name}:${file.mtime}:${file.size}`),
+    );
     const projectRecord =
       typeof projectId === 'string' && projectId
         ? getProject(db, projectId)
@@ -9845,6 +9908,15 @@ export async function startServer({
     // plain streams (most other CLIs) we forward raw chunks unchanged so
     // the browser can append them to the assistant's text buffer.
     let agentStreamError = null;
+    let assistantPublicationBuffer = '';
+    const ASSISTANT_PUBLICATION_BUFFER_CAP = 256 * 1024;
+    const appendAssistantPublicationText = (value) => {
+      if (typeof value !== 'string' || value.length === 0) return;
+      assistantPublicationBuffer += value;
+      if (assistantPublicationBuffer.length > ASSISTANT_PUBLICATION_BUFFER_CAP) {
+        assistantPublicationBuffer = assistantPublicationBuffer.slice(-ASSISTANT_PUBLICATION_BUFFER_CAP);
+      }
+    };
     // Tracks whether any stream the run is using actually emitted user-
     // visible content. Only the streams routed through `sendAgentEvent`
     // contribute to this flag; ACP sessions and plain stdout streams are
@@ -9897,6 +9969,9 @@ export async function startServer({
       noteAgentActivity();
       if (ev?.type && SUBSTANTIVE_AGENT_EVENT_TYPES.has(ev.type)) {
         agentProducedOutput = true;
+      }
+      if (ev?.type === 'text_delta' && typeof ev.delta === 'string') {
+        appendAssistantPublicationText(ev.delta);
       }
       send('agent', ev);
     };
@@ -10041,6 +10116,7 @@ export async function startServer({
     } else {
       child.stdout.on('data', (chunk) => {
         noteAgentActivity();
+        appendAssistantPublicationText(String(chunk));
         send('stdout', { chunk });
       });
     }
@@ -10060,7 +10136,7 @@ export async function startServer({
       send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', err.message));
       design.runs.finish(run, 'failed', 1, null);
     });
-    child.on('close', (code, signal) => {
+    child.on('close', async (code, signal) => {
       clearInactivityWatchdog();
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();
@@ -10132,6 +10208,22 @@ export async function startServer({
         : code === 0 || acpForcedShutdown
           ? 'succeeded'
           : 'failed';
+      if (status === 'succeeded') {
+        const placeholders = await findRunPublicationPlaceholders({
+          projectId,
+          metadata: projectRecord?.metadata,
+          preRunFileKeys,
+          assistantOutput: assistantPublicationBuffer,
+        });
+        if (placeholders.length > 0) {
+          send('error', createSseErrorPayload(
+            ARTIFACT_PUBLICATION_BLOCKED_CODE,
+            buildArtifactPublicationBlockedMessage(placeholders),
+            { retryable: false, details: { placeholders } },
+          ));
+          return design.runs.finish(run, 'failed', code, signal);
+        }
+      }
       if (status === 'failed') {
         const diagnostic = diagnoseClaudeCliFailure({
           agentId: def.id,

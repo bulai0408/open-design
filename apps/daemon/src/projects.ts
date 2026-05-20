@@ -21,6 +21,10 @@ import {
   evaluateArtifactStubGuard,
   readArtifactStubGuardConfigFromEnv,
 } from './artifact-stub-guard.js';
+import {
+  assertArtifactPublicationAllowed,
+  isPublicationGuardedArtifactKind,
+} from './artifact-publication-guard.js';
 
 const FORBIDDEN_SEGMENT = /^$|^\.\.?$/;
 const RESERVED_PROJECT_FILE_SEGMENTS = new Set(['.live-artifacts']);
@@ -640,6 +644,9 @@ export async function writeProjectFile(
     const validated = validateArtifactManifestInput(artifactManifest, safeName);
     if (validated.ok && validated.value) {
       validatedManifest = validated.value;
+      if (isPublicationGuardedArtifactKind(validatedManifest.kind)) {
+        assertArtifactPublicationAllowed(body);
+      }
       const identifier = typeof validatedManifest.metadata?.identifier === 'string'
         ? validatedManifest.metadata.identifier
         : '';
