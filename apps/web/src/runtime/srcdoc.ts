@@ -82,13 +82,19 @@ export function buildLazySrcdocTransport(): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script data-od-lazy-srcdoc-transport>(function(){
+      function post(type, id){
+        try { window.parent.postMessage({ type: type, id: id || null }, '*'); } catch (_) {}
+      }
       window.addEventListener('message', function(ev){
         var data = ev && ev.data;
         if (!data || data.type !== 'od:srcdoc-transport-activate' || typeof data.html !== 'string') return;
+        var id = data.id;
         document.open();
         document.write(data.html);
         document.close();
+        post('od:srcdoc-transport-activated', id);
       });
+      post('od:srcdoc-transport-ready');
     })();</script>
   </head>
   <body></body>
@@ -97,13 +103,19 @@ export function buildLazySrcdocTransport(): string {
 
 function injectSrcdocTransportActivationBridge(doc: string): string {
   const script = `<script data-od-srcdoc-transport-activation>(function(){
+  function post(type, id){
+    try { window.parent.postMessage({ type: type, id: id || null }, '*'); } catch (_) {}
+  }
   window.addEventListener('message', function(ev){
     var data = ev && ev.data;
     if (!data || data.type !== 'od:srcdoc-transport-activate' || typeof data.html !== 'string') return;
+    var id = data.id;
     document.open();
     document.write(data.html);
     document.close();
+    post('od:srcdoc-transport-activated', id);
   });
+  post('od:srcdoc-transport-ready');
 })();</script>`;
   return injectBeforeBodyEnd(doc, script);
 }

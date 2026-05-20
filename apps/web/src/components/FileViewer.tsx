@@ -158,6 +158,8 @@ type DeployResultCard = {
   message?: string;
 };
 const MAX_BRIDGE_COORDINATE = 1_000_000;
+const SRC_DOC_TRANSPORT_RETRY_DELAYS_MS = [75, 200, 500];
+const SRC_DOC_TRANSPORT_FALLBACK_MS = 1200;
 const PREVIEW_VIEWPORT_PRESETS: PreviewViewportPreset[] = [
   {
     id: 'desktop',
@@ -3488,6 +3490,7 @@ function HtmlViewer({
   const modeMenuRef = useRef<HTMLDivElement | null>(null);
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
   const zoomMenuRef = useRef<HTMLDivElement | null>(null);
+  const paletteTweaksAnchorRef = useRef<HTMLDivElement | null>(null);
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
   const [shareMenuOpen, setShareMenuOpen] = useState(false);
   // Template save UX. We surface a transient "Saved" pill in the share
@@ -3538,7 +3541,21 @@ function HtmlViewer({
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const urlPreviewIframeRef = useRef<HTMLIFrameElement | null>(null);
   const srcDocPreviewIframeRef = useRef<HTMLIFrameElement | null>(null);
-  const activatedSrcDocTransportHtmlRef = useRef<string | null>(null);
+  const srcDocTransportActivationRef = useRef<{
+    token: number;
+    ackedId: string | null;
+    ackedWindow: Window | null;
+    attempts: number;
+    retryTimer: number | null;
+    fallbackTimer: number | null;
+  }>({
+    token: 0,
+    ackedId: null,
+    ackedWindow: null,
+    attempts: 0,
+    retryTimer: null,
+    fallbackTimer: null,
+  });
   const isActivePreviewIframeSource = useCallback((source: MessageEventSource | null) => {
     return !!source && source === iframeRef.current?.contentWindow;
   }, []);
@@ -3999,23 +4016,90 @@ function HtmlViewer({
   const [hasLazySrcDocTransport, setHasLazySrcDocTransport] = useState(useUrlLoadPreview);
   const [srcDocTransportResetKey, setSrcDocTransportResetKey] = useState(0);
   const wasUrlLoadPreviewRef = useRef(useUrlLoadPreview);
+  const clearSrcDocTransportTimers = useCallback(() => {
+    const state = srcDocTransportActivationRef.current;
+    if (state.retryTimer !== null) {
+      window.clearTimeout(state.retryTimer);
+      state.retryTimer = null;
+    }
+    if (state.fallbackTimer !== null) {
+      window.clearTimeout(state.fallbackTimer);
+      state.fallbackTimer = null;
+    }
+  }, []);
   useEffect(() => {
     if (useUrlLoadPreview) setHasLazySrcDocTransport(true);
   }, [useUrlLoadPreview]);
   const useLazySrcDocTransport = useUrlLoadPreview || hasLazySrcDocTransport;
   const srcDocTransportContent = useLazySrcDocTransport ? lazySrcDocTransport : srcDoc;
   const urlTransportSrc = useUrlLoadPreview ? activePreviewSrcUrl : 'about:blank';
+  const resetSrcDocTransportFallback = useCallback(() => {
+    if (palettePopoverOpen) setPalettePopoverOpen(false);
+    setPreviewPalette(null);
+    if (selectedPalette !== null) setSelectedPalette(null);
+  }, [palettePopoverOpen, selectedPalette]);
   const activateSrcDocTransport = useCallback((target: HTMLIFrameElement | null = srcDocPreviewIframeRef.current) => {
     const win = target?.contentWindow;
     if (!win || !srcDoc || useUrlLoadPreview || !useLazySrcDocTransport) return false;
-    if (activatedSrcDocTransportHtmlRef.current === srcDoc) return false;
-    win.postMessage({ type: 'od:srcdoc-transport-activate', html: srcDoc }, '*');
-    activatedSrcDocTransportHtmlRef.current = srcDoc;
+    const state = srcDocTransportActivationRef.current;
+    const id = `${state.token}:${srcDoc.length}`;
+    if (state.ackedId === id && state.ackedWindow === win) return false;
+    win.postMessage({ type: 'od:srcdoc-transport-activate', id, html: srcDoc }, '*');
     return true;
   }, [srcDoc, useLazySrcDocTransport, useUrlLoadPreview]);
+  const scheduleSrcDocTransportActivation = useCallback((
+    target: HTMLIFrameElement | null = srcDocPreviewIframeRef.current,
+    options: { reset?: boolean } = {},
+  ) => {
+    const win = target?.contentWindow;
+    if (!win || !srcDoc || useUrlLoadPreview || !useLazySrcDocTransport) return;
+    const state = srcDocTransportActivationRef.current;
+    if (options.reset) {
+      clearSrcDocTransportTimers();
+      state.token += 1;
+      state.ackedId = null;
+      state.ackedWindow = null;
+      state.attempts = 0;
+    }
+    const token = state.token;
+    const runAttempt = () => {
+      const current = srcDocTransportActivationRef.current;
+      if (current.token !== token || useUrlLoadPreview) return;
+      const currentWin = target?.contentWindow;
+      if (!currentWin) return;
+      const id = `${token}:${srcDoc.length}`;
+      if (current.ackedId === id && current.ackedWindow === currentWin) return;
+      activateSrcDocTransport(target);
+      const delay = SRC_DOC_TRANSPORT_RETRY_DELAYS_MS[current.attempts] ?? null;
+      current.attempts += 1;
+      if (delay !== null) {
+        if (current.retryTimer !== null) window.clearTimeout(current.retryTimer);
+        current.retryTimer = window.setTimeout(runAttempt, delay);
+      }
+    };
+    runAttempt();
+    if (state.fallbackTimer !== null) window.clearTimeout(state.fallbackTimer);
+    state.fallbackTimer = window.setTimeout(() => {
+      const current = srcDocTransportActivationRef.current;
+      const id = `${token}:${srcDoc.length}`;
+      if (current.token !== token || current.ackedId === id || useUrlLoadPreview) return;
+      resetSrcDocTransportFallback();
+    }, SRC_DOC_TRANSPORT_FALLBACK_MS);
+  }, [
+    activateSrcDocTransport,
+    clearSrcDocTransportTimers,
+    resetSrcDocTransportFallback,
+    srcDoc,
+    useLazySrcDocTransport,
+    useUrlLoadPreview,
+  ]);
   useEffect(() => {
     if (useUrlLoadPreview) {
-      activatedSrcDocTransportHtmlRef.current = null;
+      clearSrcDocTransportTimers();
+      const state = srcDocTransportActivationRef.current;
+      state.ackedId = null;
+      state.ackedWindow = null;
+      state.attempts = 0;
       if (!wasUrlLoadPreviewRef.current) {
         setSrcDocTransportResetKey((key) => key + 1);
       }
@@ -4023,8 +4107,9 @@ function HtmlViewer({
       return;
     }
     wasUrlLoadPreviewRef.current = false;
-    activateSrcDocTransport();
-  }, [activateSrcDocTransport, useUrlLoadPreview]);
+    scheduleSrcDocTransportActivation(srcDocPreviewIframeRef.current, { reset: true });
+  }, [clearSrcDocTransportTimers, scheduleSrcDocTransportActivation, useUrlLoadPreview]);
+  useEffect(() => () => clearSrcDocTransportTimers(), [clearSrcDocTransportTimers]);
   useEffect(() => {
     restorePreviewScrollPosition();
   }, [boardMode, manualEditMode, srcDoc, restorePreviewScrollPosition]);
@@ -4109,15 +4194,46 @@ function HtmlViewer({
         }, '*');
       }
     }
+    function onSrcDocTransportMessage(ev: MessageEvent) {
+      if (!isOurPreviewIframeSource(ev.source)) return;
+      const data = ev.data as { type?: string; id?: string | null } | null;
+      if (!data || !data.type) return;
+      if (data.type === 'od:srcdoc-transport-ready') {
+        if (ev.source === srcDocPreviewIframeRef.current?.contentWindow) {
+          scheduleSrcDocTransportActivation(srcDocPreviewIframeRef.current, { reset: false });
+        }
+        return;
+      }
+      if (data.type !== 'od:srcdoc-transport-activated') return;
+      const state = srcDocTransportActivationRef.current;
+      if (ev.source !== srcDocPreviewIframeRef.current?.contentWindow) return;
+      state.ackedId = typeof data.id === 'string' ? data.id : null;
+      state.ackedWindow = ev.source as Window;
+      state.attempts = 0;
+      clearSrcDocTransportTimers();
+      const frame = srcDocPreviewIframeRef.current;
+      replayInspectOverridesToIframe(frame);
+      syncBridgeModes(frame);
+      if (!useUrlLoadPreview) restorePreviewScrollPosition();
+    }
     window.addEventListener('message', onMessage);
     window.addEventListener('message', onRestoreRequest);
     window.addEventListener('message', onDcViewportMessage);
+    window.addEventListener('message', onSrcDocTransportMessage);
     return () => {
       window.removeEventListener('message', onMessage);
       window.removeEventListener('message', onRestoreRequest);
       window.removeEventListener('message', onDcViewportMessage);
+      window.removeEventListener('message', onSrcDocTransportMessage);
     };
-  }, [isActivePreviewIframeSource, isOurPreviewIframeSource]);
+  }, [
+    clearSrcDocTransportTimers,
+    isActivePreviewIframeSource,
+    isOurPreviewIframeSource,
+    restorePreviewScrollPosition,
+    scheduleSrcDocTransportActivation,
+    useUrlLoadPreview,
+  ]);
 
   useEffect(() => {
     if (!effectiveDeck) {
@@ -5506,7 +5622,7 @@ function HtmlViewer({
         <div className="viewer-toolbar-actions">
           {showPreviewToolbarControls ? (
             <>
-              <div className="palette-tweaks-anchor">
+              <div className="palette-tweaks-anchor" ref={paletteTweaksAnchorRef}>
                 <button
                   type="button"
                   className={`viewer-action${selectedPalette || palettePopoverOpen ? ' active' : ''}`}
@@ -5536,6 +5652,7 @@ function HtmlViewer({
                 <PaletteTweaks
                   open={palettePopoverOpen}
                   selected={selectedPalette}
+                  ignoreOutsideRef={paletteTweaksAnchorRef}
                   onChange={setSelectedPalette}
                   onPreview={setPreviewPalette}
                   onClose={() => setPalettePopoverOpen(false)}

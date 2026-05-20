@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { JSDOM } from 'jsdom';
-import { buildSrcdoc } from '../../src/runtime/srcdoc';
+import { buildLazySrcdocTransport, buildSrcdoc } from '../../src/runtime/srcdoc';
 
 const deckHtml = `<!doctype html>
 <html>
@@ -13,6 +13,17 @@ const deckHtml = `<!doctype html>
 </html>`;
 
 describe('buildSrcdoc', () => {
+  it('announces lazy transport readiness and activation acknowledgements', () => {
+    const shell = buildLazySrcdocTransport();
+    const activated = buildSrcdoc('<main>Hero</main>');
+
+    expect(shell).toContain('od:srcdoc-transport-ready');
+    expect(shell).toContain('od:srcdoc-transport-activated');
+    expect(shell).toContain('data.id');
+    expect(activated).toContain('od:srcdoc-transport-ready');
+    expect(activated).toContain('od:srcdoc-transport-activated');
+  });
+
   it('injects an initial slide index for deck previews', () => {
     const doc = buildSrcdoc(deckHtml, { deck: true, initialSlideIndex: 2 });
 

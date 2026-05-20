@@ -1299,6 +1299,57 @@ describe('FileViewer tweaks toolbar', () => {
     expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).srcdoc).toBe(initialSrcDoc);
   });
 
+  it('resends the full srcDoc payload when the lazy transport reports ready after a lost activation', async () => {
+    render(
+      <FileViewer projectId="project-1" projectKind="prototype" file={htmlPreviewFile()}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+      />,
+    );
+
+    expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
+    const inactiveSrcDocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
+    const postMessageSpy = vi.spyOn(inactiveSrcDocFrame.contentWindow!, 'postMessage');
+
+    fireEvent.click(screen.getByTestId('palette-tweaks-toggle'));
+
+    const activeFrame = await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      return frame;
+    });
+
+    // Simulate the existing race: the parent tried to activate before the
+    // shell listener existed, so the iframe never received that first payload.
+    postMessageSpy.mockClear();
+    window.dispatchEvent(new MessageEvent('message', {
+      source: activeFrame.contentWindow,
+      data: { type: 'od:srcdoc-transport-ready' },
+    }));
+
+    await waitFor(() => {
+      const activations = srcDocActivationMessages(postMessageSpy.mock.calls);
+      expect(activations.at(-1)?.html).toContain('<main data-od-id="hero">Hero</main>');
+      expect(activations.at(-1)?.html).toContain('data-od-palette-bridge');
+    });
+  });
+
+  it('closes the Tweaks palette from its toggle without the outside-click handler reopening it', async () => {
+    render(
+      <FileViewer projectId="project-1" projectKind="prototype" file={htmlPreviewFile()}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+      />,
+    );
+
+    const toggle = screen.getByTestId('palette-tweaks-toggle');
+    fireEvent.click(toggle);
+    expect(screen.getByRole('dialog', { name: 'Tweaks' })).toBeTruthy();
+
+    fireEvent.mouseDown(toggle);
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Tweaks' })).toBeNull());
+  });
+
   it('disables Draw direct send while a task is running but keeps queue available', () => {
     render(
       <FileViewer projectId="project-1" projectKind="prototype" file={htmlPreviewFile()}
