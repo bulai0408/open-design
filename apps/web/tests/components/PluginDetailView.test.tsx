@@ -33,6 +33,25 @@ function makePlugin(capabilitiesGranted: string[]): InstalledPluginRecord {
   };
 }
 
+function makeRouteSwitchPlugin(): InstalledPluginRecord {
+  return {
+    ...makePlugin(['prompt:inject']),
+    id: 'route-switch-plugin',
+    title: 'Route Switch Plugin',
+    source: '/tmp/route-switch',
+    manifest: {
+      name: 'route-switch-plugin',
+      version: '1.0.0',
+      description: 'A second restricted plugin fixture.',
+      od: {
+        kind: 'scenario',
+        capabilities: ['prompt:inject', 'net:http'],
+      },
+    },
+    fsPath: '/tmp/route-switch',
+  };
+}
+
 function makeConnectorOnlyPlugin(capabilitiesGranted: string[]): InstalledPluginRecord {
   return {
     ...makePlugin(capabilitiesGranted),
@@ -114,13 +133,18 @@ function makePipelinePlugin(capabilitiesGranted: string[]): InstalledPluginRecor
 }
 
 let currentPlugin: InstalledPluginRecord;
+let routeSwitchPlugin: InstalledPluginRecord;
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   currentPlugin = makePlugin(['prompt:inject']);
+  routeSwitchPlugin = makeRouteSwitchPlugin();
   fetchMock = vi.fn(async (url, init) => {
     if (url === '/api/plugins/sample-plugin' && !init) {
       return new Response(JSON.stringify(currentPlugin), { status: 200 });
+    }
+    if (url === '/api/plugins/route-switch-plugin' && !init) {
+      return new Response(JSON.stringify(routeSwitchPlugin), { status: 200 });
     }
     if (url === '/api/plugins/sample-plugin/trust') {
       const body = JSON.parse(String(init?.body)) as {
@@ -149,6 +173,26 @@ beforeEach(() => {
         capabilitiesGranted: currentPlugin.capabilitiesGranted,
         plugin: currentPlugin,
       }), { status: body.action === 'grant' ? 201 : 200 });
+    }
+    if (url === '/api/plugins/route-switch-plugin/trust') {
+      const body = JSON.parse(String(init?.body)) as {
+        action: 'grant' | 'revoke';
+        capabilities: string[];
+      };
+      routeSwitchPlugin = {
+        ...routeSwitchPlugin,
+        capabilitiesGranted: Array.from(new Set([
+          ...routeSwitchPlugin.capabilitiesGranted,
+          ...body.capabilities,
+        ])).sort(),
+      };
+      return new Response(JSON.stringify({
+        ok: true,
+        id: routeSwitchPlugin.id,
+        action: body.action,
+        capabilitiesGranted: routeSwitchPlugin.capabilitiesGranted,
+        plugin: routeSwitchPlugin,
+      }), { status: 201 });
     }
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -319,6 +363,35 @@ describe('PluginDetailView trust controls', () => {
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ capabilities: ['genui:form'], action: 'grant' }),
+      }),
+    );
+  });
+
+  it('does not carry pending trust selection across plugin detail route changes', async () => {
+    const { rerender } = render(<PluginDetailView pluginId="sample-plugin" />);
+
+    fireEvent.click(await screen.findByLabelText('fs:read'));
+    expect(screen.getByText('1 grantable · 0 revokable')).toBeTruthy();
+
+    rerender(<PluginDetailView pluginId="route-switch-plugin" />);
+
+    const http = await screen.findByLabelText('net:http');
+    await waitFor(() => {
+      expect(screen.queryByText('1 grantable · 0 revokable')).toBeNull();
+    });
+    expect(screen.getByRole('button', { name: 'Grant selected capabilities' })).toHaveProperty('disabled', true);
+
+    fireEvent.click(http);
+    fireEvent.click(screen.getByRole('button', { name: 'Grant selected capabilities' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plugin-capability-net:http').textContent).toContain('Granted');
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/plugins/route-switch-plugin/trust',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ capabilities: ['net:http'], action: 'grant' }),
       }),
     );
   });

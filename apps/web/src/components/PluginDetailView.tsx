@@ -36,6 +36,13 @@ export function PluginDetailView(props: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    setPlugin(null);
+    setError(null);
+    setApplied(null);
+    setSelectedCapabilities([]);
+    setPendingTrustAction(null);
+    setTrustMessage(null);
+    setTrustError(null);
     void fetch(`/api/plugins/${encodeURIComponent(props.pluginId)}`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -78,12 +85,14 @@ export function PluginDetailView(props: Props) {
   const required = od.connectors?.required ?? [];
   const optional = od.connectors?.optional ?? [];
   const capabilities = requiredGrantableCapabilities(plugin);
+  const visibleCapabilities = new Set(capabilities);
   const capabilitiesGranted = new Set(plugin.capabilitiesGranted ?? []);
   const declaredGrantedCount = capabilities.filter((cap: string) => capabilitiesGranted.has(cap)).length;
-  const selectedGrantedCount = selectedCapabilities.filter((cap) => capabilitiesGranted.has(cap)).length;
-  const selectedRequestedCount = selectedCapabilities.length - selectedGrantedCount;
-  const selectedGrantableCapabilities = selectedCapabilities.filter((cap) => !capabilitiesGranted.has(cap));
-  const selectedRevokableCapabilities = selectedCapabilities.filter((cap) => capabilitiesGranted.has(cap));
+  const selectedVisibleCapabilities = selectedCapabilities.filter((cap) => visibleCapabilities.has(cap));
+  const selectedGrantedCount = selectedVisibleCapabilities.filter((cap) => capabilitiesGranted.has(cap)).length;
+  const selectedRequestedCount = selectedVisibleCapabilities.length - selectedGrantedCount;
+  const selectedGrantableCapabilities = selectedVisibleCapabilities.filter((cap) => !capabilitiesGranted.has(cap));
+  const selectedRevokableCapabilities = selectedVisibleCapabilities.filter((cap) => capabilitiesGranted.has(cap));
   const trustPending = pendingTrustAction !== null;
   // Plan §6 Phase 2B / spec §11.6 — show a sandboxed iframe of the
   // plugin's preview entry when one is declared. The daemon serves
@@ -236,10 +245,10 @@ export function PluginDetailView(props: Props) {
               ) : (
                 <span>{plugin.trust} plugin · {declaredGrantedCount} granted</span>
               )}
-              {selectedCapabilities.length > 0 ? (
+              {selectedVisibleCapabilities.length > 0 ? (
                 <span>{selectedRequestedCount} grantable · {selectedGrantedCount} revokable</span>
               ) : null}
-              {selectedCapabilities.length > 0 && selectedRequestedCount === 0 ? (
+              {selectedVisibleCapabilities.length > 0 && selectedRequestedCount === 0 ? (
                 <span>Selected capabilities are already granted</span>
               ) : null}
             </div>
