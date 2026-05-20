@@ -11968,7 +11968,7 @@ export async function startServer({
         err instanceof Error ? err.message : String(err),
       );
     }
-    const lastEvent = events.length > 0 ? events[events.length - 1] : null;
+    const lastEvent = run.events.length > 0 ? run.events[run.events.length - 1] : null;
     /** @type {import('@open-design/contracts').ChatRunLogResponse} */
     const body = { runId: run.id, nextSince: lastEvent == null ? null : String(lastEvent.id), events };
     res.json(body);

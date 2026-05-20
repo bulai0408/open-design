@@ -179,6 +179,8 @@ const AUTOMATION_WEEKDAY_TOKENS = {
   sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6,
   sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
 };
+const RUN_LOGS_STRING_FLAGS = new Set(['daemon-url', 'since']);
+const RUN_LOGS_BOOLEAN_FLAGS = new Set(['help', 'h', 'json']);
 const RECOVERABLE_EXIT_CODES = {
   'invalid-input':            2,
   'daemon-not-running':       64,
@@ -745,6 +747,41 @@ function parseFlags(argv, opts = {}) {
     }
   }
   return out;
+}
+
+function parseRunLogsArgs(argv) {
+  const flags = {};
+  const positionals = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg?.startsWith('-')) {
+      positionals.push(arg);
+      continue;
+    }
+    if (!arg.startsWith('--')) {
+      throw new Error(`Unsupported od run logs flag: ${arg}`);
+    }
+    const eq = arg.indexOf('=');
+    const key = eq >= 0 ? arg.slice(2, eq) : arg.slice(2);
+    if (RUN_LOGS_BOOLEAN_FLAGS.has(key)) {
+      if (eq >= 0) throw new Error(`flag --${key} does not take a value`);
+      flags[key] = true;
+      continue;
+    }
+    if (RUN_LOGS_STRING_FLAGS.has(key)) {
+      if (eq >= 0) {
+        flags[key] = arg.slice(eq + 1);
+        continue;
+      }
+      const next = argv[i + 1];
+      if (next == null) throw new Error(`flag --${key} requires a value`);
+      flags[key] = next;
+      i++;
+      continue;
+    }
+    throw new Error(`Unsupported od run logs flag: --${key}`);
+  }
+  return { flags, positionals };
 }
 
 async function cliDaemonUrl(flags) {
@@ -4431,17 +4468,28 @@ Common options:
       return;
     }
     case 'logs': {
-      const id = rest.find((a) => !a.startsWith('-')
-        && a !== flags.since
-        && a !== flags['daemon-url']);
+      let parsed;
+      try {
+        parsed = parseRunLogsArgs(rest);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exit(2);
+      }
+      const { flags: logFlags, positionals } = parsed;
+      const id = positionals[0];
+      if (positionals.length > 1) {
+        console.error('Usage: od run logs <runId> [--since <eventId|RFC3339>]');
+        process.exit(2);
+      }
       if (!id) {
         console.error('Usage: od run logs <runId> [--since <eventId|RFC3339>]');
         process.exit(2);
       }
+      const logBase = (await projectDaemonUrl(logFlags)).replace(/\/$/, '');
       const params = new URLSearchParams();
-      if (flags.since) params.set('since', flags.since);
+      if (logFlags.since != null) params.set('since', logFlags.since);
       const suffix = params.size ? `?${params.toString()}` : '';
-      const resp = await fetch(`${base}/api/runs/${encodeURIComponent(id)}/log${suffix}`);
+      const resp = await fetch(`${logBase}/api/runs/${encodeURIComponent(id)}/log${suffix}`);
       if (!resp.ok) {
         return structuredHttpFailure(
           resp,
@@ -4451,7 +4499,7 @@ Common options:
         );
       }
       const data = await resp.json();
-      if (flags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+      if (logFlags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
       for (const record of data?.events ?? []) {
         process.stdout.write(JSON.stringify(record) + '\n');
       }

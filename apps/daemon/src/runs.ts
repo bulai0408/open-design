@@ -46,8 +46,11 @@ export function createChatRunService({
   const runs = new Map();
 
   const parseLogSince = (since) => {
-    if (since == null || since === '') return null;
+    if (since == null) return null;
     if (typeof since !== 'string') {
+      throw new RangeError('invalid since: expected an event id or RFC3339 timestamp');
+    }
+    if (since === '') {
       throw new RangeError('invalid since: expected an event id or RFC3339 timestamp');
     }
     if (RUN_LOG_EVENT_ID_RE.test(since)) {

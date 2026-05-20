@@ -62,7 +62,7 @@ describe('GET /api/runs/:id/log', () => {
     );
     expect(filteredResponse.status).toBe(200);
     const filtered = await filteredResponse.json() as { nextSince: string | null; events: unknown[] };
-    expect(filtered.nextSince).toBeNull();
+    expect(filtered.nextSince).toBe(String(logs.events.at(-1)?.id));
     expect(filtered.events).toEqual([]);
   });
 
@@ -132,6 +132,23 @@ describe('GET /api/runs/:id/log', () => {
         error: { code: 'BAD_REQUEST' },
       });
     }
+  });
+
+  it('rejects empty since cursors', async () => {
+    process.env.PATH = '';
+    const createResponse = await fetch(`${baseUrl}/api/runs`, {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body:    JSON.stringify({ agentId: 'opencode', message: 'hello' }),
+    });
+    expect(createResponse.status).toBe(202);
+    const { runId } = await createResponse.json() as { runId: string };
+
+    const response = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/log?since=`);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'BAD_REQUEST' },
+    });
   });
 });
 

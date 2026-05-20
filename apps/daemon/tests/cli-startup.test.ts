@@ -153,6 +153,44 @@ describe('CLI startup boundaries', () => {
     }
   });
 
+  it('rejects unsupported od run logs flags instead of treating their values as the run id', async () => {
+    const requests: string[] = [];
+    const server = http.createServer((req, res) => {
+      requests.push(req.url ?? '');
+      res.statusCode = 500;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: { code: 'UNEXPECTED', message: 'unexpected request' } }));
+    });
+
+    try {
+      const baseUrl = await listen(server);
+      await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          cliEntry,
+          'run',
+          'logs',
+          '--daemon-url',
+          baseUrl,
+          '--project',
+          'project-1',
+          'run-1',
+        ],
+        { cwd: daemonRoot },
+      );
+      throw new Error('od run logs unexpectedly succeeded');
+    } catch (error: unknown) {
+      const failed = error as { code?: number; stderr?: string };
+      expect(failed.code).toBe(2);
+      expect(failed.stderr).toContain('Unsupported od run logs flag: --project');
+      expect(requests).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('passes event id cursors through to od run logs unchanged', async () => {
     const requests: string[] = [];
     const server = http.createServer((req, res) => {
