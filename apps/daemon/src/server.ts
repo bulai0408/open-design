@@ -1467,7 +1467,7 @@ export function createAgentRuntimeEnv(
     OD_DAEMON_URL: daemonUrl,
     OD_NODE_BIN: nodeBin,
   };
-  const sidecarIpcPath = process.env[SIDECAR_ENV.IPC_PATH];
+  const sidecarIpcPath = baseEnv[SIDECAR_ENV.IPC_PATH];
   if (typeof sidecarIpcPath === 'string' && sidecarIpcPath.length > 0) {
     env[SIDECAR_ENV.IPC_PATH] = sidecarIpcPath;
   }

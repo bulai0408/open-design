@@ -165,20 +165,12 @@ describe('Phase 2C CLI wrappers', () => {
       });
       sidecarServers.push(sidecar);
 
-      const previousIpcPath = process.env[SIDECAR_ENV.IPC_PATH];
-      process.env[SIDECAR_ENV.IPC_PATH] = ipcPath;
-      let wrapperEnv: NodeJS.ProcessEnv;
-      try {
-        wrapperEnv = createAgentRuntimeEnv(
-          { PATH: process.env.PATH },
-          baseUrl,
-          null,
-          process.execPath,
-        );
-      } finally {
-        if (previousIpcPath === undefined) delete process.env[SIDECAR_ENV.IPC_PATH];
-        else process.env[SIDECAR_ENV.IPC_PATH] = previousIpcPath;
-      }
+      const wrapperEnv = createAgentRuntimeEnv(
+        { PATH: process.env.PATH, [SIDECAR_ENV.IPC_PATH]: ipcPath },
+        baseUrl,
+        null,
+        process.execPath,
+      );
 
       const imported = await runCli(
         ['project', 'import', `  ${folder}  `, '--name', 'Gated CLI Import', '--json'],
