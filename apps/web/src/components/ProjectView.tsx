@@ -1752,6 +1752,7 @@ export function ProjectView({
         runStatus: config.mode === 'daemon' ? 'running' : undefined,
         startedAt,
       };
+      let latestAssistantMsg: ChatMessage = assistantMsg;
       const updateConversationLatestRun = (
         status: NonNullable<ChatMessage['runStatus']>,
         endedAt?: number,
@@ -1846,7 +1847,12 @@ export function ProjectView({
 
       const updateAssistant = (updater: (prev: ChatMessage) => ChatMessage) => {
         setMessages((curr) =>
-          curr.map((m) => (m.id === assistantId ? updater(m) : m)),
+          curr.map((m) => {
+            if (m.id !== assistantId) return m;
+            const updated = updater(m);
+            latestAssistantMsg = updated;
+            return updated;
+          }),
         );
       };
       let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2100,7 +2106,16 @@ export function ProjectView({
           model: choice?.model ?? null,
           reasoning: choice?.reasoning ?? null,
           onRunCreated: (runId) => {
-            updateMessageById(assistantId, (prev) => ({ ...prev, runId, runStatus: 'queued' }), true);
+            const pinnedAssistant = {
+              ...latestAssistantMsg,
+              runId,
+              runStatus: 'queued' as const,
+            };
+            latestAssistantMsg = pinnedAssistant;
+            // The view may already be on a different project/conversation;
+            // pin the daemon run to the original row so returning can reattach.
+            void saveMessage(project.id, runConversationId, pinnedAssistant);
+            updateMessageById(assistantId, (prev) => ({ ...prev, runId, runStatus: 'queued' }));
           },
           onRunStatus: (runStatus) => {
             const endedAt = isTerminalRunStatus(runStatus) ? Date.now() : undefined;
