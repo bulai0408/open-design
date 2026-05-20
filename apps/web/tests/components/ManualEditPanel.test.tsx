@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Simulate } from 'react-dom/test-utils';
 import { JSDOM } from 'jsdom';
+import { I18nProvider } from '../../src/i18n';
 import { ManualEditPanel, emptyManualEditDraft, manualEditPatchSummary, normalizeManualEditStyles, type ManualEditDraft } from '../../src/components/ManualEditPanel';
 import { emptyManualEditStyles, type ManualEditPatch, type ManualEditStyles, type ManualEditTarget } from '../../src/edit-mode/types';
 
@@ -142,6 +143,30 @@ describe('ManualEditPanel', () => {
     });
 
     expect(onSelectTarget).toHaveBeenCalledWith(hiddenTarget);
+  });
+
+  it('renders layer panel labels from the active locale', () => {
+    const hiddenTarget: ManualEditTarget = {
+      ...target,
+      id: 'authors',
+      label: 'Authors',
+      tagName: 'section',
+      kind: 'container',
+      isHidden: true,
+    };
+    renderPanel({ targets: [hiddenTarget], selectedTarget: null, locale: 'fr' });
+
+    expect(host.textContent).toContain('Calques');
+    expect(host.textContent).toContain('Masqué');
+    expect(host.textContent).not.toContain('Layers');
+    expect(host.textContent).not.toContain('Hidden');
+  });
+
+  it('renders the empty layers message from the active locale', () => {
+    renderPanel({ targets: [], selectedTarget: null, locale: 'fr' });
+
+    expect(host.textContent).toContain('Aucun calque modifiable trouvé.');
+    expect(host.textContent).not.toContain('No editable layers found.');
   });
 
   it('normalizes font stacks and writes a usable font-family value', () => {
@@ -576,6 +601,7 @@ describe('ManualEditPanel', () => {
     pageStylesEnabled = true,
     outerHtml = target.outerHtml,
     fullSource = '<html></html>',
+    locale,
   }: {
     onDraftChange?: OnDraftChange;
     onApplyPatch?: OnApplyPatch;
@@ -591,6 +617,7 @@ describe('ManualEditPanel', () => {
     pageStylesEnabled?: boolean;
     outerHtml?: string;
     fullSource?: string;
+    locale?: 'en' | 'fr';
   } = {}) {
     const draft = {
       ...emptyManualEditDraft(fullSource),
@@ -600,7 +627,7 @@ describe('ManualEditPanel', () => {
       outerHtml,
     };
     act(() => {
-      root.render(
+      const panel = (
         <ManualEditPanel
           targets={targets}
           selectedTarget={selectedTarget}
@@ -620,7 +647,10 @@ describe('ManualEditPanel', () => {
           onCancelDraft={vi.fn<() => void>()}
           onUndo={vi.fn<() => void>()}
           onRedo={vi.fn<() => void>()}
-        />,
+        />
+      );
+      root.render(
+        locale ? <I18nProvider initial={locale}>{panel}</I18nProvider> : panel,
       );
     });
   }

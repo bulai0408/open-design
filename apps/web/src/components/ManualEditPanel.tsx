@@ -119,7 +119,7 @@ export function ManualEditPanel({
     <>
       <section className="manual-edit-layers">
         <div className="manual-edit-panel-head">
-          <h3>Layers</h3>
+          <h3>{t('manualEdit.layers')}</h3>
           <span>{targets.length}</span>
         </div>
         <div className="manual-edit-layer-list">
@@ -133,11 +133,11 @@ export function ManualEditPanel({
               <strong>{target.label}</strong>
               <span>
                 {target.tagName}
-                {target.isHidden ? ' - Hidden' : ''}
+                {target.isHidden ? ` - ${t('manualEdit.hiddenBadge')}` : ''}
               </span>
             </button>
           )) : (
-            <p className="manual-edit-empty">No editable layers found.</p>
+            <p className="manual-edit-empty">{t('manualEdit.noEditableLayers')}</p>
           )}
         </div>
       </section>

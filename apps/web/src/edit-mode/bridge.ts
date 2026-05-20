@@ -120,18 +120,24 @@ export function buildManualEditBridge(enabled: boolean): string {
   function isLayoutContainer(el){
     var display = window.getComputedStyle(el).display || '';
     if (display.indexOf('flex') >= 0 || display.indexOf('grid') >= 0) return true;
-    return isHiddenTarget(el) && inferKind(el) === 'container';
+    return hasOwnDisplayHiddenState(el) && inferKind(el) === 'container';
+  }
+  function hasOwnDisplayHiddenState(el){
+    var computed = window.getComputedStyle(el);
+    return computed.display === 'none' || el.hasAttribute('hidden');
+  }
+  function hasHiddenAncestorDisplayState(el){
+    var node = el;
+    while (node && node !== document.documentElement) {
+      if (hasOwnDisplayHiddenState(node)) return true;
+      node = node.parentElement;
+    }
+    return false;
   }
   function isHiddenTarget(el, rect){
     var targetVisibility = window.getComputedStyle(el).visibility;
     if (targetVisibility === 'hidden' || targetVisibility === 'collapse') return true;
-    var node = el;
-    while (node && node !== document.documentElement) {
-      var computed = window.getComputedStyle(node);
-      if (computed.display === 'none' || node.hasAttribute('hidden')) return true;
-      node = node.parentElement;
-    }
-    return false;
+    return hasHiddenAncestorDisplayState(el);
   }
   function targetFrom(el, includeOuterHtml){
     var rect = el.getBoundingClientRect();
