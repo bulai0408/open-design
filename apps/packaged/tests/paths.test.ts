@@ -1,4 +1,4 @@
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -112,11 +112,11 @@ describe("resolvePackagedNamespacePaths", () => {
     }
   });
 
-  it("resolves relative OD_DATA_DIR values against the packaged process cwd", () => {
+  it("rejects relative OD_DATA_DIR values instead of resolving them against cwd", () => {
     const config = fakeConfig();
 
     expect(
-      resolvePackagedNamespacePaths(config, config.namespace, { OD_DATA_DIR: "project/.od" }).dataRoot,
-    ).toBe(join(resolve("project/.od"), "namespaces", config.namespace, "data"));
+      () => resolvePackagedNamespacePaths(config, config.namespace, { OD_DATA_DIR: "project/.od" }),
+    ).toThrow(/OD_DATA_DIR must be an absolute path/);
   });
 });

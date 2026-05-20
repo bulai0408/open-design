@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve, win32 } from "node:path";
+import { isAbsolute, join, win32 } from "node:path";
 
 import { APP_KEYS, normalizeNamespace } from "@open-design/sidecar-proto";
 
@@ -49,8 +49,10 @@ function resolvePackagedDataRoot(
   const odDataDir = env.OD_DATA_DIR?.trim();
   if (odDataDir) {
     const expanded = expandHomePrefix(odDataDir);
-    const overrideRoot = isAbsolute(expanded) || win32.isAbsolute(expanded) ? expanded : resolve(expanded);
-    return join(overrideRoot, "namespaces", namespace, "data");
+    if (!isAbsolute(expanded) && !win32.isAbsolute(expanded)) {
+      throw new Error("OD_DATA_DIR must be an absolute path in packaged mode.");
+    }
+    return join(expanded, "namespaces", namespace, "data");
   }
 
   return join(config.namespaceBaseRoot, namespace, "data");
