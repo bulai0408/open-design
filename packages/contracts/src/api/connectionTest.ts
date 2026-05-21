@@ -181,6 +181,7 @@ export interface ConnectionTestResponse {
   // or required a PATH fallback.
   configuredExecutablePath?: string;
   detectedExecutablePath?: string;
+  detectedExecutableSource?: 'path' | 'fallback' | 'known';
   usedExecutablePath?: string;
-  usedExecutableSource?: 'configured' | 'path' | 'fallback_invalid' | 'fallback_failed';
+  usedExecutableSource?: 'configured' | 'path' | 'fallback' | 'known' | 'fallback_invalid' | 'fallback_failed';
 }

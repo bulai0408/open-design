@@ -145,6 +145,11 @@ async function probe(
   if (!launch.selectedPath || !launch.launchPath) {
     return unavailableAgent(def);
   }
+  const executableCandidates = await probeExecutableCandidates(
+    def,
+    launch.executableCandidates,
+    configuredEnv,
+  );
   const probeEnv = applyAgentLaunchEnv(
     spawnEnvForAgent(
       def.id,
@@ -156,21 +161,39 @@ async function probe(
     ),
     launch,
   );
-  const outcome = await probeVersionAtPath(def, launch.launchPath, probeEnv);
+  let outcome = await probeVersionAtPath(def, launch.launchPath, probeEnv);
+  let detectedPath = launch.selectedPath;
+  let probePath = launch.launchPath;
+  let candidateList = executableCandidates;
   if (outcome.kind === 'not-invocable') {
-    return unavailableAgent(def);
+    const promotedCandidate = executableCandidates.find(
+      (candidate) =>
+        candidate.source !== 'configured' &&
+        candidate.path !== launch.selectedPath &&
+        candidate.available,
+    );
+    if (
+      promotedCandidate &&
+      !launch.configuredOverridePath &&
+      launch.selectedPath === launch.pathResolvedPath
+    ) {
+      detectedPath = promotedCandidate.path;
+      probePath = promotedCandidate.path;
+      outcome = { kind: 'spawned', version: promotedCandidate.version ?? null };
+      candidateList = executableCandidates.map((candidate) => ({
+        ...candidate,
+        selected: candidate.path === promotedCandidate.path,
+      }));
+    } else {
+      return unavailableAgent(def);
+    }
   }
-  const executableCandidates = await probeExecutableCandidates(
-    def,
-    launch.executableCandidates,
-    configuredEnv,
-  );
   // Probe `--help` once per agent and record which flags the installed CLI
   // advertises. Cached on `agentCapabilities` for buildArgs to consult.
   if (def.helpArgs && def.capabilityFlags) {
     const caps: RuntimeCapabilityMap = {};
     try {
-      const { stdout } = await execAgentFile(launch.launchPath, def.helpArgs, {
+      const { stdout } = await execAgentFile(probePath, def.helpArgs, {
         env: probeEnv,
         timeout: 5000,
         maxBuffer: 4 * 1024 * 1024,
@@ -184,16 +207,16 @@ async function probe(
     }
     agentCapabilities.set(def.id, caps);
   }
-  const modelResult = await fetchModels(def, launch.launchPath, probeEnv);
-  const auth = await probeAgentAuthStatus(def.id, launch.launchPath, probeEnv);
+  const modelResult = await fetchModels(def, probePath, probeEnv);
+  const auth = await probeAgentAuthStatus(def.id, probePath, probeEnv);
   return {
     ...stripFns(def),
     models: modelResult.models,
     modelsSource: modelResult.source,
     available: true,
-    path: launch.selectedPath,
+    path: detectedPath,
     version: outcome.version,
-    executableCandidates,
+    executableCandidates: candidateList,
     ...(auth
       ? {
           authStatus: auth.status,

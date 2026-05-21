@@ -52,6 +52,7 @@ import type { AgentCliEnvPrefs } from './app-config.js';
 import type {
   RuntimeAgentDef,
   RuntimeExecutableCandidate,
+  RuntimeExecutableCandidateSource,
 } from './runtimes/types.js';
 import {
   isBlockedExternalApiHostname,
@@ -256,6 +257,7 @@ function agentExecutableGuidance(
   agentId: string,
   configuredOverridePath: string | null,
   pathResolvedPath: string | null,
+  pathResolvedSource: RuntimeExecutableCandidateSource | null = null,
 ): string {
   if (
     !agentBinEnvKey(agentId) ||
@@ -267,17 +269,18 @@ function agentExecutableGuidance(
   }
   const label = agentExecutableLabel(agentId);
   const envKey = agentBinEnvKey(agentId);
-  return ` Configured ${label} path failed: ${configuredOverridePath}. Open Design also detected a PATH ${label} CLI at ${pathResolvedPath}. Update ${envKey} or clear the custom path to use the detected binary.`;
+  return ` Configured ${label} path failed: ${configuredOverridePath}. Open Design also detected ${agentExecutableSourceLabel(agentId, pathResolvedSource)} at ${pathResolvedPath}. Update ${envKey} or clear the custom path to use the detected binary.`;
 }
 
 function agentExecutableFallbackSuccessDetail(
   agentId: string,
   configuredOverridePath: string,
   pathResolvedPath: string,
+  pathResolvedSource: RuntimeExecutableCandidateSource | null = null,
 ): string {
   const label = agentExecutableLabel(agentId);
   const envKey = agentBinEnvKey(agentId) ?? 'custom path';
-  return `Configured ${label} path failed: ${configuredOverridePath}. This test succeeded with the PATH ${label} CLI at ${pathResolvedPath}. Update ${envKey} or clear the custom path to use the detected binary.`;
+  return `Configured ${label} path failed: ${configuredOverridePath}. This test succeeded with ${agentExecutableSourceLabel(agentId, pathResolvedSource)} at ${pathResolvedPath}. Update ${envKey} or clear the custom path to use the detected binary.`;
 }
 
 function agentConfiguredPathSuccessDetail(
@@ -291,10 +294,28 @@ function agentInvalidConfiguredPathFallbackDetail(
   agentId: string,
   configuredValue: string,
   pathResolvedPath: string,
+  pathResolvedSource: RuntimeExecutableCandidateSource | null = null,
 ): string {
   const label = agentExecutableLabel(agentId);
   const envKey = agentBinEnvKey(agentId) ?? 'custom path';
-  return `Configured ${label} path is invalid or not executable: ${configuredValue}. This test used the PATH ${label} CLI at ${pathResolvedPath}. Update ${envKey} or clear the custom path to use the detected binary.`;
+  return `Configured ${label} path is invalid or not executable: ${configuredValue}. This test used ${agentExecutableSourceLabel(agentId, pathResolvedSource)} at ${pathResolvedPath}. Update ${envKey} or clear the custom path to use the detected binary.`;
+}
+
+function agentExecutableSourceLabel(
+  agentId: string,
+  source: RuntimeExecutableCandidateSource | null,
+): string {
+  const label = agentExecutableLabel(agentId);
+  switch (source) {
+    case 'known':
+      return `the known ${label} install`;
+    case 'configured':
+      return `the configured ${label} path`;
+    case 'fallback':
+    case 'path':
+    default:
+      return `the PATH ${label} CLI`;
+  }
 }
 
 function stripAgentBinOverride(
@@ -320,6 +341,22 @@ function firstFallbackCandidate(
   return inspectAgentExecutableCandidates(def, configuredAgentEnv).find(
     (candidate) => candidate.source !== 'configured',
   ) ?? null;
+}
+
+function executableCandidateSource(
+  candidates: RuntimeExecutableCandidate[],
+  executablePath: string | null | undefined,
+): RuntimeExecutableCandidateSource | null {
+  if (!executablePath) return null;
+  return candidates.find((candidate) => candidate.path === executablePath)?.source ?? null;
+}
+
+function executableDiagnosticSource(
+  source: RuntimeExecutableCandidateSource | null,
+): 'path' | 'known' | null {
+  if (source === 'known') return source;
+  if (source === 'path' || source === 'fallback') return 'path';
+  return null;
 }
 
 function usedExecutableDetail(
@@ -1482,6 +1519,10 @@ async function testAgentConnectionInternal(
             input.agentId,
             executableResolution.configuredOverridePath,
             executableResolution.pathResolvedPath,
+            executableCandidateSource(
+              executableResolution.executableCandidates,
+              executableResolution.pathResolvedPath,
+            ),
           )}${executableResolution.diagnostic ? ` ${executableResolution.diagnostic}` : ''}`,
         );
         const errnoCode = (winner.error as NodeJS.ErrnoException).code;
@@ -1582,6 +1623,10 @@ async function testAgentConnectionInternal(
           input.agentId,
           executableResolution.configuredOverridePath,
           executableResolution.pathResolvedPath,
+          executableCandidateSource(
+            executableResolution.executableCandidates,
+            executableResolution.pathResolvedPath,
+          ),
         )}${executableResolution.diagnostic ? ` ${executableResolution.diagnostic}` : ''}`,
       );
       const label = buffered ? 'exit_failed' : 'no_text';
@@ -1733,10 +1778,22 @@ export async function testAgentConnection(
   const usedExecutablePath = executableResolution.launchPath ?? executableResolution.selectedPath ?? undefined;
   const pathExecutablePath = executableResolution.pathResolvedPath
     ?? (def ? firstFallbackCandidate(def, configuredAgentEnv)?.path ?? null : null);
+  const pathExecutableSource = executableCandidateSource(
+    executableResolution.executableCandidates,
+    pathExecutablePath,
+  );
+  const pathExecutableDiagnosticSource = executableDiagnosticSource(pathExecutableSource);
   const usedExecutableVersion =
     executableResolution.executableCandidates?.find(
       (candidate) => candidate.path === usedExecutablePath,
     )?.version ?? null;
+  const usedExecutableCandidateSource = executableCandidateSource(
+    executableResolution.executableCandidates,
+    usedExecutablePath,
+  );
+  const usedExecutableDiagnosticSource = executableDiagnosticSource(
+    usedExecutableCandidateSource,
+  );
   let executableFailureDetail = usedExecutableDetail(
     input.agentId,
     usedExecutablePath,
@@ -1749,7 +1806,14 @@ export async function testAgentConnection(
     ...(executableResolution.configuredOverridePath
       ? { configuredExecutablePath: executableResolution.configuredOverridePath }
       : {}),
-    ...(pathExecutablePath ? { detectedExecutablePath: pathExecutablePath } : {}),
+    ...(pathExecutablePath
+      ? {
+          detectedExecutablePath: pathExecutablePath,
+          ...(pathExecutableDiagnosticSource
+            ? { detectedExecutableSource: pathExecutableDiagnosticSource }
+            : {}),
+        }
+      : {}),
     ...(usedExecutablePath ? { usedExecutablePath } : {}),
     ...(usedExecutablePath
       ? {
@@ -1757,7 +1821,7 @@ export async function testAgentConnection(
             executableResolution.configuredOverridePath &&
             usedExecutablePath === executableResolution.configuredOverridePath
               ? 'configured'
-              : 'path',
+              : usedExecutableDiagnosticSource ?? 'path',
         }
       : {}),
   });
@@ -1776,7 +1840,12 @@ export async function testAgentConnection(
         usedExecutablePath: executableResolution.launchPath ?? executableResolution.configuredOverridePath,
         usedExecutableSource: 'configured',
         ...(executableResolution.pathResolvedPath
-          ? { detectedExecutablePath: executableResolution.pathResolvedPath }
+          ? {
+              detectedExecutablePath: executableResolution.pathResolvedPath,
+              ...(pathExecutableDiagnosticSource
+                ? { detectedExecutableSource: pathExecutableDiagnosticSource }
+                : {}),
+            }
           : {}),
         detail: redactSecrets(
           agentConfiguredPathSuccessDetail(
@@ -1791,6 +1860,9 @@ export async function testAgentConnection(
         ...primaryResult,
         configuredExecutablePath: configuredAgentBin,
         detectedExecutablePath: executableResolution.pathResolvedPath,
+        ...(pathExecutableDiagnosticSource
+          ? { detectedExecutableSource: pathExecutableDiagnosticSource }
+          : {}),
         usedExecutablePath: executableResolution.launchPath ?? executableResolution.pathResolvedPath,
         usedExecutableSource: 'fallback_invalid',
         detail: redactSecrets(
@@ -1798,6 +1870,7 @@ export async function testAgentConnection(
             input.agentId,
             configuredAgentBin,
             executableResolution.pathResolvedPath,
+            pathExecutableDiagnosticSource,
           ),
         ),
       };
@@ -1865,6 +1938,9 @@ export async function testAgentConnection(
     ...fallbackResult,
     configuredExecutablePath: executableResolution.configuredOverridePath,
     detectedExecutablePath: pathExecutablePath,
+    ...(pathExecutableDiagnosticSource
+      ? { detectedExecutableSource: pathExecutableDiagnosticSource }
+      : {}),
     usedExecutablePath: fallbackResult.usedExecutablePath ?? pathExecutablePath,
     usedExecutableSource: 'fallback_failed',
     detail: redactSecrets(
@@ -1872,6 +1948,7 @@ export async function testAgentConnection(
         input.agentId,
         executableResolution.configuredOverridePath,
         pathExecutablePath,
+        pathExecutableDiagnosticSource,
       ),
     ),
   };

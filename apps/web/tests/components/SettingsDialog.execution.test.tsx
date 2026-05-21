@@ -1473,6 +1473,67 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
       {},
     );
   });
+
+  it('describes known OpenCode install fallbacks without calling them PATH binaries', async () => {
+    const opencode: AgentInfo = {
+      id: 'opencode',
+      name: 'OpenCode',
+      bin: 'opencode-cli',
+      available: true,
+      path: '/Users/mac/.opencode/bin/opencode',
+      version: 'opencode 1.2.0',
+      models: [{ id: 'default', label: 'Default' }],
+      executableCandidates: [
+        {
+          path: '/Users/mac/.opencode/bin/opencode',
+          bin: 'opencode',
+          version: 'opencode 1.2.0',
+          source: 'known',
+          selected: true,
+          available: true,
+        },
+      ],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          kind: 'success',
+          latencyMs: 22,
+          agentName: 'OpenCode',
+          model: 'default',
+          sample: 'ok',
+          usedExecutableSource: 'fallback_failed',
+          configuredExecutablePath: '/opt/homebrew/bin/opencode',
+          detectedExecutablePath: '/Users/mac/.opencode/bin/opencode',
+          detectedExecutableSource: 'known',
+          usedExecutablePath: '/Users/mac/.opencode/bin/opencode',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderSettingsDialog(
+      { mode: 'daemon', agentId: 'opencode' },
+      { agents: [opencode] },
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*1 installed/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/known OpenCode install at \/Users\/mac\/\.opencode\/bin\/opencode/)).toBeTruthy();
+    });
+    expect(screen.queryByText(/PATH OpenCode CLI/)).toBeNull();
+  });
 });
 
 describe('SettingsDialog media providers interactions', () => {

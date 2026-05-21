@@ -187,6 +187,49 @@ export interface AgentRefreshOptions {
   agentCliEnv?: AppConfig['agentCliEnv'];
 }
 
+type CliExecutableSource = 'path' | 'fallback' | 'known' | 'configured';
+
+function cliExecutableSourceLabel(
+  locale: Locale,
+  agentName: string,
+  source: CliExecutableSource | undefined,
+): string {
+  if (locale === 'zh-CN') {
+    switch (source) {
+      case 'known':
+        return `已知安装位置中的 ${agentName}`;
+      case 'configured':
+        return `已配置的 ${agentName} 路径`;
+      case 'fallback':
+      case 'path':
+      default:
+        return `PATH 中的 ${agentName} CLI`;
+    }
+  }
+  if (locale === 'zh-TW') {
+    switch (source) {
+      case 'known':
+        return `已知安裝位置中的 ${agentName}`;
+      case 'configured':
+        return `已設定的 ${agentName} 路徑`;
+      case 'fallback':
+      case 'path':
+      default:
+        return `PATH 中的 ${agentName} CLI`;
+    }
+  }
+  switch (source) {
+    case 'known':
+      return `the known ${agentName} install`;
+    case 'configured':
+      return `the configured ${agentName} path`;
+    case 'fallback':
+    case 'path':
+    default:
+      return `the PATH ${agentName} CLI`;
+  }
+}
+
 function cliPathStrings(locale: Locale, agentName = 'Codex', envKey = 'CODEX_BIN') {
   if (locale === 'zh-CN') {
     return {
@@ -194,10 +237,10 @@ function cliPathStrings(locale: Locale, agentName = 'Codex', envKey = 'CODEX_BIN
       useDetected: `使用检测到的 ${agentName}`,
       clearCustom: '清空自定义路径',
       configuredSuccess: (path: string) => `本次测试使用的是已配置的 ${agentName} 路径：${path}。`,
-      invalidFallback: (configuredPath: string, detectedPath: string) =>
-        `已配置的 ${agentName} 路径无效或不可执行：${configuredPath}。本次测试改用 PATH 中的 ${agentName} CLI：${detectedPath}。建议更新 ${envKey} 或清空自定义路径。`,
-      failedFallback: (configuredPath: string, detectedPath: string) =>
-        `已配置的 ${agentName} 路径启动失败：${configuredPath}。本次测试改用 PATH 中的 ${agentName} CLI：${detectedPath}。建议更新 ${envKey} 或清空自定义路径。`,
+      invalidFallback: (configuredPath: string, detectedPath: string, source?: CliExecutableSource) =>
+        `已配置的 ${agentName} 路径无效或不可执行：${configuredPath}。本次测试改用 ${cliExecutableSourceLabel(locale, agentName, source)}：${detectedPath}。建议更新 ${envKey} 或清空自定义路径。`,
+      failedFallback: (configuredPath: string, detectedPath: string, source?: CliExecutableSource) =>
+        `已配置的 ${agentName} 路径启动失败：${configuredPath}。本次测试改用 ${cliExecutableSourceLabel(locale, agentName, source)}：${detectedPath}。建议更新 ${envKey} 或清空自定义路径。`,
       candidatesTitle: `检测到的 ${agentName} binaries`,
       current: '当前',
       use: '使用',
@@ -211,10 +254,10 @@ function cliPathStrings(locale: Locale, agentName = 'Codex', envKey = 'CODEX_BIN
       useDetected: `使用偵測到的 ${agentName}`,
       clearCustom: '清除自訂路徑',
       configuredSuccess: (path: string) => `本次測試使用的是已設定的 ${agentName} 路徑：${path}。`,
-      invalidFallback: (configuredPath: string, detectedPath: string) =>
-        `已設定的 ${agentName} 路徑無效或不可執行：${configuredPath}。本次測試改用 PATH 中的 ${agentName} CLI：${detectedPath}。建議更新 ${envKey} 或清除自訂路徑。`,
-      failedFallback: (configuredPath: string, detectedPath: string) =>
-        `已設定的 ${agentName} 路徑啟動失敗：${configuredPath}。本次測試改用 PATH 中的 ${agentName} CLI：${detectedPath}。建議更新 ${envKey} 或清除自訂路徑。`,
+      invalidFallback: (configuredPath: string, detectedPath: string, source?: CliExecutableSource) =>
+        `已設定的 ${agentName} 路徑無效或不可執行：${configuredPath}。本次測試改用 ${cliExecutableSourceLabel(locale, agentName, source)}：${detectedPath}。建議更新 ${envKey} 或清除自訂路徑。`,
+      failedFallback: (configuredPath: string, detectedPath: string, source?: CliExecutableSource) =>
+        `已設定的 ${agentName} 路徑啟動失敗：${configuredPath}。本次測試改用 ${cliExecutableSourceLabel(locale, agentName, source)}：${detectedPath}。建議更新 ${envKey} 或清除自訂路徑。`,
       candidatesTitle: `偵測到的 ${agentName} binaries`,
       current: '目前',
       use: '使用',
@@ -228,10 +271,10 @@ function cliPathStrings(locale: Locale, agentName = 'Codex', envKey = 'CODEX_BIN
     clearCustom: 'Clear custom path',
     configuredSuccess: (path: string) =>
       `This test used the configured ${agentName} path: ${path}.`,
-    invalidFallback: (configuredPath: string, detectedPath: string) =>
-      `Configured ${agentName} path is invalid or not executable: ${configuredPath}. This test used the PATH ${agentName} CLI at ${detectedPath}. Update ${envKey} or clear the custom path to use the detected binary.`,
-    failedFallback: (configuredPath: string, detectedPath: string) =>
-      `Configured ${agentName} path failed: ${configuredPath}. This test succeeded with the PATH ${agentName} CLI at ${detectedPath}. Update ${envKey} or clear the custom path to use the detected binary.`,
+    invalidFallback: (configuredPath: string, detectedPath: string, source?: CliExecutableSource) =>
+      `Configured ${agentName} path is invalid or not executable: ${configuredPath}. This test used ${cliExecutableSourceLabel(locale, agentName, source)} at ${detectedPath}. Update ${envKey} or clear the custom path to use the detected binary.`,
+    failedFallback: (configuredPath: string, detectedPath: string, source?: CliExecutableSource) =>
+      `Configured ${agentName} path failed: ${configuredPath}. This test succeeded with ${cliExecutableSourceLabel(locale, agentName, source)} at ${detectedPath}. Update ${envKey} or clear the custom path to use the detected binary.`,
     candidatesTitle: `Detected ${agentName} binaries`,
     current: 'Current',
     use: 'Use',
@@ -1484,6 +1527,7 @@ export function SettingsDialog({
           return `${baseMessage} ${cliStrings.invalidFallback(
             result.configuredExecutablePath,
             result.detectedExecutablePath,
+            result.detectedExecutableSource,
           )}`;
         }
         if (
@@ -1494,6 +1538,7 @@ export function SettingsDialog({
           return `${baseMessage} ${cliStrings.failedFallback(
             result.configuredExecutablePath,
             result.detectedExecutablePath,
+            result.detectedExecutableSource,
           )}`;
         }
       }

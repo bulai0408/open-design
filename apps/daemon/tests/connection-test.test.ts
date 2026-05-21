@@ -2159,6 +2159,72 @@ process.exit(1);
     );
   });
 
+  it('reports known OpenCode candidates as known install-dir fallbacks during connection tests', async () => {
+    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-known-home-'));
+    const configuredDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-configured-'));
+    const oldPath = process.env.PATH;
+    const oldAgentHome = process.env.OD_AGENT_HOME;
+    try {
+      const configuredBin = path.join(configuredDir, 'opencode-old');
+      const knownBinDir = path.join(home, '.opencode', 'bin');
+      const knownBin = path.join(knownBinDir, 'opencode');
+      await fsp.mkdir(knownBinDir, { recursive: true });
+      await fsp.writeFile(
+        configuredBin,
+        `#!/usr/bin/env node\nconsole.error('OpenCode old binary crashed');\nprocess.exit(1);\n`,
+      );
+      await fsp.writeFile(
+        knownBin,
+        `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '--version') {
+  console.log('opencode 1.2.0');
+  process.exit(0);
+}
+console.log(JSON.stringify({ type: 'text', part: { text: 'ok' } }));
+`,
+      );
+      await fsp.chmod(configuredBin, 0o755);
+      await fsp.chmod(knownBin, 0o755);
+      process.env.OD_AGENT_HOME = home;
+      process.env.PATH = '';
+
+      const result = await testAgentConnection({
+        agentId: 'opencode',
+        agentCliEnv: {
+          opencode: {
+            OPENCODE_BIN: configuredBin,
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        kind: 'success',
+        agentName: 'OpenCode',
+        sample: 'ok',
+        usedExecutableSource: 'fallback_failed',
+        configuredExecutablePath: configuredBin,
+        detectedExecutablePath: knownBin,
+        detectedExecutableSource: 'known',
+        usedExecutablePath: knownBin,
+      });
+      expect(result.detail).toContain(`Configured OpenCode path failed: ${configuredBin}.`);
+      expect(result.detail).toContain('This test succeeded with the known OpenCode install at');
+      expect(result.detail).not.toContain('PATH OpenCode CLI');
+      expect(result.detail).toContain('Update OPENCODE_BIN or clear the custom path');
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldAgentHome === undefined) {
+        delete process.env.OD_AGENT_HOME;
+      } else {
+        process.env.OD_AGENT_HOME = oldAgentHome;
+      }
+      await fsp.rm(home, { recursive: true, force: true });
+      await fsp.rm(configuredDir, { recursive: true, force: true });
+    }
+  });
+
   it('reports Cursor Agent status auth failures before running the smoke prompt', async () => {
     await withFakeCursorAgent(
       `
