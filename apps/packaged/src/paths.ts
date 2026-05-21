@@ -4,6 +4,7 @@ import { isAbsolute, join, win32 } from "node:path";
 import { APP_KEYS, normalizeNamespace } from "@open-design/sidecar-proto";
 
 import type { PackagedConfig } from "./config.js";
+import { PackagedPathAccessError } from "./errors.js";
 
 export type PackagedNamespacePaths = {
   cacheRoot: string;
@@ -56,7 +57,16 @@ function resolvePackagedDataRoot(
   if (odDataDir) {
     const expanded = expandHomePrefix(odDataDir);
     if (!isAbsolute(expanded) && !win32.isAbsolute(expanded)) {
-      throw new Error("OD_DATA_DIR must be an absolute path in packaged mode.");
+      throw new PackagedPathAccessError(
+        [
+          "Open Design's packaged runtime requires OD_DATA_DIR to be an absolute path.",
+          "",
+          `Configured value: ${odDataDir}`,
+          "",
+          "Set OD_DATA_DIR to an absolute path (for example, C:\\\\Users\\\\You\\\\OpenDesign on Windows or /Users/you/OpenDesign on macOS/Linux) and relaunch Open Design.",
+        ].join("\n"),
+        { title: "Open Design cannot start with this OD_DATA_DIR" },
+      );
     }
     if (isAlreadyScopedPackagedDataRoot(expanded, namespace)) {
       return expanded;

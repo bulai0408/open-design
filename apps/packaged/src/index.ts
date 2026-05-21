@@ -17,8 +17,8 @@ import { app, dialog } from "electron";
 
 import { readPackagedConfig } from "./config.js";
 import { writePackagedDesktopIdentity } from "./identity.js";
+import { PackagedPathAccessError } from "./errors.js";
 import {
-  PackagedPathAccessError,
   applyPackagedElectronPathOverrides,
   claimPackagedSingleInstanceLock,
   ensurePackagedNamespacePaths,

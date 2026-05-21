@@ -2,8 +2,9 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { resolvePackagedNamespacePaths } from "../src/paths.js";
 import type { PackagedConfig } from "../src/config.js";
+import { PackagedPathAccessError } from "../src/errors.js";
+import { resolvePackagedNamespacePaths } from "../src/paths.js";
 
 function fakeConfig(): PackagedConfig {
   return {
@@ -136,6 +137,23 @@ describe("resolvePackagedNamespacePaths", () => {
 
     expect(
       () => resolvePackagedNamespacePaths(config, config.namespace, { OD_DATA_DIR: "project/.od" }),
-    ).toThrow(/OD_DATA_DIR must be an absolute path/);
+    ).toThrow(/OD_DATA_DIR.*absolute path/);
+  });
+
+  it("surfaces the relative-OD_DATA_DIR rejection as PackagedPathAccessError so packaged main() can show a dialog", () => {
+    const config = fakeConfig();
+
+    let captured: unknown;
+    try {
+      resolvePackagedNamespacePaths(config, config.namespace, { OD_DATA_DIR: "project/.od" });
+    } catch (error) {
+      captured = error;
+    }
+
+    expect(captured).toBeInstanceOf(PackagedPathAccessError);
+    const err = captured as PackagedPathAccessError;
+    expect(err.title).toMatch(/OD_DATA_DIR/);
+    expect(err.message).toContain("project/.od");
+    expect(err.message).toMatch(/absolute path/);
   });
 });
