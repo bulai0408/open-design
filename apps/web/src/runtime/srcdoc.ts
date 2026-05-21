@@ -746,15 +746,24 @@ function injectPreviewNavigationRestore(
   var initialPathname = ${jsonForInlineScript(initialPathname)};
   var initialSearch = ${jsonForInlineScript(initialSearch)};
   var initialState = ${jsonForInlineScript(initialState)};
-  var lastPostedHref = null;
+  var lastPostedFingerprint = null;
   function snapshot(){
     return location.pathname + location.search + location.hash;
+  }
+  function stateFingerprint(value){
+    try {
+      if (value === undefined) return 'u';
+      return JSON.stringify(value);
+    } catch (_) {
+      return String(value);
+    }
   }
   function post(force){
     try {
       var href = snapshot();
-      if (force !== true && lastPostedHref === href) return;
-      lastPostedHref = href;
+      var fingerprint = href + '\\n' + stateFingerprint(history.state);
+      if (force !== true && lastPostedFingerprint === fingerprint) return;
+      lastPostedFingerprint = fingerprint;
       if (window.parent && window.parent !== window) {
         window.parent.postMessage({
           type: 'od:preview-navigation',

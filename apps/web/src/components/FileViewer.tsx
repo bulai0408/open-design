@@ -7,7 +7,6 @@ import {
   type TrackingProjectKind,
 } from '@open-design/contracts/analytics';
 import { useAnalytics } from '../analytics/provider';
-import { trackIframeLoad } from '../observability/iframe-error';
 import {
   trackArtifactExportResult,
   trackArtifactHeaderClick,
@@ -33,7 +32,6 @@ import {
   fetchDeployConfig,
   fetchProjectDeployments,
   fetchProjectFilePreview,
-  fetchProjectFiles,
   fetchProjectFileText,
   uploadProjectFiles,
   liveArtifactPreviewUrl,
@@ -65,9 +63,7 @@ import {
   requestPreviewSnapshot,
 } from '../runtime/exports';
 import { buildReactComponentSrcdoc } from '../runtime/react-component';
-import { findHtmlEntriesReferencing } from '../runtime/jsx-module-refs';
 import {
-  buildLazySrcdocTransport,
   buildSrcdoc,
   canActivateSrcDocTransport,
   type SrcdocPreviewNavigation,
@@ -134,6 +130,10 @@ export type ManualEditPendingStyleSave = {
 };
 type PreviewViewportId = 'desktop' | 'tablet' | 'mobile';
 type PreviewCanvasSize = { width: number; height: number };
+type PreviewNavigationState = SrcdocPreviewNavigation & {
+  capturedAt: number;
+};
+type PreviewNavigationTarget = 'active' | 'url' | 'srcdoc';
 type PreviewViewportPreset = {
   id: PreviewViewportId;
   width: number | null;
@@ -616,10 +616,6 @@ interface Props {
   onRemovePreviewComment?: (commentId: string) => Promise<void>;
   onSendBoardCommentAttachments?: (attachments: ChatCommentAttachment[]) => Promise<void> | void;
   onFileSaved?: () => Promise<void> | void;
-  // Open `openName` as a tab (focusing it) and close `closeName` in one
-  // atomic tab-state update. The React module pointer uses this to jump to the
-  // HTML entry that renders a module and drop the dead-end module tab.
-  onOpenFileReplacing?: (openName: string, closeName: string) => void;
 }
 
 export function FileViewer({
@@ -636,7 +632,6 @@ export function FileViewer({
   onRemovePreviewComment,
   onSendBoardCommentAttachments,
   onFileSaved,
-  onOpenFileReplacing,
 }: Props) {
   const rendererMatch = artifactRendererRegistry.resolve({
     file,
@@ -678,13 +673,7 @@ export function FileViewer({
     );
   }
   if (rendererMatch?.renderer.id === 'react-component') {
-    return (
-      <ReactComponentViewer
-        projectId={projectId}
-        file={file}
-        onOpenFileReplacing={onOpenFileReplacing}
-      />
-    );
+    return <ReactComponentViewer projectId={projectId} file={file} />;
   }
   if (rendererMatch?.renderer.id === 'markdown') {
     return <MarkdownViewer projectId={projectId} file={file} />;
@@ -888,23 +877,6 @@ export function LiveArtifactViewer({
     [projectId, liveArtifact.artifactId, reloadKey],
   );
   const previewScale = zoom / 100;
-  const previewActive = mode === 'preview';
-
-  // Instrument the live-artifact iframe so failed loads — usually a
-  // missing artifact file or a stuck `od://` resolver — surface in
-  // PostHog. iframe load errors don't propagate to window.error, so
-  // observability/install.ts cannot catch them globally.
-  useEffect(() => {
-    if (mode !== 'preview') return undefined;
-    const node = iframeRef.current;
-    if (!node) return undefined;
-    return trackIframeLoad({
-      iframe: node,
-      surface: 'live_artifact_preview',
-      artifactId: liveArtifact.artifactId,
-      projectId,
-    });
-  }, [mode, previewUrl, liveArtifact.artifactId, projectId]);
 
   function bumpZoom(delta: number) {
     setZoom((z) => Math.max(25, Math.min(200, z + delta)));
@@ -1045,15 +1017,15 @@ export function LiveArtifactViewer({
           </div>
           <div
             className="viewer-preview-controls"
-            data-active={previewActive ? 'true' : 'false'}
-            aria-hidden={previewActive ? undefined : true}
+            data-active={mode === 'preview' ? 'true' : 'false'}
+            aria-hidden={mode === 'preview' ? undefined : true}
           >
             <span className="viewer-divider" aria-hidden />
             <PreviewViewportControls
               viewport={previewViewport}
               onViewport={setPreviewViewport}
               t={t}
-              tabIndex={previewActive ? 0 : -1}
+              tabIndex={mode === 'preview' ? 0 : -1}
             />
             <span className="viewer-divider" aria-hidden />
             <button
@@ -1062,7 +1034,7 @@ export function LiveArtifactViewer({
               onClick={() => bumpZoom(-25)}
               title={t('fileViewer.zoomOut')}
               aria-label={t('fileViewer.zoomOut')}
-              tabIndex={previewActive ? 0 : -1}
+              tabIndex={mode === 'preview' ? 0 : -1}
             >
               <Icon name="minus" size={14} />
             </button>
@@ -1071,7 +1043,7 @@ export function LiveArtifactViewer({
               className="viewer-action viewer-zoom-level"
               onClick={() => setZoom(100)}
               title={t('fileViewer.resetZoom')}
-              tabIndex={previewActive ? 0 : -1}
+              tabIndex={mode === 'preview' ? 0 : -1}
             >
               <span style={{ fontVariantNumeric: 'tabular-nums' }}>{zoom}%</span>
             </button>
@@ -1081,7 +1053,7 @@ export function LiveArtifactViewer({
               onClick={() => bumpZoom(25)}
               title={t('fileViewer.zoomIn')}
               aria-label={t('fileViewer.zoomIn')}
-              tabIndex={previewActive ? 0 : -1}
+              tabIndex={mode === 'preview' ? 0 : -1}
             >
               <Icon name="plus" size={14} />
             </button>
@@ -1091,7 +1063,7 @@ export function LiveArtifactViewer({
               href={liveArtifactPreviewUrl(projectId, liveArtifact.artifactId)}
               target="_blank"
               rel="noreferrer noopener"
-              tabIndex={previewActive ? 0 : -1}
+              tabIndex={mode === 'preview' ? 0 : -1}
             >
               {t('fileViewer.open')}
             </a>
@@ -1144,27 +1116,26 @@ export function LiveArtifactViewer({
             action={t('liveArtifact.refresh.failureAction')}
           />
         ) : null}
-        <div
-          className={`live-artifact-preview-layer preview-viewport preview-viewport-${previewViewport}`}
-          data-active={previewActive ? 'true' : 'false'}
-          aria-hidden={previewActive ? undefined : true}
-          style={previewViewportStyle(previewViewport, previewScale, previewBodySize)}
-        >
-          <div className="preview-frame-clip">
-            <div style={previewScaleShellStyle(previewViewport, previewScale)}>
-              <PreviewDrawOverlay>
-                <iframe
-                  ref={iframeRef}
-                  data-testid="live-artifact-preview-frame"
-                  title={liveArtifact.title}
-                  sandbox="allow-scripts allow-popups allow-downloads"
-                  src={previewUrl}
-                />
-              </PreviewDrawOverlay>
+        {mode === 'preview' ? (
+          <div
+            className={`live-artifact-preview-layer preview-viewport preview-viewport-${previewViewport}`}
+            style={previewViewportStyle(previewViewport, previewScale, previewBodySize)}
+          >
+            <div className="preview-frame-clip">
+              <div style={previewScaleShellStyle(previewViewport, previewScale)}>
+                <PreviewDrawOverlay>
+                  <iframe
+                    ref={iframeRef}
+                    data-testid="live-artifact-preview-frame"
+                    title={liveArtifact.title}
+                    sandbox="allow-scripts allow-popups allow-downloads"
+                    src={previewUrl}
+                  />
+                </PreviewDrawOverlay>
+              </div>
             </div>
           </div>
-        </div>
-        {previewActive ? null : loading ? (
+        ) : loading ? (
           <div className="viewer-empty">{t('fileViewer.loading')}</div>
         ) : mode === 'code' ? (
           <LiveArtifactCodePanel
@@ -3162,51 +3133,12 @@ function clampBridgeCoordinate(value: unknown): number {
   return Math.max(-MAX_BRIDGE_COORDINATE, Math.min(MAX_BRIDGE_COORDINATE, Math.round(numeric)));
 }
 
-// Shown instead of the React runtime when a .jsx/.tsx is a module loaded by a
-// sibling HTML entry (issue #2744): such a file has no standalone component to
-// render, so point the user at the page(s) that do. Clicking an entry opens
-// (or focuses) that page and closes the now-useless module tab.
-function ReactModulePointer({
-  entries,
-  onOpenEntry,
-}: {
-  entries: string[];
-  onOpenEntry?: (name: string) => void;
-}) {
-  const t = useT();
-  return (
-    <div className="viewer-module-pointer" role="note">
-      <Icon name="info" size={20} />
-      <h2 className="viewer-module-pointer__title">{t('fileViewer.jsxModuleTitle')}</h2>
-      <p className="viewer-module-pointer__body">{t('fileViewer.jsxModuleBody')}</p>
-      <p className="viewer-module-pointer__cta">{t('fileViewer.jsxModuleCta')}</p>
-      <ul className="viewer-module-pointer__entries">
-        {entries.map((name) => (
-          <li key={name}>
-            <button
-              type="button"
-              className="viewer-module-pointer__link"
-              onClick={() => onOpenEntry?.(name)}
-              disabled={!onOpenEntry}
-            >
-              <Icon name="external-link" size={14} />
-              <span>{name}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 function ReactComponentViewer({
   projectId,
   file,
-  onOpenFileReplacing,
 }: {
   projectId: string;
   file: ProjectFile;
-  onOpenFileReplacing?: (openName: string, closeName: string) => void;
 }) {
   const t = useT();
   const [mode, setMode] = useState<'preview' | 'source'>('preview');
@@ -3215,11 +3147,6 @@ function ReactComponentViewer({
   const [reloadKey, setReloadKey] = useState(0);
   const [shareMenuOpen, setShareMenuOpen] = useState(false);
   const shareRef = useRef<HTMLDivElement | null>(null);
-  // HTML entries that load this file as a Babel module. `null` = still
-  // checking; `[]` = standalone artifact; non-empty = a module of a
-  // multi-file React prototype, which has no standalone preview. Issue #2744.
-  const [moduleEntries, setModuleEntries] = useState<string[] | null>(null);
-  const isModule = (moduleEntries?.length ?? 0) > 0;
 
   useEffect(() => {
     setSource(null);
@@ -3227,36 +3154,6 @@ function ReactComponentViewer({
     void fetchProjectFileText(projectId, file.name).then((text) => {
       if (!cancelled) setSource(text ?? '');
     });
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, file.name, file.mtime, reloadKey]);
-
-  // Detect whether this .jsx/.tsx is a module loaded by a sibling HTML entry.
-  // Runs before any srcdoc is built so a module never flashes the raw
-  // "No React component export found" error from the React runtime.
-  useEffect(() => {
-    setModuleEntries(null);
-    let cancelled = false;
-    void (async () => {
-      try {
-        const files = await fetchProjectFiles(projectId);
-        const htmlNames = files
-          .filter((entry) => /\.html?$/i.test(entry.name))
-          .map((entry) => entry.name);
-        const htmlSources = new Map<string, string>();
-        await Promise.all(
-          htmlNames.map(async (name) => {
-            const text = await fetchProjectFileText(projectId, name).catch(() => null);
-            if (text != null) htmlSources.set(name, text);
-          }),
-        );
-        if (cancelled) return;
-        setModuleEntries(findHtmlEntriesReferencing(file.name, htmlSources));
-      } catch {
-        if (!cancelled) setModuleEntries([]);
-      }
-    })();
     return () => {
       cancelled = true;
     };
@@ -3283,9 +3180,7 @@ function ReactComponentViewer({
   const sourceExtension = file.name.toLowerCase().endsWith('.tsx') ? '.tsx' : '.jsx';
 
   useEffect(() => {
-    if (source === null || moduleEntries === null || isModule) {
-      // No source yet, still checking module status, or this file is a module
-      // with no standalone preview — never build the React runtime srcdoc.
+    if (source === null) {
       setSrcDoc('');
       return;
     }
@@ -3309,7 +3204,7 @@ function ReactComponentViewer({
     return () => {
       cancelled = true;
     };
-  }, [source, exportTitle, moduleEntries, isModule]);
+  }, [source, exportTitle]);
 
   return (
     <div className="viewer react-component-viewer">
@@ -3407,15 +3302,7 @@ function ReactComponentViewer({
         </div>
       </div>
       <div className="viewer-body">
-        {isModule && mode === 'preview' ? (
-          // Module of a multi-file prototype: no standalone preview, so the
-          // Preview tab shows a pointer to the HTML entry. The Source tab still
-          // renders the raw code below. Issue #2744.
-          <ReactModulePointer
-            entries={moduleEntries ?? []}
-            onOpenEntry={(htmlName) => onOpenFileReplacing?.(htmlName, file.name)}
-          />
-        ) : source === null || (mode === 'preview' && !srcDoc) ? (
+        {source === null || (mode === 'preview' && !srcDoc) ? (
           <div className="viewer-empty">{t('fileViewer.loading')}</div>
         ) : mode === 'preview' ? (
           <PreviewDrawOverlay>
@@ -3763,6 +3650,8 @@ function HtmlViewer({
     canvasTop: 0,
   });
   const previewScrollRequestAtRef = useRef(0);
+  const previewNavigationRef = useRef<PreviewNavigationState | null>(null);
+  const previewNavigationRestoreRef = useRef<PreviewNavigationState | null>(null);
   const dcViewportRef = useRef({
     x: 0,
     y: 0,
@@ -3869,6 +3758,40 @@ function HtmlViewer({
     () => (typeof window === 'undefined' ? false : parseForceInline(window.location.search)),
     [],
   );
+  const requestPreviewNavigationState = useCallback(() => {
+    try {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'od:preview-navigation-request' }, '*');
+    } catch {}
+  }, []);
+  const capturePreviewNavigationState = useCallback(() => {
+    requestPreviewNavigationState();
+    previewNavigationRestoreRef.current = previewNavigationRef.current;
+  }, [requestPreviewNavigationState]);
+  const restorePreviewNavigationState = useCallback((navigation: PreviewNavigationState | null) => {
+    if (!navigation) return;
+    const post = (target: PreviewNavigationTarget = 'active') => {
+      if (previewNavigationRestoreRef.current !== navigation) return;
+      const frame =
+        target === 'url'
+          ? urlPreviewIframeRef.current
+          : target === 'srcdoc'
+            ? srcDocPreviewIframeRef.current
+            : iframeRef.current;
+      if (!frame?.contentWindow) return;
+      if (target === 'active') {
+        const active = frame.getAttribute('data-od-active') === 'true' || iframeRef.current === frame;
+        if (!active) return;
+      }
+      frame.contentWindow.postMessage({
+        type: 'od:preview-navigation-restore',
+        ...navigation,
+      }, '*');
+    };
+    post();
+    window.setTimeout(post, 80);
+    window.setTimeout(post, 260);
+    return post;
+  }, []);
   const [activeCommentTarget, setActiveCommentTarget] = useState<PreviewCommentSnapshot | null>(null);
   const [hoveredCommentTarget, setHoveredCommentTarget] = useState<PreviewCommentSnapshot | null>(null);
   const [hoveredPodMemberId, setHoveredPodMemberId] = useState<string | null>(null);
@@ -4158,7 +4081,7 @@ function HtmlViewer({
     needsFocusGuard,
   });
   const basePreviewSrcUrl = useMemo(
-    () => `${projectRawUrl(projectId, file.name)}?v=${Math.round(file.mtime)}&r=${reloadKey}`,
+    () => `${projectRawUrl(projectId, file.name)}?v=${Math.round(file.mtime)}&r=${reloadKey}&odPreviewNav=1`,
     [projectId, file.name, file.mtime, reloadKey],
   );
   const [previewSrcUrl, setPreviewSrcUrl] = useState(basePreviewSrcUrl);
@@ -4170,6 +4093,8 @@ function HtmlViewer({
     : basePreviewSrcUrl;
   useEffect(() => {
     setPreviewSrcUrl(basePreviewSrcUrl);
+    previewNavigationRef.current = null;
+    previewNavigationRestoreRef.current = null;
   }, [basePreviewSrcUrl]);
   // Keep `iframeRef.current` aligned with whichever iframe is currently
   // visible so the existing postMessage send sites do not need to know that
@@ -4180,6 +4105,13 @@ function HtmlViewer({
   useEffect(() => {
     iframeRef.current = useUrlLoadPreview ? urlPreviewIframeRef.current : srcDocPreviewIframeRef.current;
   }, [useUrlLoadPreview]);
+  useEffect(() => {
+    const navigation = previewNavigationRef.current;
+    if (!navigation) return;
+    previewNavigationRestoreRef.current = navigation;
+    const post = restorePreviewNavigationState(navigation);
+    post?.(useUrlLoadPreview ? 'url' : 'srcdoc');
+  }, [restorePreviewNavigationState, useUrlLoadPreview]);
   // When the render mode flips, the now-active iframe has already loaded
   // (its `onLoad` fired when it first mounted, often long before the user
   // toggled), so we manually re-push the current bridge state instead of
@@ -4222,15 +4154,24 @@ function HtmlViewer({
       deck: effectiveDeck,
       baseHref: projectRawUrl(projectId, baseDirFor(file.name)),
       initialSlideIndex: htmlPreviewSlideState.get(previewStateKey)?.active ?? 0,
+      initialNavigation: previewNavigationRestoreRef.current,
       selectionBridge: true,
       editBridge: manualEditMode,
       paletteBridge: true,
       initialPalette: selectedPalette,
       previewFocusGuard: true,
     }) : ''),
-    [previewSource, effectiveDeck, projectId, file.name, previewStateKey, manualEditMode, selectedPalette],
+    [
+      previewSource,
+      effectiveDeck,
+      projectId,
+      file.name,
+      previewStateKey,
+      previewNavigationRestoreRef.current?.capturedAt,
+      manualEditMode,
+      selectedPalette,
+    ],
   );
-  const lazySrcDocTransport = useMemo(() => buildLazySrcdocTransport(), []);
   const [hasLazySrcDocTransport, setHasLazySrcDocTransport] = useState(useUrlLoadPreview);
   const [srcDocTransportResetKey, setSrcDocTransportResetKey] = useState(0);
   const [srcDocShellReady, setSrcDocShellReady] = useState(false);
@@ -4260,7 +4201,23 @@ function HtmlViewer({
     return () => window.removeEventListener('message', onMessage);
   }, []);
   const useLazySrcDocTransport = useUrlLoadPreview || hasLazySrcDocTransport;
-  const srcDocTransportContent = useLazySrcDocTransport ? lazySrcDocTransport : srcDoc;
+  const srcDocTransportSrc = useLazySrcDocTransport
+    ? `${basePreviewSrcUrl}&odSrcdocTransport=1`
+    : undefined;
+  const srcDocTransportContent = useLazySrcDocTransport ? undefined : srcDoc;
+  // jsdom never loads the daemon-served shell URL, so unit tests need a
+  // test-only ready signal. Real browsers wait for the shell postMessage or
+  // iframe onLoad before activating.
+  useEffect(() => {
+    if (!useLazySrcDocTransport) return;
+    if (typeof navigator !== 'object' || !/\bjsdom\b/i.test(navigator.userAgent)) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setSrcDocShellReady(true);
+    });
+    return () => { cancelled = true; };
+  }, [useLazySrcDocTransport, srcDocTransportResetKey]);
   const urlTransportSrc = useUrlLoadPreview ? activePreviewSrcUrl : 'about:blank';
   const activateSrcDocTransport = useCallback((target: HTMLIFrameElement | null = srcDocPreviewIframeRef.current) => {
     if (!canActivateSrcDocTransport({
@@ -4272,7 +4229,14 @@ function HtmlViewer({
     })) return false;
     const win = target?.contentWindow;
     if (!win) return false;
-    win.postMessage({ type: 'od:srcdoc-transport-activate', html: srcDoc }, '*');
+    win.postMessage(
+      {
+        type: 'od:srcdoc-transport-activate',
+        html: srcDoc,
+        navigation: previewNavigationRestoreRef.current,
+      },
+      '*',
+    );
     activatedSrcDocTransportHtmlRef.current = srcDoc;
     return true;
   }, [srcDoc, useLazySrcDocTransport, useUrlLoadPreview, srcDocShellReady]);
@@ -4318,6 +4282,28 @@ function HtmlViewer({
         canvasLeft: Number(data.canvasLeft || 0),
         canvasTop: Number(data.canvasTop || 0),
       };
+    }
+    function onNavigationMessage(ev: MessageEvent) {
+      if (!isOurPreviewIframeSource(ev.source)) return;
+      const data = ev.data as {
+        type?: string;
+        href?: unknown;
+        pathname?: unknown;
+        search?: unknown;
+        hash?: unknown;
+        state?: unknown;
+      } | null;
+      if (!data || data.type !== 'od:preview-navigation') return;
+      previewNavigationRef.current = {
+        href: typeof data.href === 'string' ? data.href : '',
+        pathname: typeof data.pathname === 'string' ? data.pathname : '',
+        search: typeof data.search === 'string' ? data.search : '',
+        hash: typeof data.hash === 'string' ? data.hash : '',
+        state: data.state,
+        capturedAt: Date.now(),
+      };
+      previewNavigationRestoreRef.current = previewNavigationRef.current;
+      restorePreviewNavigationState(previewNavigationRef.current);
     }
     function onRestoreRequest(ev: MessageEvent) {
       if (!isOurPreviewIframeSource(ev.source)) return;
@@ -4373,14 +4359,16 @@ function HtmlViewer({
       }
     }
     window.addEventListener('message', onMessage);
+    window.addEventListener('message', onNavigationMessage);
     window.addEventListener('message', onRestoreRequest);
     window.addEventListener('message', onDcViewportMessage);
     return () => {
       window.removeEventListener('message', onMessage);
+      window.removeEventListener('message', onNavigationMessage);
       window.removeEventListener('message', onRestoreRequest);
       window.removeEventListener('message', onDcViewportMessage);
     };
-  }, [isActivePreviewIframeSource, isOurPreviewIframeSource]);
+  }, [isActivePreviewIframeSource, isOurPreviewIframeSource, restorePreviewNavigationState]);
 
   useEffect(() => {
     if (!effectiveDeck) {
@@ -4992,9 +4980,6 @@ function HtmlViewer({
       setSource(result.source);
       sourceRef.current = result.source;
       setInlinedSource(null);
-      if (patch.kind !== 'set-style') {
-        setManualEditFrozenSource(result.source);
-      }
       setManualEditHistory((current) => [entry, ...current]);
       setManualEditUndone([]);
       setManualEditDraft((current) => ({ ...current, fullSource: result.source }));
@@ -5048,7 +5033,6 @@ function HtmlViewer({
       setSource(latest.beforeSource);
       sourceRef.current = latest.beforeSource;
       setInlinedSource(null);
-      setManualEditFrozenSource(latest.beforeSource);
       setManualEditHistory(rest);
       setManualEditUndone((current) => [latest, ...current]);
       setManualEditDraft((current) => ({ ...current, fullSource: latest.beforeSource }));
@@ -5080,7 +5064,6 @@ function HtmlViewer({
       setSource(latest.afterSource);
       sourceRef.current = latest.afterSource;
       setInlinedSource(null);
-      setManualEditFrozenSource(latest.afterSource);
       setManualEditUndone(rest);
       setManualEditHistory((current) => [latest, ...current]);
       setManualEditDraft((current) => ({ ...current, fullSource: latest.afterSource }));
@@ -5569,6 +5552,7 @@ function HtmlViewer({
   }
 
   function activateBoard(nextTool?: BoardTool) {
+    capturePreviewNavigationState();
     setMode('preview');
     setBoardMode(true);
     if (nextTool) setBoardTool(nextTool);
@@ -5912,6 +5896,7 @@ function HtmlViewer({
                   aria-expanded={palettePopoverOpen}
                   onClick={() => {
                     fireArtifactToolbarClick('tweaks');
+                    if (!palettePopoverOpen) capturePreviewNavigationState();
                     setPalettePopoverOpen((v) => !v);
                   }}
                 >
@@ -5956,9 +5941,13 @@ function HtmlViewer({
                         status_after: willBeSelected ? 'on' : 'off',
                       });
                     }
+                    if (nextPalette) capturePreviewNavigationState();
                     setSelectedPalette(nextPalette);
                   }}
-                  onPreview={setPreviewPalette}
+                  onPreview={(palette) => {
+                    if (palette) capturePreviewNavigationState();
+                    setPreviewPalette(palette);
+                  }}
                   onClose={() => setPalettePopoverOpen(false)}
                 />
               </div>
@@ -5976,6 +5965,7 @@ function HtmlViewer({
                     return;
                   }
                   const activateDraw = () => {
+                    capturePreviewNavigationState();
                     setBoardMode(false);
                     clearBoardComposer();
                     setInspectMode(false);
@@ -6006,6 +5996,7 @@ function HtmlViewer({
             onClick={() => {
               fireArtifactToolbarClick('comment');
               capturePreviewScrollPosition();
+              capturePreviewNavigationState();
               if (boardMode) {
                 setBoardMode(false);
                 clearBoardComposer();
@@ -6068,6 +6059,7 @@ function HtmlViewer({
             aria-pressed={inspectMode}
             onClick={() => {
               fireArtifactToolbarClick('inspect');
+              capturePreviewNavigationState();
               setInspectMode((v) => {
                 const next = !v;
                 if (next) {
@@ -6094,6 +6086,7 @@ function HtmlViewer({
             onClick={() => {
               fireArtifactToolbarClick('edit');
               capturePreviewScrollPosition();
+              capturePreviewNavigationState();
               if (!manualEditMode) {
                 setBoardMode(false);
                 clearBoardComposer();
@@ -6439,7 +6432,15 @@ function HtmlViewer({
                           ...dcViewportRef.current,
                         }, '*');
                         syncBridgeModes(frame);
-                        if (useUrlLoadPreview) restorePreviewScrollPosition();
+                        if (useUrlLoadPreview) {
+                          restorePreviewScrollPosition();
+                          const navigation = previewNavigationRef.current;
+                          if (navigation) {
+                            previewNavigationRestoreRef.current = navigation;
+                            const post = restorePreviewNavigationState(navigation);
+                            post?.('url');
+                          }
+                        }
                       }}
                     />
                     <iframe
@@ -6452,6 +6453,7 @@ function HtmlViewer({
                       tabIndex={useUrlLoadPreview ? -1 : 0}
                       title={file.name}
                       sandbox="allow-scripts allow-downloads"
+                      src={srcDocTransportSrc}
                       srcDoc={srcDocTransportContent}
                       onLoad={() => {
                         const frame = srcDocPreviewIframeRef.current;
@@ -6486,10 +6488,20 @@ function HtmlViewer({
                         // Tracking the last frame we reset for lets us
                         // keep PR #2699's "remount after Source toggle"
                         // fix while breaking the loop on plain renders.
+                        // It also resolves the route-preservation review
+                        // concern: a fresh shell mount still re-enables
+                        // activation, but a non-remounted frame can no
+                        // longer have its dedupe gate reopened by the
+                        // second load event after the ready-handshake
+                        // path already activated the shell.
                         if (frame && srcDocFrameDedupeResetForRef.current !== frame) {
                           srcDocFrameDedupeResetForRef.current = frame;
                           activatedSrcDocTransportHtmlRef.current = null;
                         }
+                        // Belt-and-suspenders for the ready handshake: if the
+                        // postMessage racing the parent's listener registration
+                        // ever loses, the load event still tells us the shell
+                        // script ran to completion.
                         if (useLazySrcDocTransport) setSrcDocShellReady(true);
                         activateSrcDocTransport(frame);
                         dcViewportRestoreAtRef.current = Date.now();

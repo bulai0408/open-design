@@ -145,6 +145,11 @@ function buildSrcdocTransportShell(): string {
         document.write(data.html);
         document.close();
       });
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: 'od:srcdoc-transport-ready' }, '*');
+        }
+      } catch (_) {}
     })();</script>
   </head>
   <body></body>

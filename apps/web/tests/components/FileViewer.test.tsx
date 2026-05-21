@@ -562,6 +562,74 @@ describe('FileViewer SVG artifacts', () => {
     });
   });
 
+  it('restores bridge navigation when returning to URL-loaded preview mode', async () => {
+    const file = baseFile({
+      name: 'page.html',
+      path: 'page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+
+    const { container } = render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+      />,
+    );
+
+    const urlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement;
+    const srcDocFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement;
+    vi.spyOn(srcDocFrame.contentWindow!, 'postMessage');
+
+    fireEvent.click(screen.getByTestId('inspect-mode-toggle'));
+
+    await waitFor(() => {
+      expect(srcDocFrame.getAttribute('data-od-active')).toBe('true');
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: srcDocFrame.contentWindow,
+      data: {
+        type: 'od:preview-navigation',
+        href: 'http://localhost/api/projects/project-1/raw/page.html?v=1710000000&r=0/editor?panel=layers#shape-3',
+        pathname: '/api/projects/project-1/raw/page.html/editor',
+        search: '?panel=layers',
+        hash: '#shape-3',
+        state: { panel: 'layers' },
+      },
+    }));
+
+    fireEvent.click(screen.getByTestId('inspect-mode-toggle'));
+
+    await waitFor(() => {
+      expect(urlFrame.getAttribute('data-od-active')).toBe('true');
+    });
+    const activeUrlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement;
+    const urlPostMessageSpy = vi.spyOn(activeUrlFrame.contentWindow!, 'postMessage');
+    urlPostMessageSpy.mockClear();
+    fireEvent.load(activeUrlFrame);
+
+    await waitFor(() => {
+      expect(urlPostMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'od:preview-navigation-restore',
+        pathname: '/api/projects/project-1/raw/page.html/editor',
+        search: '?panel=layers',
+        hash: '#shape-3',
+        state: { panel: 'layers' },
+      }), '*');
+    });
+  });
+
   it('uses the next file URL immediately when switching URL-loaded HTML previews', () => {
     const first = baseFile({
       name: 'first.html',

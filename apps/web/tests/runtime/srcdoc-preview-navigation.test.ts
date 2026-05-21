@@ -17,6 +17,7 @@ function extractBridgeScript(html: string): string {
 interface BridgeHarness {
   parentMessages: Array<Record<string, unknown>>;
   triggerEvent: (type: string, ev?: { data?: unknown }) => void;
+  replaceState: (state: unknown, url: string) => void;
   state: { href: string; hash: string; pathname: string; search: string; state: unknown };
 }
 
@@ -141,6 +142,9 @@ function runBridge(html: string, opts?: {
       const list = listeners.get(type) ?? [];
       for (const l of list) l(ev ?? { data: null });
     },
+    replaceState: (nextState, url) => {
+      history.replaceState(nextState, '', url);
+    },
     state,
   };
 }
@@ -178,6 +182,22 @@ describe('injectPreviewNavigationRestore reporter (regression: bridge must repor
     bridge.triggerEvent('popstate');
     const after = bridge.parentMessages.filter((m) => m.type === 'od:preview-navigation').length;
     expect(after).toBe(before);
+  });
+
+  it('reports same-URL history state changes', () => {
+    const html = buildSrcdoc('<html><body></body></html>', { initialNavigation: null });
+    const bridge = runBridge(html, { initialPathname: '/page' });
+    const before = bridge.parentMessages.filter((m) => m.type === 'od:preview-navigation').length;
+
+    bridge.replaceState({ modal: 'settings' }, '/page');
+
+    const posts = bridge.parentMessages.filter((m) => m.type === 'od:preview-navigation');
+    expect(posts).toHaveLength(before + 1);
+    expect(posts.at(-1)).toMatchObject({
+      type: 'od:preview-navigation',
+      pathname: '/page',
+      state: { modal: 'settings' },
+    });
   });
 });
 

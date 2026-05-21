@@ -246,6 +246,7 @@ describe('GET /api/projects/:id/raw/* range request route', () => {
     const text = await res.text();
     expect(text).toContain('data-od-srcdoc-transport-shell');
     expect(text).toContain("data.type !== 'od:srcdoc-transport-activate'");
+    expect(text).toContain("type: 'od:srcdoc-transport-ready'");
     expect(text).toContain('history.replaceState');
     expect(text).not.toContain('<html/>');
   });
