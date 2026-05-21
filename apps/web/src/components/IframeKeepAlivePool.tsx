@@ -32,7 +32,10 @@ interface IframeKeepAlivePoolValue {
   release(key: string): void;
   evict(key: string): void;
   evictProject(projectId: string, options?: { includeActive?: boolean }): void;
-  evictMatching(predicate: (entry: PoolEntry) => boolean): void;
+  evictMatching(
+    predicate: (entry: PoolEntry) => boolean,
+    options?: { includeActive?: boolean },
+  ): void;
 }
 
 const IframeKeepAliveContext = createContext<IframeKeepAlivePoolValue | null>(null);
@@ -144,9 +147,12 @@ export function IframeKeepAliveProvider({
       }
       forceRender((value) => value + 1);
     },
-    evictMatching(predicate) {
+    evictMatching(predicate, options) {
       for (const entry of Array.from(entriesRef.current.values())) {
-        if (!activeKeysRef.current.has(entry.key) && predicate(entry)) {
+        if (
+          (options?.includeActive || !activeKeysRef.current.has(entry.key))
+          && predicate(entry)
+        ) {
           removeEntry(entry.key);
         }
       }
@@ -212,7 +218,10 @@ export function useIframeKeepAlivePool(): IframeKeepAlivePoolValue {
           if (entry.projectId === projectId) removeFallbackEntry(entry.key);
         }
       },
-      evictMatching(predicate) {
+      evictMatching(predicate, _options) {
+        // Fallback pool only attaches a single active entry at a time and
+        // never parks, so includeActive is a no-op here — we always
+        // remove any matching entry regardless.
         for (const entry of Array.from(fallbackEntriesRef.current.values())) {
           if (predicate(entry)) removeFallbackEntry(entry.key);
         }

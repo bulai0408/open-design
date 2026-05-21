@@ -28,6 +28,7 @@ import { listProjects, listTemplates } from '../../src/state/projects';
 import { useIframeKeepAlivePool } from '../../src/components/IframeKeepAlivePool';
 
 const evictProjectMock = vi.fn();
+const evictMatchingMock = vi.fn();
 const useRouteMock = vi.fn(() => ({
   kind: 'project' as const,
   projectId: 'project-1',
@@ -58,9 +59,11 @@ vi.mock('../../src/components/ProjectView', () => ({
   ProjectView: ({
     project,
     onProjectChange,
+    onOpenSettings,
   }: {
     project: Project;
     onProjectChange: (project: Project) => void;
+    onOpenSettings: (section?: string) => void;
   }) => (
     <div>
       <button
@@ -96,12 +99,42 @@ vi.mock('../../src/components/ProjectView', () => ({
       >
         Change custom instructions
       </button>
+      <button type="button" onClick={() => onOpenSettings('skills')}>
+        Open settings
+      </button>
     </div>
   ),
 }));
 
 vi.mock('../../src/components/SettingsDialog', () => ({
-  SettingsDialog: () => null,
+  SettingsDialog: ({
+    onSkillsChanged,
+    onDesignSystemsChanged,
+  }: {
+    onSkillsChanged?: (id?: string) => void;
+    onDesignSystemsChanged?: (id?: string) => void;
+  }) => (
+    <div>
+      <button
+        type="button"
+        onClick={() => onSkillsChanged?.('old-skill')}
+      >
+        Trigger skill body change
+      </button>
+      <button
+        type="button"
+        onClick={() => onSkillsChanged?.('unrelated-skill')}
+      >
+        Trigger unrelated skill change
+      </button>
+      <button
+        type="button"
+        onClick={() => onDesignSystemsChanged?.('old-design-system')}
+      >
+        Trigger design system change
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock('../../src/components/pet/PetOverlay', () => ({
@@ -220,7 +253,7 @@ describe('App preview keep-alive invalidation', () => {
       release: vi.fn(),
       evict: vi.fn(),
       evictProject: evictProjectMock,
-      evictMatching: vi.fn(),
+      evictMatching: evictMatchingMock,
     });
     mockedDaemonIsLive.mockResolvedValue(true);
     mockedFetchAgents.mockResolvedValue([]);
@@ -264,5 +297,76 @@ describe('App preview keep-alive invalidation', () => {
     await waitFor(() => {
       expect(evictProjectMock).toHaveBeenCalledWith('project-1', { includeActive: true });
     });
+  });
+
+  // Regression for the mrcfps follow-up on PR #2190: ProjectView's
+  // signature only hashes SkillSummary / DesignSystemSummary fields, so a
+  // body-only registry edit leaves every signature unchanged and the
+  // signature-driven eviction path silently misses it. Settings →
+  // Skills / Design Systems now call back through App.tsx after every
+  // mutation so the pool drops any project that depends on the affected
+  // id — active or parked — regardless of which summary fields moved.
+  it('evicts pool entries for projects that use a changed skill, even on body-only edits', async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open settings' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Trigger skill body change' }));
+
+    await waitFor(() => {
+      expect(evictMatchingMock).toHaveBeenCalled();
+    });
+    const [predicate, options] = evictMatchingMock.mock.calls.at(-1) ?? [];
+    expect(options).toEqual({ includeActive: true });
+    expect(typeof predicate).toBe('function');
+    expect(
+      (predicate as (entry: { projectId: string; key: string; fileName: string }) => boolean)({
+        key: 'project-1 file.html',
+        projectId: 'project-1',
+        fileName: 'file.html',
+      }),
+    ).toBe(true);
+  });
+
+  it('does not evict pool entries for projects that use a different skill', async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open settings' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Trigger unrelated skill change' }),
+    );
+
+    await waitFor(() => {
+      expect(evictMatchingMock).toHaveBeenCalled();
+    });
+    const [predicate] = evictMatchingMock.mock.calls.at(-1) ?? [];
+    expect(
+      (predicate as (entry: { projectId: string; key: string; fileName: string }) => boolean)({
+        key: 'project-1 file.html',
+        projectId: 'project-1',
+        fileName: 'file.html',
+      }),
+    ).toBe(false);
+  });
+
+  it('evicts pool entries for projects that use a changed design system', async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open settings' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Trigger design system change' }),
+    );
+
+    await waitFor(() => {
+      expect(evictMatchingMock).toHaveBeenCalled();
+    });
+    const [predicate, options] = evictMatchingMock.mock.calls.at(-1) ?? [];
+    expect(options).toEqual({ includeActive: true });
+    expect(
+      (predicate as (entry: { projectId: string; key: string; fileName: string }) => boolean)({
+        key: 'project-1 file.html',
+        projectId: 'project-1',
+        fileName: 'file.html',
+      }),
+    ).toBe(true);
   });
 });

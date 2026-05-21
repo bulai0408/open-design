@@ -1148,6 +1148,55 @@ function AppInner() {
     });
   }, [iframeKeepAlivePool]);
 
+  // ProjectView's prompt-context signature derives from SkillSummary /
+  // DesignSystemSummary fields, so a body-only registry edit (same name,
+  // description, etc.) leaves every signature unchanged and the active
+  // preview keeps serving stale prompt context. Settings → Skills /
+  // Settings → Design Systems call back through these handlers after
+  // every successful mutation; we drop any pool entry whose project
+  // depends on the affected id — active or parked — so the next mount
+  // recomposes the system prompt with the new body. A ref tracks
+  // projects so the callback is stable across renders.
+  const projectsRef = useRef<Project[]>(projects);
+  useEffect(() => {
+    projectsRef.current = projects;
+  }, [projects]);
+
+  const handleSkillsChanged = useCallback(
+    (affectedSkillId?: string) => {
+      void fetchSkills().then((list) => setSkills(list));
+      void fetchDesignTemplates().then((list) => setDesignTemplates(list));
+      iframeKeepAlivePool.evictMatching(
+        (entry) => {
+          const proj = projectsRef.current.find((p) => p.id === entry.projectId);
+          if (!proj) return false;
+          if (affectedSkillId) return proj.skillId === affectedSkillId;
+          return proj.skillId != null;
+        },
+        { includeActive: true },
+      );
+    },
+    [iframeKeepAlivePool],
+  );
+
+  const handleDesignSystemsChanged = useCallback(
+    (affectedDesignSystemId?: string) => {
+      void fetchDesignSystems().then((list) => setDesignSystems(list));
+      iframeKeepAlivePool.evictMatching(
+        (entry) => {
+          const proj = projectsRef.current.find((p) => p.id === entry.projectId);
+          if (!proj) return false;
+          if (affectedDesignSystemId) {
+            return proj.designSystemId === affectedDesignSystemId;
+          }
+          return proj.designSystemId != null;
+        },
+        { includeActive: true },
+      );
+    },
+    [iframeKeepAlivePool],
+  );
+
   const activeProject =
     route.kind === 'project'
       ? (projects.find((p) => p.id === route.projectId) ?? null)
@@ -1550,6 +1599,8 @@ function AppInner() {
           daemonMediaProvidersFetchState={daemonMediaProvidersFetchState}
           mediaProvidersNotice={mediaProvidersNotice}
           onReloadMediaProviders={reloadMediaProvidersFromDaemon}
+          onSkillsChanged={handleSkillsChanged}
+          onDesignSystemsChanged={handleDesignSystemsChanged}
         />
       ) : null}
       <MemoryToast onOpenMemory={() => openSettings('memory')} />

@@ -20,6 +20,13 @@ import { orderDesignSystemGroups } from './design-system-group-order';
 interface Props {
   cfg: AppConfig;
   setCfg: Dispatch<SetStateAction<AppConfig>>;
+  /**
+   * Notified after a successful design-system mutation (today: import).
+   * Lets App.tsx evict preview iframes whose project depends on the
+   * affected design system; body-only edits on existing systems would
+   * also flow through here when an edit affordance lands.
+   */
+  onDesignSystemsChanged?: (affectedDesignSystemId?: string) => void;
 }
 
 function toggleCraftSlug(current: string[], slug: string, enabled: boolean): string[] {
@@ -29,7 +36,7 @@ function toggleCraftSlug(current: string[], slug: string, enabled: boolean): str
   return Array.from(next);
 }
 
-export function DesignSystemsSection({ cfg, setCfg }: Props) {
+export function DesignSystemsSection({ cfg, setCfg, onDesignSystemsChanged }: Props) {
   const t = useT();
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const [designSystems, setDesignSystems] = useState<DesignSystemSummary[]>([]);
@@ -230,6 +237,7 @@ export function DesignSystemsSection({ cfg, setCfg }: Props) {
     setImportPath('');
     setImportedDesignSystem(result.designSystem);
     setImportMessage(result.designSystem.title);
+    onDesignSystemsChanged?.(result.designSystem.id);
   }
 
   function viewImportedDesignSystem() {
