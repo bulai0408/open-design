@@ -23,6 +23,7 @@ import {
   refreshPluginMarketplace,
   removePluginMarketplace,
   setPluginMarketplaceTrust,
+  uninstallPlugin,
   type PluginInstallOutcome,
   type PluginShareAction,
   type PluginShareProjectOutcome,
@@ -30,6 +31,7 @@ import {
   type PluginMarketplace,
   type PluginMarketplaceMutationOutcome,
   type PluginMarketplaceTrust,
+  type PluginUninstallOutcome,
   uploadPluginFolder,
   uploadPluginZip,
 } from '../state/projects';
@@ -39,6 +41,7 @@ import { PluginsHomeSection } from './PluginsHomeSection';
 import { TrustBadge } from './TrustBadge';
 import { useI18n } from '../i18n';
 import { copyToClipboard } from '../lib/copy-to-clipboard';
+import { localizePluginTitle } from './plugins-home/localization';
 import type { PluginUseAction } from './plugins-home/useActions';
 import { AnimatePresence } from 'motion/react';
 
@@ -126,6 +129,7 @@ export function PluginsView({
   const [importOpen, setImportOpen] = useState(false);
   const [pendingApplyId, setPendingApplyId] = useState<string | null>(null);
   const [pendingInstallEntry, setPendingInstallEntry] = useState<string | null>(null);
+  const [pendingUninstallId, setPendingUninstallId] = useState<string | null>(null);
   const [pendingSourceAction, setPendingSourceAction] = useState<string | null>(null);
   const [pendingShareAction, setPendingShareAction] = useState<{
     pluginId: string;
@@ -142,7 +146,8 @@ export function PluginsView({
     action: PluginShareAction;
     actionRecord: InstalledPluginRecord | null;
   } | null>(null);
-  const [notice, setNotice] = useState<PluginInstallOutcome | { ok: boolean; message: string } | null>(null);
+  const [uninstallConfirm, setUninstallConfirm] = useState<InstalledPluginRecord | null>(null);
+  const [notice, setNotice] = useState<PluginInstallOutcome | PluginUninstallOutcome | { ok: boolean; message: string } | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -247,6 +252,54 @@ export function PluginsView({
     const actionRecord =
       plugins.find((plugin) => plugin.id === PLUGIN_SHARE_ACTION_PLUGIN_IDS[action]) ?? null;
     setShareConfirm({ sourceRecord: record, action, actionRecord });
+  }
+
+  async function handleUninstallPlugin(record: InstalledPluginRecord) {
+    const title = localizePluginTitle(locale, record);
+    setPendingUninstallId(record.id);
+    setNotice(null);
+    const outcome = await uninstallPlugin(record.id);
+    setPendingUninstallId(null);
+    setUninstallConfirm(null);
+    if (!outcome.ok) {
+      if (outcome.notFound) {
+        setActivePlugin((current) =>
+          current?.record.id === record.id ? null : current,
+        );
+        setDetailsRecord((current) => (current?.id === record.id ? null : current));
+        await refresh();
+        setNotice({
+          ok: true,
+          warnings: outcome.warnings,
+          message: t('pluginsView.uninstallAlreadyMissing', { title }),
+        });
+        return;
+      }
+      setNotice({
+        ok: false,
+        warnings: outcome.warnings,
+        message:
+          outcome.message
+            ? t('pluginsView.uninstallFailedWithMessage', {
+              title,
+              message: outcome.message,
+            })
+            : t('pluginsView.uninstallFailedReachDaemon', { title }),
+      });
+      return;
+    }
+    setActivePlugin((current) =>
+      current?.record.id === record.id ? null : current,
+    );
+    setDetailsRecord((current) => (current?.id === record.id ? null : current));
+    await refresh();
+    setNotice({
+      ok: true,
+      warnings: outcome.warnings,
+      message: outcome.warnings.length > 0
+        ? t('pluginsView.uninstallCleanupIncomplete', { title })
+        : t('pluginsView.uninstallSuccess', { title }),
+    });
   }
 
   async function handleInstallAvailable(plugin: AvailableMarketplacePlugin) {
@@ -376,6 +429,7 @@ export function PluginsView({
             loading={false}
             activePluginId={activePlugin?.record.id ?? null}
             pendingApplyId={pendingApplyId}
+            pendingUninstallId={pendingUninstallId}
             pendingShareAction={pendingShareAction}
             onUse={(record, action) => {
               trackPluginsInstalledTabClick(analytics.track, {
@@ -414,6 +468,7 @@ export function PluginsView({
               });
               setDetailsRecord(record);
             }}
+            onUninstall={setUninstallConfirm}
             onPluginShareAction={(record, action) => {
               trackPluginsInstalledTabClick(analytics.track, {
                 page_name: 'plugins',
@@ -566,6 +621,18 @@ export function PluginsView({
           }
         />
       ) : null}
+      {uninstallConfirm ? (
+        <PluginUninstallConfirmModal
+          record={uninstallConfirm}
+          pending={pendingUninstallId === uninstallConfirm.id}
+          onClose={() => {
+            if (!pendingUninstallId) setUninstallConfirm(null);
+          }}
+          onConfirm={() => void handleUninstallPlugin(uninstallConfirm)}
+          t={t}
+          title={localizePluginTitle(locale, uninstallConfirm)}
+        />
+      ) : null}
       {importOpen ? (
         <PluginImportModal
           onClose={() => setImportOpen(false)}
@@ -575,6 +642,96 @@ export function PluginsView({
         />
       ) : null}
     </section>
+  );
+}
+
+function PluginUninstallConfirmModal({
+  record,
+  pending,
+  onClose,
+  onConfirm,
+  t,
+  title,
+}: {
+  record: InstalledPluginRecord;
+  pending: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  t: ReturnType<typeof useI18n>['t'];
+  title: string;
+}) {
+  return (
+    <div
+      className="plugin-details-modal-backdrop plugin-uninstall-confirm"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('pluginsView.uninstallConfirmAria', { title })}
+      onClick={(event) => {
+        if (!pending && event.target === event.currentTarget) onClose();
+      }}
+      data-testid="plugin-uninstall-confirm-modal"
+    >
+      <div className="plugin-details-modal plugin-uninstall-confirm__panel">
+        <header className="plugin-details-modal__head">
+          <div className="plugin-details-modal__head-titles">
+            <div className="plugin-details-modal__head-row">
+              <h2 className="plugin-details-modal__title">
+                {t('pluginsView.uninstallConfirmTitle', { title })}
+              </h2>
+              <TrustBadge trust={record.trust} />
+            </div>
+            <div className="plugin-details-modal__meta">
+              <span>{record.sourceKind}</span>
+              <span>· v{record.version}</span>
+              <span>· {record.id}</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="plugin-details-modal__close"
+            onClick={onClose}
+            disabled={pending}
+            aria-label={t('pluginsView.uninstallConfirmCloseAria')}
+            title={t('common.close')}
+          >
+            <Icon name="close" size={18} />
+          </button>
+        </header>
+
+        <div className="plugin-details-modal__body">
+          <section className="plugin-details-modal__section">
+            <p className="plugin-details-modal__description">
+              {t('pluginsView.uninstallConfirmBody')}
+            </p>
+            <div className="plugin-uninstall-confirm__warning">
+              {t('pluginsView.uninstallConfirmWarning')}
+            </div>
+          </section>
+        </div>
+
+        <footer className="plugin-details-modal__foot">
+          <button
+            type="button"
+            className="plugin-details-modal__secondary"
+            onClick={onClose}
+            disabled={pending}
+          >
+            {t('common.cancel')}
+          </button>
+          <button
+            type="button"
+            className="plugin-details-modal__danger"
+            onClick={onConfirm}
+            disabled={pending}
+            aria-busy={pending ? 'true' : undefined}
+            data-testid="plugin-uninstall-confirm-submit"
+          >
+            <Icon name={pending ? 'spinner' : 'trash'} size={13} />
+            {pending ? t('pluginsView.uninstalling') : t('pluginsView.uninstallPlugin')}
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }
 
@@ -770,16 +927,19 @@ function pluginTabHint(id: PluginsTab, t: ReturnType<typeof useI18n>['t']): stri
 function Notice({
   outcome,
 }: {
-  outcome: PluginInstallOutcome | { ok: boolean; message: string };
+  outcome: PluginInstallOutcome | PluginUninstallOutcome | { ok: boolean; message: string };
 }) {
   const warnings = 'warnings' in outcome ? outcome.warnings : [];
   const log = 'log' in outcome ? outcome.log : [];
+  const tone = outcome.ok ? (warnings.length > 0 ? 'is-warning' : 'is-success') : 'is-error';
   return (
-    <div className={`plugins-view__notice${outcome.ok ? ' is-success' : ' is-error'}`} role="status">
+    <div className={`plugins-view__notice ${tone}`} role="status">
       <div>{outcome.message}</div>
       {warnings.length > 0 ? (
         <div className="plugins-view__notice-sub">
-          {warnings.length} warning{warnings.length === 1 ? '' : 's'}
+          {warnings.map((warning, idx) => (
+            <div key={`${warning}-${idx}`}>{warning}</div>
+          ))}
         </div>
       ) : null}
       {log.length > 0 ? (

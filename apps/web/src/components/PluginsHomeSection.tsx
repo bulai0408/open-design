@@ -36,9 +36,11 @@ interface Props {
   loading: boolean;
   activePluginId: string | null;
   pendingApplyId: string | null;
+  pendingUninstallId?: string | null;
   pendingShareAction?: { pluginId: string; action: PluginShareAction } | null;
   onUse: (record: InstalledPluginRecord, action: PluginUseAction) => void;
   onOpenDetails: (record: InstalledPluginRecord) => void;
+  onUninstall?: (record: InstalledPluginRecord) => void;
   onPluginShareAction?: (
     record: InstalledPluginRecord,
     action: PluginShareAction,
@@ -61,9 +63,11 @@ export function PluginsHomeSection({
   loading,
   activePluginId,
   pendingApplyId,
+  pendingUninstallId = null,
   pendingShareAction = null,
   onUse,
   onOpenDetails,
+  onUninstall,
   onPluginShareAction,
   onBrowseRegistry,
   preferDefaultFacet = true,
@@ -220,12 +224,14 @@ export function PluginsHomeSection({
                   isActive={activePluginId === p.id}
                   isPending={pendingApplyId === p.id}
                   pendingAny={pendingApplyId !== null}
+                  isUninstalling={pendingUninstallId === p.id}
                   pendingShareAction={pendingShareAction}
                   isFeatured={isFeaturedPlugin(p)}
                   isSaved={savedPluginIds.has(p.id)}
                   onUse={onUse}
                   onOpenDetails={onOpenDetails}
                   onSave={handleSavePlugin}
+                  onUninstall={onUninstall}
                   onShareAction={onPluginShareAction}
                 />
               ))}

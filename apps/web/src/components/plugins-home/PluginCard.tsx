@@ -29,12 +29,14 @@ interface Props {
   isActive: boolean;
   isPending: boolean;
   pendingAny: boolean;
+  isUninstalling?: boolean;
   pendingShareAction?: { pluginId: string; action: PluginShareAction } | null;
   isFeatured: boolean;
   isSaved: boolean;
   onUse: (record: InstalledPluginRecord, action: PluginUseAction) => void;
   onOpenDetails: (record: InstalledPluginRecord) => void;
   onSave: (record: InstalledPluginRecord) => void;
+  onUninstall?: (record: InstalledPluginRecord) => void;
   onShareAction?: (
     record: InstalledPluginRecord,
     action: PluginShareAction,
@@ -48,15 +50,17 @@ export function PluginCard({
   isActive,
   isPending,
   pendingAny,
+  isUninstalling = false,
   pendingShareAction = null,
   isFeatured,
   isSaved,
   onUse,
   onOpenDetails,
   onSave,
+  onUninstall,
   onShareAction,
 }: Props) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const [useMenuOpen, setUseMenuOpen] = useState(false);
   const preview = useMemo(() => inferPluginPreview(record), [record]);
   const title = localizePluginTitle(locale, record);
@@ -72,7 +76,8 @@ export function PluginCard({
   const sharePendingAction =
     pendingShareAction?.pluginId === record.id ? pendingShareAction.action : null;
   const shareBusy = sharePendingAction !== null;
-  const useDisabled = isPending || pendingAny || shareBusy;
+  const isBusy = isPending || isUninstalling || pendingAny || shareBusy;
+  const useDisabled = isBusy;
 
   function pickUseAction(action: PluginUseAction) {
     setUseMenuOpen(false);
@@ -104,11 +109,26 @@ export function PluginCard({
       <div className="plugins-home__card-overlay">
         <div className="plugins-home__card-overlay-top">
           <TrustBadge trust={record.trust} variant="overlay" />
-          {isFeatured ? (
-            <span className="plugins-home__overlay-featured" aria-hidden>
-              <Icon name="star" size={11} />
-            </span>
-          ) : null}
+          <div className="plugins-home__overlay-top-actions">
+            {isFeatured ? (
+              <span className="plugins-home__overlay-featured" aria-hidden>
+                <Icon name="star" size={11} />
+              </span>
+            ) : null}
+            {onUninstall ? (
+              <button
+                type="button"
+                className="plugins-home__icon-action plugins-home__icon-action--danger"
+                onClick={() => onUninstall(record)}
+                disabled={isBusy}
+                aria-label={t('pluginCard.uninstallAria', { title })}
+                title={t('pluginCard.uninstallTitle')}
+                data-testid={`plugins-home-uninstall-${record.id}`}
+              >
+                <Icon name={isUninstalling ? 'spinner' : 'trash'} size={12} />
+              </button>
+            ) : null}
+          </div>
         </div>
         <div className="plugins-home__card-overlay-body">
           <span className="plugins-home__overlay-title" title={title}>
@@ -213,7 +233,7 @@ export function PluginCard({
                 type="button"
                 className="plugins-home__action plugins-home__action--secondary plugins-home__action--compact"
                 onClick={() => onShareAction(record, 'publish-github')}
-                disabled={pendingAny || shareBusy}
+                disabled={isBusy}
                 aria-busy={sharePendingAction === 'publish-github' ? 'true' : undefined}
                 aria-label={`Publish ${title} as a GitHub repository`}
                 title="Publish plugin as a GitHub repository"
@@ -229,7 +249,7 @@ export function PluginCard({
                 type="button"
                 className="plugins-home__action plugins-home__action--secondary plugins-home__action--compact"
                 onClick={() => onShareAction(record, 'contribute-open-design')}
-                disabled={pendingAny || shareBusy}
+                disabled={isBusy}
                 aria-busy={sharePendingAction === 'contribute-open-design' ? 'true' : undefined}
                 aria-label={`Contribute ${title} to Open Design`}
                 title="Contribute plugin to Open Design with a pull request"

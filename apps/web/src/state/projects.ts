@@ -1016,6 +1016,15 @@ export async function upgradePlugin(id: string): Promise<PluginInstallOutcome> {
   }
 }
 
+export interface PluginUninstallOutcome {
+  ok: boolean;
+  status?: number;
+  notFound?: boolean;
+  removedFolder?: string;
+  warnings: string[];
+  message?: string;
+}
+
 async function postPluginUpload(url: string, form: FormData): Promise<PluginInstallOutcome> {
   try {
     const resp = await fetch(url, {
@@ -1085,15 +1094,57 @@ function getUploadRelativePath(file: File): string {
   return withRelativePath.webkitRelativePath || file.name;
 }
 
-export async function uninstallPlugin(id: string): Promise<boolean> {
+export async function uninstallPlugin(id: string): Promise<PluginUninstallOutcome> {
   try {
     const resp = await fetch(`/api/plugins/${encodeURIComponent(id)}/uninstall`, {
       method: 'POST',
     });
-    return resp.ok;
-  } catch {
-    return false;
+    return readPluginUninstallOutcome(resp);
+  } catch (err) {
+    return {
+      ok: false,
+      warnings: [],
+      message: (err as Error).message,
+    };
   }
+}
+
+async function readPluginUninstallOutcome(resp: Response): Promise<PluginUninstallOutcome> {
+  const body = (await resp.json().catch(() => null)) as {
+    ok?: boolean;
+    removedFolder?: string;
+    warning?: string;
+    warnings?: string[];
+    error?: string | { message?: string };
+    message?: string;
+  } | null;
+  const warnings = [
+    ...(typeof body?.warning === 'string' && body.warning.trim() ? [body.warning.trim()] : []),
+    ...(Array.isArray(body?.warnings)
+      ? body.warnings.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : []),
+  ];
+  if (resp.ok && body?.ok) {
+    return {
+      ok: true,
+      status: resp.status,
+      ...(body.removedFolder ? { removedFolder: body.removedFolder } : {}),
+      warnings,
+      ...(body.message ? { message: body.message } : {}),
+    };
+  }
+  const message =
+    body?.message ??
+    (typeof body?.error === 'string' ? body.error : body?.error?.message) ??
+    (resp.statusText || `HTTP ${resp.status}`);
+  const pluginAlreadyMissing = resp.status === 404 && body?.error === 'plugin not found';
+  return {
+    ok: false,
+    status: resp.status,
+    ...(pluginAlreadyMissing ? { notFound: true } : {}),
+    warnings,
+    message,
+  };
 }
 
 export interface PluginMarketplace {

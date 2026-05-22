@@ -575,6 +575,50 @@
   background: var(--bg-subtle);
 }
 
+.plugin-details-modal__danger {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--red);
+  color: white;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.plugin-details-modal__danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 88%, #000);
+  border-color: color-mix(in srgb, var(--red) 88%, #000);
+}
+
+.plugin-details-modal__danger:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.plugin-uninstall-confirm__panel {
+  max-width: 560px;
+}
+
+.plugin-uninstall-confirm .plugin-details-modal__foot {
+  padding: 16px 24px 22px;
+}
+
+.plugin-uninstall-confirm__warning {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--red-border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--red-bg);
+  color: var(--red);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
 .plugins-view__team {
   display: flex;
   gap: 12px;
@@ -601,6 +645,12 @@
 
 .plugins-view__notice.is-success {
   border-color: color-mix(in srgb, var(--green, #168a4a) 25%, var(--border));
+}
+
+.plugins-view__notice.is-warning {
+  border-color: color-mix(in srgb, var(--amber, #a16207) 38%, var(--border));
+  background: color-mix(in srgb, var(--amber-bg, #fef3c7) 45%, var(--bg-panel));
+  color: var(--text);
 }
 
 .plugins-view__notice.is-error {

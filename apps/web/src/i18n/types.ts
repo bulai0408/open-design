@@ -1023,6 +1023,18 @@ export interface Dict {
   'pluginsView.availableEmptyNoSources': string;
   'pluginsView.installing': string;
   'pluginsView.install': string;
+  'pluginsView.uninstallAlreadyMissing': string;
+  'pluginsView.uninstallCleanupIncomplete': string;
+  'pluginsView.uninstallConfirmAria': string;
+  'pluginsView.uninstallConfirmBody': string;
+  'pluginsView.uninstallConfirmCloseAria': string;
+  'pluginsView.uninstallConfirmTitle': string;
+  'pluginsView.uninstallConfirmWarning': string;
+  'pluginsView.uninstallFailedReachDaemon': string;
+  'pluginsView.uninstallFailedWithMessage': string;
+  'pluginsView.uninstalling': string;
+  'pluginsView.uninstallPlugin': string;
+  'pluginsView.uninstallSuccess': string;
   'pluginsView.sourcesTitle': string;
   'pluginsView.sourcesSubtitle': string;
   'pluginsView.sourceUrl': string;
@@ -1049,6 +1061,8 @@ export interface Dict {
   'pluginCard.starting': string;
   'pluginCard.detailsAria': string;
   'pluginCard.chooseUseAria': string;
+  'pluginCard.uninstallAria': string;
+  'pluginCard.uninstallTitle': string;
   'pluginCard.useOptionsAria': string;
   'pluginCard.shareAria': string;
   'pluginCard.publishAria': string;
