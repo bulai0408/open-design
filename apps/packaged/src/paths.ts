@@ -56,7 +56,10 @@ function resolvePackagedDataRoot(
   const odDataDir = env.OD_DATA_DIR?.trim();
   if (odDataDir) {
     const expanded = expandHomePrefix(odDataDir);
-    if (!isAbsolute(expanded) && !win32.isAbsolute(expanded)) {
+    const isAbs = process.platform === "win32"
+      ? win32.isAbsolute(expanded)
+      : isAbsolute(expanded);
+    if (!isAbs) {
       throw new PackagedPathAccessError(
         [
           "Open Design's packaged runtime requires OD_DATA_DIR to be an absolute path.",

@@ -1,10 +1,18 @@
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { PackagedConfig } from "../src/config.js";
 import { PackagedPathAccessError } from "../src/errors.js";
 import { resolvePackagedNamespacePaths } from "../src/paths.js";
+
+function stubPlatform(value: NodeJS.Platform): () => void {
+  const original = process.platform;
+  Object.defineProperty(process, "platform", { value, configurable: true });
+  return () => {
+    Object.defineProperty(process, "platform", { value: original, configurable: true });
+  };
+}
 
 function fakeConfig(): PackagedConfig {
   return {
@@ -25,6 +33,16 @@ function fakeConfig(): PackagedConfig {
 }
 
 describe("resolvePackagedNamespacePaths", () => {
+  let restorePlatform: () => void = () => {};
+
+  beforeEach(() => {
+    restorePlatform = stubPlatform("win32");
+  });
+
+  afterEach(() => {
+    restorePlatform();
+  });
+
   it("models update downloads as a namespace-scoped root beside data", () => {
     const config = fakeConfig();
     const paths = resolvePackagedNamespacePaths(config, config.namespace);
@@ -155,5 +173,26 @@ describe("resolvePackagedNamespacePaths", () => {
     expect(err.title).toMatch(/OD_DATA_DIR/);
     expect(err.message).toContain("project/.od");
     expect(err.message).toMatch(/absolute path/);
+  });
+
+  it("rejects Windows-style OD_DATA_DIR values on non-Windows hosts so the absolute-path guard is platform-correct", () => {
+    const config = fakeConfig();
+    const restore = stubPlatform("linux");
+    try {
+      expect(
+        () =>
+          resolvePackagedNamespacePaths(config, config.namespace, {
+            OD_DATA_DIR: "C:\\Users\\Fred\\OD",
+          }),
+      ).toThrow(PackagedPathAccessError);
+      expect(
+        () =>
+          resolvePackagedNamespacePaths(config, config.namespace, {
+            OD_DATA_DIR: "\\\\server\\share",
+          }),
+      ).toThrow(PackagedPathAccessError);
+    } finally {
+      restore();
+    }
   });
 });
