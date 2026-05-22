@@ -301,6 +301,156 @@ describe('RoutineService scheduled run idempotency', () => {
     }
   });
 
+  it('terminates the in-memory run and persists real IDs when prepare fails after assigning them', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));
+
+    const persistence = new SharedRoutinePersistence([fixtureRoutine()]);
+    const updatePatches: Array<Partial<RoutineRun>> = [];
+    const originalUpdate = persistence.updateRun.bind(persistence);
+    persistence.updateRun = (id: string, patch: Partial<RoutineRun>) => {
+      updatePatches.push({ ...patch });
+      originalUpdate(id, patch);
+    };
+
+    const service = new RoutineService(persistence);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    let discardCalls = 0;
+    let completionResolved = false;
+    let resolveCompletion!: () => void;
+    const completion = new Promise<{ status: 'canceled' }>((resolve) => {
+      resolveCompletion = () => {
+        completionResolved = true;
+        resolve({ status: 'canceled' });
+      };
+    });
+
+    service.setRunHandler(async () => {
+      return {
+        // Placeholder IDs mirror server.ts's `scheduledPlaceholder*`
+        // values — these are what the row gets inserted with before
+        // `prepare()` patches them with real IDs.
+        projectId: 'routine-pending-project',
+        conversationId: 'routine-pending-conversation',
+        agentRunId: 'routine-pending-run',
+        completion,
+        prepare: (run: RoutineRun) => {
+          // Match persistPreparedRun(): mutate the routine run with real
+          // IDs before any later fallible work could throw.
+          run.projectId = 'real-project';
+          run.conversationId = 'real-conversation';
+          run.agentRunId = 'real-agent-run';
+          throw new Error('prepare exploded');
+        },
+        discard: () => {
+          discardCalls += 1;
+          resolveCompletion();
+        },
+        start: () => {
+          throw new Error('start should not run after a failed prepare');
+        },
+      };
+    });
+
+    try {
+      service.start();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The in-memory chat run was terminated, releasing the completion
+      // promise so it does not leak.
+      expect(discardCalls).toBe(1);
+      expect(completionResolved).toBe(true);
+
+      // The persisted row ends in the terminal failed state and carries
+      // the real IDs that prepare() assigned — no `routine-pending-*`
+      // placeholders left behind.
+      expect(persistence.runs).toHaveLength(1);
+      const stored = persistence.runs[0]!;
+      expect(stored.status).toBe('failed');
+      expect(stored.projectId).toBe('real-project');
+      expect(stored.conversationId).toBe('real-conversation');
+      expect(stored.agentRunId).toBe('real-agent-run');
+      expect(stored.completedAt).toBeTypeOf('number');
+      expect(stored.error).toContain('prepare exploded');
+
+      // The failure-path updateRun explicitly carried the real IDs so the
+      // real persistence layer (column-level UPDATE) replaces the
+      // placeholders, not just the in-memory shared reference.
+      const failurePatch = updatePatches.find((patch) => patch.status === 'failed');
+      expect(failurePatch).toBeDefined();
+      expect(failurePatch?.projectId).toBe('real-project');
+      expect(failurePatch?.conversationId).toBe('real-conversation');
+      expect(failurePatch?.agentRunId).toBe('real-agent-run');
+    } finally {
+      service.stop();
+      errors.mockRestore();
+    }
+  });
+
+  it('still finalizes the failed row when prepare cleanup itself throws', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));
+
+    const persistence = new SharedRoutinePersistence([fixtureRoutine()]);
+    const service = new RoutineService(persistence);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    let discardCalls = 0;
+
+    service.setRunHandler(async () => {
+      return {
+        projectId: 'routine-pending-project',
+        conversationId: 'routine-pending-conversation',
+        agentRunId: 'routine-pending-run',
+        completion: Promise.resolve({ status: 'canceled' as const }),
+        prepare: (run: RoutineRun) => {
+          run.projectId = 'real-project';
+          run.conversationId = 'real-conversation';
+          run.agentRunId = 'real-agent-run';
+          throw new Error('prepare exploded');
+        },
+        discard: () => {
+          discardCalls += 1;
+          throw new Error('cleanup blew up');
+        },
+        start: () => {},
+      };
+    });
+
+    try {
+      service.start();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(discardCalls).toBe(1);
+
+      // The cleanup failure is surfaced via console.error and does not
+      // swallow the prepare failure — the routine row is still finalized
+      // and the original prepare error reaches the scheduler.
+      expect(errors.mock.calls.some((call) =>
+        call.some((value) => String(value).includes('cleanup blew up')),
+      )).toBe(true);
+      expect(errors.mock.calls.some((call) =>
+        call.some((value) => String(value).includes('prepare exploded')),
+      )).toBe(true);
+
+      expect(persistence.runs).toHaveLength(1);
+      const stored = persistence.runs[0]!;
+      expect(stored.status).toBe('failed');
+      expect(stored.projectId).toBe('real-project');
+      expect(stored.conversationId).toBe('real-conversation');
+      expect(stored.agentRunId).toBe('real-agent-run');
+      expect(stored.error).toContain('prepare exploded');
+    } finally {
+      service.stop();
+      errors.mockRestore();
+    }
+  });
+
   it('retries the same scheduled slot when duplicate loser cleanup fails', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));

@@ -599,12 +599,37 @@ export class RoutineService {
           });
         }
       } catch (error) {
+        // Terminate the in-memory chat run created by `handler(...)` so its
+        // `completion` promise resolves instead of waiting forever on a
+        // run that will never start. Surface any cleanup failure rather
+        // than swallow it, but still finalize the persisted row.
+        let discardError: unknown = null;
+        try {
+          handlerStart.discard?.();
+        } catch (err) {
+          discardError = err;
+        }
+        if (discardError != null) {
+          console.error(
+            `[od] routine ${routine.id} prepare cleanup failed:`,
+            discardError instanceof Error ? discardError.message : discardError,
+          );
+        }
+        // Persist the real project/conversation/agentRunId that `prepare()`
+        // assigned before throwing so the row does not retain
+        // `routine-pending-*` placeholders. The slot claim was already
+        // accepted at `insertRun()`, so retrying the same slot is not
+        // appropriate — let the error propagate so the scheduler advances
+        // to the next cadence.
         this.persistence.updateRun(runId, {
           status: 'failed',
           completedAt: Date.now(),
           summary: null,
           error: error instanceof Error ? error.message : String(error),
           errorCode: null,
+          projectId: run.projectId,
+          conversationId: run.conversationId,
+          agentRunId: run.agentRunId,
         });
         throw error;
       }
