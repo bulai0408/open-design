@@ -4294,6 +4294,7 @@ function HtmlViewer({
         state?: unknown;
       } | null;
       if (!data || data.type !== 'od:preview-navigation') return;
+      const isActiveSource = isActivePreviewIframeSource(ev.source);
       previewNavigationRef.current = {
         href: typeof data.href === 'string' ? data.href : '',
         pathname: typeof data.pathname === 'string' ? data.pathname : '',
@@ -4303,7 +4304,9 @@ function HtmlViewer({
         capturedAt: Date.now(),
       };
       previewNavigationRestoreRef.current = previewNavigationRef.current;
-      restorePreviewNavigationState(previewNavigationRef.current);
+      if (!isActiveSource) {
+        restorePreviewNavigationState(previewNavigationRef.current);
+      }
     }
     function onRestoreRequest(ev: MessageEvent) {
       if (!isOurPreviewIframeSource(ev.source)) return;

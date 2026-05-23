@@ -562,6 +562,55 @@ describe('FileViewer SVG artifacts', () => {
     });
   });
 
+  it('does not echo active preview navigation back into the same iframe', () => {
+    const file = baseFile({
+      name: 'page.html',
+      path: 'page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+
+    const { container } = render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+      />,
+    );
+
+    const urlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement;
+    const urlPostMessageSpy = vi.spyOn(urlFrame.contentWindow!, 'postMessage');
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: urlFrame.contentWindow,
+      data: {
+        type: 'od:preview-navigation',
+        href: 'http://localhost/api/projects/project-1/raw/page.html?v=1710000000&r=0#/settings',
+        pathname: '/api/projects/project-1/raw/page.html',
+        search: '?v=1710000000&r=0',
+        hash: '#/settings',
+        state: { tab: 'settings' },
+      },
+    }));
+
+    expect(urlPostMessageSpy).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'od:preview-navigation-restore',
+      pathname: '/api/projects/project-1/raw/page.html',
+      search: '?v=1710000000&r=0',
+      hash: '#/settings',
+      state: { tab: 'settings' },
+    }), '*');
+  });
+
   it('restores bridge navigation when returning to URL-loaded preview mode', async () => {
     const file = baseFile({
       name: 'page.html',
