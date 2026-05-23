@@ -780,6 +780,10 @@ function nextExecutableCandidatePath(
   return null;
 }
 
+function selectedCliAgent(agents: AgentInfo[], agentId: string | null | undefined): AgentInfo | null {
+  return agents.find((agent) => agent.id === agentId) ?? null;
+}
+
 /**
  * Returns whether the modal's footer Save button should be enabled for the
  * currently active sidebar section.
@@ -2679,9 +2683,7 @@ export function SettingsDialog({
                     )}
                   </div>
                   {(() => {
-                    const selected = agents.find(
-                      (a) => a.id === cfg.agentId && a.available,
-                    );
+                    const selected = selectedCliAgent(agents, cfg.agentId);
                     if (!selected) return null;
                     const envKey = cliBinaryEnvKey(selected.id);
                     if (!envKey) return null;

@@ -1394,6 +1394,68 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
     );
   });
 
+  it('lists OpenCode binary candidates when the configured binary is unavailable', async () => {
+    const opencode: AgentInfo = {
+      id: 'opencode',
+      name: 'OpenCode',
+      bin: 'opencode-cli',
+      available: false,
+      path: '/opt/homebrew/bin/opencode',
+      version: null,
+      models: [{ id: 'default', label: 'Default' }],
+      executableCandidates: [
+        {
+          path: '/opt/homebrew/bin/opencode',
+          bin: 'opencode',
+          version: null,
+          source: 'configured',
+          selected: true,
+          available: false,
+        },
+        {
+          path: '/Users/mac/.opencode/bin/opencode',
+          bin: 'opencode',
+          version: 'opencode 1.2.0',
+          source: 'known',
+          selected: false,
+          available: true,
+        },
+      ],
+    };
+    const { onPersist } = renderSettingsDialog(
+      {
+        mode: 'daemon',
+        agentId: 'opencode',
+        agentCliEnv: {
+          opencode: {
+            OPENCODE_BIN: '/opt/homebrew/bin/opencode',
+          },
+        },
+      },
+      { agents: [opencode] },
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*0 installed/i }));
+
+    expect(screen.getByText('Detected OpenCode binaries')).toBeTruthy();
+    expect(screen.getByText('/opt/homebrew/bin/opencode')).toBeTruthy();
+    expect(screen.getByText('/Users/mac/.opencode/bin/opencode')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Use OpenCode binary \/Users\/mac\/\.opencode\/bin\/opencode/i }));
+
+    await waitForPersist(
+      onPersist,
+      expect.objectContaining({
+        agentCliEnv: {
+          opencode: {
+            OPENCODE_BIN: '/Users/mac/.opencode/bin/opencode',
+          },
+        },
+      }),
+      {},
+    );
+  });
+
   it('offers Try next candidate after an OpenCode connection-test failure', async () => {
     const opencode: AgentInfo = {
       id: 'opencode',

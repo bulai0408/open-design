@@ -334,12 +334,39 @@ function stripAgentBinOverride(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+function setAgentBinOverride(
+  prefs: AgentCliEnvPrefs | undefined,
+  agentId: string,
+  executablePath: string,
+): AgentCliEnvPrefs | undefined {
+  const envKey = agentBinEnvKey(agentId);
+  if (!envKey) return prefs;
+  return {
+    ...(prefs ?? {}),
+    [agentId]: {
+      ...(prefs?.[agentId] ?? {}),
+      [envKey]: executablePath,
+    },
+  };
+}
+
 function firstFallbackCandidate(
   def: RuntimeAgentDef,
   configuredAgentEnv: Record<string, string>,
 ): RuntimeExecutableCandidate | null {
   return inspectAgentExecutableCandidates(def, configuredAgentEnv).find(
     (candidate) => candidate.source !== 'configured',
+  ) ?? null;
+}
+
+function firstDistinctFallbackCandidate(
+  candidates: RuntimeExecutableCandidate[],
+  configuredPath: string | null | undefined,
+): RuntimeExecutableCandidate | null {
+  return candidates.find(
+    (candidate) =>
+      candidate.source !== 'configured' &&
+      (!configuredPath || candidate.path !== configuredPath),
   ) ?? null;
 }
 
@@ -1776,8 +1803,20 @@ export async function testAgentConnection(
         executableCandidates: [],
       };
   const usedExecutablePath = executableResolution.launchPath ?? executableResolution.selectedPath ?? undefined;
-  const pathExecutablePath = executableResolution.pathResolvedPath
-    ?? (def ? firstFallbackCandidate(def, configuredAgentEnv)?.path ?? null : null);
+  const fallbackCandidate = executableResolution.configuredOverridePath
+    ? firstDistinctFallbackCandidate(
+        executableResolution.executableCandidates,
+        executableResolution.configuredOverridePath,
+      )
+    : executableResolution.executableCandidates.find(
+        (candidate) =>
+          candidate.path === executableResolution.pathResolvedPath &&
+          candidate.source !== 'configured',
+      )
+      ?? (def ? firstFallbackCandidate(def, configuredAgentEnv) : null);
+  const pathExecutablePath = fallbackCandidate?.path
+    ?? executableResolution.pathResolvedPath
+    ?? null;
   const pathExecutableSource = executableCandidateSource(
     executableResolution.executableCandidates,
     pathExecutablePath,
@@ -1919,7 +1958,11 @@ export async function testAgentConnection(
   const fallbackResult = await testAgentConnectionInternal(
     {
       ...input,
-      agentCliEnv: stripAgentBinOverride(validatedPrefs, input.agentId),
+      agentCliEnv: setAgentBinOverride(
+        stripAgentBinOverride(validatedPrefs, input.agentId),
+        input.agentId,
+        pathExecutablePath,
+      ),
       executableFailureDetail,
     },
   );

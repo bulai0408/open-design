@@ -406,6 +406,50 @@ test('opencode detection promotes a healthy known candidate when the PATH candid
   }
 });
 
+test('opencode detection preserves candidate diagnostics when a configured binary is stale', async () => {
+  const configuredDir = mkdtempSync(join(tmpdir(), 'od-agents-opencode-stale-configured-'));
+  const home = mkdtempSync(join(tmpdir(), 'od-agents-opencode-healthy-home-'));
+  try {
+    await withEnvSnapshot(['PATH', 'OD_AGENT_HOME'], async () => {
+      const staleOpenCode = join(configuredDir, 'opencode-old');
+      const homeBinDir = join(home, '.opencode', 'bin');
+      mkdirSync(homeBinDir, { recursive: true });
+      const healthyOpenCode = join(homeBinDir, 'opencode');
+      writeFileSync(
+        staleOpenCode,
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then exit 127; fi\nexit 127\n',
+      );
+      writeFileSync(
+        healthyOpenCode,
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "opencode 1.2.0"; exit 0; fi\nexit 0\n',
+      );
+      chmodSync(staleOpenCode, 0o755);
+      chmodSync(healthyOpenCode, 0o755);
+      process.env.OD_AGENT_HOME = home;
+      process.env.PATH = '';
+
+      const agents = await detectAgents({ opencode: { OPENCODE_BIN: staleOpenCode } });
+      const detected = agents.find((agent) => agent.id === 'opencode');
+
+      assert.ok(detected);
+      assert.equal(detected.available, false);
+      assert.equal(detected.path, staleOpenCode);
+      assert.deepEqual(detected.executableCandidates?.map((candidate) => ({
+        path: candidate.path,
+        available: candidate.available,
+        version: candidate.version,
+        selected: candidate.selected,
+      })), [
+        { path: staleOpenCode, available: false, version: null, selected: true },
+        { path: healthyOpenCode, available: true, version: 'opencode 1.2.0', selected: false },
+      ]);
+    });
+  } finally {
+    rmSync(configuredDir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('codex picker includes gpt-5.1 model family', () => {
   const pickerModels = new Set(codex.fallbackModels.map((model) => model.id));
 

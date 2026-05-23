@@ -119,12 +119,19 @@ async function probeVersionAtPath(
   }
 }
 
-function unavailableAgent(def: RuntimeAgentDef): DetectedAgent {
+function unavailableAgent(
+  def: RuntimeAgentDef,
+  overrides: Partial<Pick<
+    DetectedAgent,
+    'path' | 'version' | 'executableCandidates'
+  >> = {},
+): DetectedAgent {
   return {
     ...stripFns(def),
     models: def.fallbackModels ?? [DEFAULT_MODEL_OPTION],
     modelsSource: 'fallback',
     available: false,
+    ...overrides,
     ...installMetaForAgent(def.id),
   };
 }
@@ -185,7 +192,11 @@ async function probe(
         selected: candidate.path === promotedCandidate.path,
       }));
     } else {
-      return unavailableAgent(def);
+      return unavailableAgent(def, {
+        path: detectedPath,
+        version: null,
+        executableCandidates: candidateList,
+      });
     }
   }
   // Probe `--help` once per agent and record which flags the installed CLI
