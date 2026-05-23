@@ -124,6 +124,28 @@ describe("resolvePackagedNamespacePaths", () => {
     ).toBe(override);
   });
 
+  it("rejects already-scoped OD_DATA_DIR values that point at a different packaged namespace", () => {
+    const config = fakeConfig();
+    const override = join(
+      "C:",
+      "Users",
+      "Fred",
+      "AppData",
+      "Roaming",
+      "Open Design",
+      "namespaces",
+      "release-beta-win",
+      "data",
+    );
+
+    expect(
+      () =>
+        resolvePackagedNamespacePaths(config, config.namespace, {
+          OD_DATA_DIR: override,
+        }),
+    ).toThrow(PackagedPathAccessError);
+  });
+
   it("forwards the OD_DATA_DIR-resolved dataRoot into sidecar launch paths", () => {
     const config = fakeConfig();
     const override = join("C:", "Users", "Fred", "MyProject", "design", ".od");

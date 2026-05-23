@@ -42,10 +42,12 @@ function expandHomePrefix(raw: string): string {
   return raw;
 }
 
-function isAlreadyScopedPackagedDataRoot(raw: string, namespace: string): boolean {
+function getScopedPackagedDataRootNamespace(raw: string): string | null {
   const parts = raw.replace(/[\\/]+$/g, "").split(/[\\/]+/);
   const last = parts.length - 1;
-  return parts[last - 2] === "namespaces" && parts[last - 1] === namespace && parts[last] === "data";
+  if (last < 2) return null;
+  if (parts[last - 2] !== "namespaces" || parts[last] !== "data") return null;
+  return parts[last - 1] ?? null;
 }
 
 function resolvePackagedDataRoot(
@@ -71,7 +73,22 @@ function resolvePackagedDataRoot(
         { title: "Open Design cannot start with this OD_DATA_DIR" },
       );
     }
-    if (isAlreadyScopedPackagedDataRoot(expanded, namespace)) {
+    const scopedNamespace = getScopedPackagedDataRootNamespace(expanded);
+    if (scopedNamespace) {
+      if (scopedNamespace !== namespace) {
+        throw new PackagedPathAccessError(
+          [
+            "Open Design's packaged runtime requires OD_DATA_DIR to target the active namespace.",
+            "",
+            `Configured value: ${odDataDir}`,
+            `Configured namespace: ${scopedNamespace}`,
+            `Active namespace: ${namespace}`,
+            "",
+            "Use an unscoped absolute base path or relaunch the matching packaged namespace.",
+          ].join("\n"),
+          { title: "Open Design cannot start with this OD_DATA_DIR" },
+        );
+      }
       return expanded;
     }
     return join(expanded, "namespaces", namespace, "data");
