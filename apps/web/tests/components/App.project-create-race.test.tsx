@@ -281,6 +281,42 @@ describe('App project creation routing', () => {
     expect(window.location.pathname).toBe('/projects/project-new');
   });
 
+  it('keeps a newly created project open when a post-create refresh resolves stale', async () => {
+    const bootstrapProjects = deferred<Project[]>();
+    const staleRefreshProjects = deferred<Project[]>();
+    mockedListProjects
+      .mockReturnValueOnce(bootstrapProjects.promise)
+      .mockReturnValueOnce(staleRefreshProjects.promise)
+      .mockResolvedValue([]);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
+    });
+    expect(window.location.pathname).toBe('/projects/project-new');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh projects' }));
+
+    await act(async () => {
+      staleRefreshProjects.resolve([]);
+      await staleRefreshProjects.promise;
+    });
+
+    expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
+    expect(window.location.pathname).toBe('/projects/project-new');
+
+    await act(async () => {
+      bootstrapProjects.resolve([]);
+      await bootstrapProjects.promise;
+    });
+
+    expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
+    expect(window.location.pathname).toBe('/projects/project-new');
+  });
+
   it('ignores an older stale project list after a newer response confirms the local project', async () => {
     const bootstrapProjects = deferred<Project[]>();
     const refreshedProjects = deferred<Project[]>();

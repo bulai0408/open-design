@@ -318,12 +318,9 @@ export function App() {
       activeDeletedProjectIds.size > 0
         ? new Set(visibleList.map((project) => project.id))
         : fetchedIds;
-    const preserveLocalProjects =
-      request.mutationVersion < projectListMutationVersionRef.current;
     setProjects((current) => {
       const preserved = current.filter(
         (project) =>
-          preserveLocalProjects &&
           pendingLocalProjectIds.has(project.id) &&
           !visibleFetchedIds.has(project.id) &&
           !activeDeletedProjectIds.has(project.id),
