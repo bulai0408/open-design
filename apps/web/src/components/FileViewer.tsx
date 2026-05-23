@@ -4345,13 +4345,14 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
   const [strokePoints, setStrokePoints] = useState<StrokePoint[]>([]);
   const previewStateKey = `${projectId}:${file.name}`;
   const previewScale = zoom / 100;
+  const localCommentSideDockActive = commentPanelOpen && !commentPortalHost;
   const boardPreviewCanvasSize = commentPreviewCanvasSize(previewBodySize, {
-    boardMode,
+    boardMode: localCommentSideDockActive,
     sidePanelCollapsed: commentSidePanelCollapsed,
     viewport: previewViewport,
   });
   const boardSideDockStacked = usesStackedCommentSideDock(previewBodySize, {
-    boardMode,
+    boardMode: localCommentSideDockActive,
     sidePanelCollapsed: commentSidePanelCollapsed,
     viewport: previewViewport,
   });
@@ -6451,8 +6452,8 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
   const showPreviewToolbarControls = mode === 'preview';
   const commentPreviewLayoutClass = [
     'comment-preview-layer',
-    boardMode ? 'comment-preview-layer-with-side-dock' : '',
-    boardMode && commentSidePanelCollapsed ? 'comment-preview-layer-dock-collapsed' : '',
+    localCommentSideDockActive ? 'comment-preview-layer-with-side-dock' : '',
+    localCommentSideDockActive && commentSidePanelCollapsed ? 'comment-preview-layer-dock-collapsed' : '',
     boardSideDockStacked ? 'comment-preview-layer-side-dock-stacked' : '',
   ].filter(Boolean).join(' ');
   const manualEditPanel = manualEditMode ? (

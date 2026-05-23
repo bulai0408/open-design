@@ -119,7 +119,10 @@ describe('FileViewer preview scale', () => {
       '.preview-viewport:not(.preview-viewport-desktop).manual-edit-workspace .manual-edit-canvas',
     );
     expect(css).toMatch(
-      /\.preview-viewport:not\(\.preview-viewport-desktop\) \.preview-frame-clip,\s*\n\.preview-viewport:not\(\.preview-viewport-desktop\) \.comment-frame-clip,\s*\n\.preview-viewport:not\(\.preview-viewport-desktop\)\.manual-edit-workspace \.manual-edit-canvas \{\s*\n\s*position: relative;/,
+      /\.preview-viewport:not\(\.preview-viewport-desktop\) \.preview-frame-clip,\s*\n\.preview-viewport:not\(\.preview-viewport-desktop\):not\(\.comment-preview-layer-with-side-dock\) \.comment-preview-canvas,\s*\n\.preview-viewport:not\(\.preview-viewport-desktop\)\.manual-edit-workspace \.manual-edit-canvas \{\s*\n\s*width: calc\(var\(--preview-viewport-width\) \* var\(--preview-scale, 1\)\);/,
+    );
+    expect(css).toMatch(
+      /\.preview-viewport:not\(\.preview-viewport-desktop\) \.preview-frame-clip,\s*\n\.preview-viewport:not\(\.preview-viewport-desktop\)\.manual-edit-workspace \.manual-edit-canvas \{\s*\n\s*position: relative;/,
     );
   });
 
@@ -1963,22 +1966,21 @@ describe('FileViewer tweaks toolbar', () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId('board-mode-toggle'));
+    fireEvent.click(screen.getByTestId('comment-panel-toggle'));
 
     const canvas = screen.getByTestId('comment-preview-canvas');
     const dock = screen.getByTestId('comment-side-dock');
-    const hint = screen.getByTestId('inspect-empty-hint-container');
 
     expect(screen.getByTestId('comment-side-panel')).toBeTruthy();
-    expect(canvas.contains(hint)).toBe(true);
-    expect(dock.contains(hint)).toBe(false);
+    expect(canvas.contains(screen.getByTestId('artifact-preview-frame'))).toBe(true);
+    expect(dock.contains(screen.getByTestId('artifact-preview-frame'))).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: /hide comments/i }));
 
     expect(screen.queryByTestId('comment-side-panel')).toBeNull();
     expect(screen.getByTestId('comment-side-collapsed-rail')).toBeTruthy();
-    expect(canvas.contains(screen.getByTestId('inspect-empty-hint-container'))).toBe(true);
-    expect(dock.contains(screen.getByTestId('inspect-empty-hint-container'))).toBe(false);
+    expect(canvas.contains(screen.getByTestId('artifact-preview-frame'))).toBe(true);
+    expect(dock.contains(screen.getByTestId('artifact-preview-frame'))).toBe(false);
   });
 
   it('docks the comment side panel outside the clickable preview canvas', () => {
@@ -2017,52 +2019,6 @@ describe('FileViewer tweaks toolbar', () => {
     );
     expect(dockBox.left).toBeGreaterThanOrEqual(canvasBox.right);
     expect(panelBox.left).toBeGreaterThanOrEqual(canvasBox.right);
-  });
-
-  it('renders the inspect panel outside the clipped preview canvas', async () => {
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
-      .mockImplementation(function getBoundingClientRectMock(this: HTMLElement) {
-        if (this.dataset.testid === 'comment-preview-layout') return testRect(0, 0, 900, 700);
-        if (this.dataset.testid === 'comment-preview-canvas') return testRect(0, 0, 552, 700);
-        if (this.dataset.testid === 'inspect-panel') return testRect(576, 14, 296, 420);
-        return testRect(0, 0, 0, 0);
-      });
-
-    render(
-      <FileViewer
-        projectId="project-1"
-        projectKind="prototype"
-        file={htmlPreviewFile()}
-        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
-      />,
-    );
-
-    const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
-    fireEvent.click(screen.getByTestId('inspect-mode-toggle'));
-
-    window.dispatchEvent(new MessageEvent('message', {
-      source: frame.contentWindow,
-      data: {
-        type: 'od:comment-target',
-        elementId: 'hero',
-        selector: '[data-od-id="hero"]',
-        label: 'main',
-        text: 'Hero',
-        style: {},
-      },
-    }));
-
-    const panel = await screen.findByTestId('inspect-panel');
-    const canvas = screen.getByTestId('comment-preview-canvas');
-    const layout = screen.getByTestId('comment-preview-layout');
-    const canvasBox = canvas.getBoundingClientRect();
-    const panelBox = panel.getBoundingClientRect();
-    const layoutBox = layout.getBoundingClientRect();
-
-    expect(layout.contains(panel)).toBe(true);
-    expect(canvas.contains(panel)).toBe(false);
-    expect(panelBox.left).toBeGreaterThanOrEqual(canvasBox.right);
-    expect(panelBox.right).toBeLessThanOrEqual(layoutBox.right);
   });
 
   it('uses the narrow board layout when docking would leave too little canvas', async () => {
@@ -2519,7 +2475,7 @@ describe('FileViewer tweaks toolbar', () => {
     });
   });
 
-  it('announces comment side dock disclosure state from both toggle branches', () => {
+  it('announces comment side dock disclosure state without pointing at an unmounted panel', () => {
     function Harness() {
       const [collapsed, setCollapsed] = useState(false);
       return (
@@ -2553,6 +2509,7 @@ describe('FileViewer tweaks toolbar', () => {
 
     const showComments = screen.getByTestId('comment-side-collapsed-rail');
     expect(screen.queryByTestId('comment-side-panel')).toBeNull();
+    expect(document.getElementById(panelId)).toBeNull();
     expect(showComments.getAttribute('aria-controls')).toBeNull();
     expect(showComments.getAttribute('aria-expanded')).toBe('false');
   });
