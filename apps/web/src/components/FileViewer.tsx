@@ -616,6 +616,7 @@ interface Props {
   onRemovePreviewComment?: (commentId: string) => Promise<void>;
   onSendBoardCommentAttachments?: (attachments: ChatCommentAttachment[]) => Promise<void> | void;
   onFileSaved?: () => Promise<void> | void;
+  onOpenFileReplacing?: (openName: string, closeName: string) => void;
 }
 
 export function FileViewer({
