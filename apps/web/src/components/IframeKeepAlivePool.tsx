@@ -82,14 +82,16 @@ export function IframeKeepAliveProvider({
   const parkedHostRef = useRef<HTMLDivElement | null>(null);
   const entriesRef = useRef<Map<string, PoolEntry>>(new Map());
   const activeKeysRef = useRef<Set<string>>(new Set());
-  const [, forceRender] = useState(0);
+  const [poolRevision, bumpPoolRevision] = useState(0);
 
-  const removeEntry = (key: string) => {
+  const removeEntry = (key: string): boolean => {
     const entry = entriesRef.current.get(key);
-    if (!entry) return;
+    if (!entry) return false;
+    const wasActive = activeKeysRef.current.has(key);
     entry.element.remove();
     entriesRef.current.delete(key);
     activeKeysRef.current.delete(key);
+    return wasActive;
   };
 
   const enforceLimit = () => {
@@ -133,32 +135,33 @@ export function IframeKeepAliveProvider({
       enforceLimit();
     },
     evict(key) {
-      removeEntry(key);
-      forceRender((value) => value + 1);
+      if (removeEntry(key)) bumpPoolRevision((value) => value + 1);
     },
     evictProject(projectId, options) {
+      let removedActive = false;
       for (const entry of Array.from(entriesRef.current.values())) {
         if (
           entry.projectId === projectId
           && (options?.includeActive || !activeKeysRef.current.has(entry.key))
         ) {
-          removeEntry(entry.key);
+          removedActive = removeEntry(entry.key) || removedActive;
         }
       }
-      forceRender((value) => value + 1);
+      if (removedActive) bumpPoolRevision((value) => value + 1);
     },
     evictMatching(predicate, options) {
+      let removedActive = false;
       for (const entry of Array.from(entriesRef.current.values())) {
         if (
           (options?.includeActive || !activeKeysRef.current.has(entry.key))
           && predicate(entry)
         ) {
-          removeEntry(entry.key);
+          removedActive = removeEntry(entry.key) || removedActive;
         }
       }
-      forceRender((value) => value + 1);
+      if (removedActive) bumpPoolRevision((value) => value + 1);
     },
-  }), [maxEntries]);
+  }), [maxEntries, poolRevision]);
 
   useEffect(() => () => {
     for (const key of Array.from(entriesRef.current.keys())) removeEntry(key);

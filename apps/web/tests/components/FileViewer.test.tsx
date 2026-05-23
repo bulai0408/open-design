@@ -524,6 +524,44 @@ describe('FileViewer SVG artifacts', () => {
     expect(container.querySelector('.iframe-keep-alive-pool iframe')).toBeNull();
   });
 
+  it('reattaches a fresh visible iframe after active project invalidation', () => {
+    function Harness() {
+      const pool = useIframeKeepAlivePool();
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => pool.evictProject('project-1', { includeActive: true })}
+          >
+            Invalidate active project
+          </button>
+          <PooledIframe
+            cacheKey={previewIframeKeepAliveKey('project-1', 'page.html')}
+            src="/api/projects/project-1/raw/page.html?v=1&r=0"
+            title="page.html"
+            sandbox="allow-scripts allow-downloads"
+            data-testid="pooled-frame"
+            data-od-render-mode="url-load"
+            data-od-active="true"
+          />
+        </>
+      );
+    }
+
+    render(
+      <IframeKeepAliveProvider>
+        <Harness />
+      </IframeKeepAliveProvider>,
+    );
+    const firstFrame = screen.getByTestId('pooled-frame');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Invalidate active project' }));
+
+    const secondFrame = screen.getByTestId('pooled-frame');
+    expect(secondFrame).not.toBe(firstFrame);
+    expect(secondFrame.getAttribute('src')).toBe('/api/projects/project-1/raw/page.html?v=1&r=0');
+  });
+
   it('URL-loads a plain HTML preview iframe instead of inlining via srcDoc', () => {
     const file = baseFile({
       name: 'page.html',
