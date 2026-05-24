@@ -195,6 +195,7 @@ const RECOVERABLE_EXIT_CODES = {
   'snapshot-stale':           72,
   'genui-surface-awaiting':   73,
   'desktop-auth-pending':     74,
+  'desktop-import-token-rejected': 75,
 };
 const PLUGIN_LIST_FILTER_FLAGS = new Set([
   ...PLUGIN_STRING_FLAGS,
@@ -902,19 +903,36 @@ function exitWithStructuredError({ code, message, data }) {
 async function structuredHttpFailure(resp, fallbackCode = 'daemon-not-running') {
   let parsed;
   try { parsed = await resp.json(); } catch { parsed = {}; }
-  const errCode = parsed?.error?.code;
+  const errCode = normalizeRecoverableErrorCode(parsed?.error?.code, parsed?.error?.message);
   if (errCode && errCode in RECOVERABLE_EXIT_CODES) {
     exitWithStructuredError({
       code:    errCode,
       message: parsed.error.message ?? `HTTP ${resp.status}`,
-      data:    parsed.error.data,
+      data:    structuredErrorData(parsed.error),
     });
   }
   exitWithStructuredError({
     code:    fallbackCode,
     message: parsed?.error?.message ?? `HTTP ${resp.status}: ${await resp.text().catch(() => '')}`,
-    data:    parsed?.error?.data,
+    data:    structuredErrorData(parsed?.error),
   });
+}
+
+function normalizeRecoverableErrorCode(code, message) {
+  if (code === 'DESKTOP_AUTH_PENDING') return 'desktop-auth-pending';
+  if (code === 'FORBIDDEN' && /desktop import token rejected/i.test(String(message ?? ''))) {
+    return 'desktop-import-token-rejected';
+  }
+  return code;
+}
+
+function structuredErrorData(error) {
+  if (!error || typeof error !== 'object') return undefined;
+  const data = {};
+  if ('data' in error && error.data !== undefined) Object.assign(data, error.data);
+  if ('details' in error && error.details !== undefined) data.details = error.details;
+  if (typeof error.retryable === 'boolean') data.retryable = error.retryable;
+  return Object.keys(data).length > 0 ? data : undefined;
 }
 
 async function runPlugin(args) {
@@ -4803,9 +4821,9 @@ function createUnifiedDiff(leftLabel, rightLabel, leftText, rightText) {
 }
 
 function splitDiffLines(text) {
-  const normalized = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  if (normalized.length === 0) return [];
-  return normalized.match(/[^\n]*(?:\n|$)/g).filter((line) => line.length > 0);
+  const value = String(text);
+  if (value.length === 0) return [];
+  return value.match(/.*?(?:\r\n|\n|\r|$)/gs).filter((line) => line.length > 0);
 }
 
 function formatDiffRange(start, length) {
@@ -4852,8 +4870,15 @@ function diffLineBody(oldLines, newLines) {
 }
 
 function diffLine(prefix, line) {
-  if (String(line).endsWith('\n')) return `${prefix}${String(line).slice(0, -1)}`;
-  return `${prefix}${line}\n\\ No newline at end of file`;
+  const value = String(line);
+  if (value.endsWith('\r\n')) return `${prefix}${renderDiffLineContent(value.slice(0, -1))}`;
+  if (value.endsWith('\n')) return `${prefix}${renderDiffLineContent(value.slice(0, -1))}`;
+  if (value.endsWith('\r')) return `${prefix}${renderDiffLineContent(value)}`;
+  return `${prefix}${renderDiffLineContent(value)}\n\\ No newline at end of file`;
+}
+
+function renderDiffLineContent(value) {
+  return String(value).replace(/\r/g, '\\r');
 }
 
 async function runConversation(args) {

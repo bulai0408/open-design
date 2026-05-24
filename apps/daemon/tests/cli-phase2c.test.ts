@@ -106,6 +106,54 @@ describe('Phase 2C CLI wrappers', () => {
     });
   }
 
+  async function runCliExpectFailure(
+    args: string[],
+    options: { input?: string; timeout?: number; env?: NodeJS.ProcessEnv } = {},
+  ): Promise<{ code: number | null; stdout: string; stderr: string }> {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      OD_DAEMON_URL: baseUrl,
+      ...options.env,
+    };
+    delete env.NODE_OPTIONS;
+
+    return await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [TSX_CLI, CLI_SRC, ...args], {
+        cwd: path.join(__dirname, '..'),
+        env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      const timeout = setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error(`CLI timed out: od ${args.join(' ')}`));
+      }, options.timeout ?? 20_000);
+
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+      });
+      child.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        if (code === 0) {
+          reject(new Error(`od ${args.join(' ')} unexpectedly exited 0\nstdout:\n${stdout}\nstderr:\n${stderr}`));
+          return;
+        }
+        resolve({ code, stdout, stderr });
+      });
+      child.stdin.end(options.input ?? '');
+    });
+  }
+
   it('imports a folder and creates a conversation through the CLI', async () => {
     const folder = makeFolder();
     await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
@@ -197,6 +245,45 @@ describe('Phase 2C CLI wrappers', () => {
     }
   });
 
+  it('preserves desktop-auth-pending when CLI token minting cannot reach sidecar IPC', async () => {
+    const folder = makeFolder();
+    await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+    setDesktopAuthSecret(randomBytes(32));
+    setDesktopAuthSecret(null);
+
+    const failed = await runCliExpectFailure(
+      ['project', 'import', folder, '--name', 'Pending CLI Import', '--json'],
+      { env: { [SIDECAR_ENV.IPC_PATH]: path.join(folder, 'missing-daemon.sock') } },
+    );
+
+    expect(failed.code).toBe(74);
+    const envelope = JSON.parse(failed.stderr) as {
+      error?: { code?: string; message?: string; data?: { retryable?: boolean } };
+    };
+    expect(envelope.error?.code).toBe('desktop-auth-pending');
+    expect(envelope.error?.message).toMatch(/desktop auth required/i);
+    expect(envelope.error?.data?.retryable).toBe(true);
+  });
+
+  it('preserves desktop-import-token-rejected when CLI token minting falls through to HTTP rejection', async () => {
+    const folder = makeFolder();
+    await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+    setDesktopAuthSecret(randomBytes(32));
+
+    const failed = await runCliExpectFailure(
+      ['project', 'import', folder, '--name', 'Rejected CLI Import', '--json'],
+      { env: { [SIDECAR_ENV.IPC_PATH]: path.join(folder, 'missing-daemon.sock') } },
+    );
+
+    expect(failed.code).toBe(75);
+    const envelope = JSON.parse(failed.stderr) as {
+      error?: { code?: string; message?: string; data?: { details?: { reason?: string } } };
+    };
+    expect(envelope.error?.code).toBe('desktop-import-token-rejected');
+    expect(envelope.error?.message).toMatch(/desktop import token rejected/i);
+    expect(envelope.error?.data?.details?.reason).toMatch(/token missing/i);
+  });
+
   it('prints unified diffs for project files and stdin comparisons', async () => {
     const folder = makeFolder();
     await writeFile(path.join(folder, 'a.txt'), 'one\ntwo\n');
@@ -240,6 +327,27 @@ describe('Phase 2C CLI wrappers', () => {
     expect(fileDiff.stdout).toContain('+++ b/without-newline.txt');
     expect(fileDiff.stdout).toContain('\\ No newline at end of file');
     expect(fileDiff.stdout).toContain('-same');
+    expect(fileDiff.stdout).toContain('+same');
+  });
+
+  it('prints CRLF-to-LF-only file diffs', async () => {
+    const folder = makeFolder();
+    await writeFile(path.join(folder, 'crlf.txt'), 'same\r\n');
+    await writeFile(path.join(folder, 'lf.txt'), 'same\n');
+    const imported = await runCli(['project', 'import', folder, '--json']);
+    const importBody = JSON.parse(imported.stdout) as { project: { id: string } };
+
+    const fileDiff = await runCli([
+      'files',
+      'diff',
+      importBody.project.id,
+      'crlf.txt',
+      'lf.txt',
+    ]);
+
+    expect(fileDiff.stdout).toContain('--- a/crlf.txt');
+    expect(fileDiff.stdout).toContain('+++ b/lf.txt');
+    expect(fileDiff.stdout).toContain('-same\\r');
     expect(fileDiff.stdout).toContain('+same');
   });
 });
