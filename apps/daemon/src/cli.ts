@@ -147,7 +147,7 @@ const LIBRARY_BOOLEAN_FLAGS = new Set(['help', 'h', 'json']);
 const PROJECT_STRING_FLAGS = new Set([
   'daemon-url', 'name', 'skill', 'design-system', 'plugin', 'metadata-json',
   'pending-prompt', 'project', 'conversation', 'message', 'path', 'as',
-  'agent', 'model', 'snapshot-id', 'inputs', 'grant-caps', 'editor', 'since',
+  'agent', 'model', 'snapshot-id', 'inputs', 'grant-caps', 'editor',
 ]);
 const PROJECT_BOOLEAN_FLAGS = new Set(['help', 'h', 'json', 'follow']);
 // `od automation …` mirrors the Automations tab. Same surface, same
@@ -731,7 +731,7 @@ function parseFlags(argv, opts = {}) {
     }
     if (stringFlags.has(key)) {
       const next = argv[i + 1];
-      if (next == null) {
+      if (next == null || next.startsWith('-')) {
         throw new Error(`flag --${key} requires a value`);
       }
       out[key] = next;
@@ -774,7 +774,7 @@ function parseRunLogsArgs(argv) {
         continue;
       }
       const next = argv[i + 1];
-      if (next == null) throw new Error(`flag --${key} requires a value`);
+      if (next == null || next.startsWith('-')) throw new Error(`flag --${key} requires a value`);
       flags[key] = next;
       i++;
       continue;
@@ -4418,6 +4418,44 @@ Common options:
   }
   const sub = args[0];
   const rest = args.slice(1);
+  if (sub === 'logs') {
+    let parsed;
+    try {
+      parsed = parseRunLogsArgs(rest);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(2);
+    }
+    const { flags: logFlags, positionals } = parsed;
+    const id = positionals[0];
+    if (positionals.length > 1) {
+      console.error('Usage: od run logs <runId> [--since <eventId|RFC3339>]');
+      process.exit(2);
+    }
+    if (!id) {
+      console.error('Usage: od run logs <runId> [--since <eventId|RFC3339>]');
+      process.exit(2);
+    }
+    const logBase = (await projectDaemonUrl(logFlags)).replace(/\/$/, '');
+    const params = new URLSearchParams();
+    if (logFlags.since != null) params.set('since', logFlags.since);
+    const suffix = params.size ? `?${params.toString()}` : '';
+    const resp = await fetch(`${logBase}/api/runs/${encodeURIComponent(id)}/log${suffix}`);
+    if (!resp.ok) {
+      return structuredHttpFailure(
+        resp,
+        resp.status === 404 ? 'run-not-found'
+          : resp.status === 400 ? 'invalid-input'
+            : 'daemon-not-running',
+      );
+    }
+    const data = await resp.json();
+    if (logFlags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+    for (const record of data?.events ?? []) {
+      process.stdout.write(JSON.stringify(record) + '\n');
+    }
+    return;
+  }
   const flags = parseFlags(rest, { string: PROJECT_STRING_FLAGS, boolean: PROJECT_BOOLEAN_FLAGS });
   const base = (await projectDaemonUrl(flags)).replace(/\/$/, '');
   switch (sub) {
@@ -4465,44 +4503,6 @@ Common options:
         process.exit(2);
       }
       await streamRunEvents(base, id);
-      return;
-    }
-    case 'logs': {
-      let parsed;
-      try {
-        parsed = parseRunLogsArgs(rest);
-      } catch (err) {
-        console.error(err instanceof Error ? err.message : String(err));
-        process.exit(2);
-      }
-      const { flags: logFlags, positionals } = parsed;
-      const id = positionals[0];
-      if (positionals.length > 1) {
-        console.error('Usage: od run logs <runId> [--since <eventId|RFC3339>]');
-        process.exit(2);
-      }
-      if (!id) {
-        console.error('Usage: od run logs <runId> [--since <eventId|RFC3339>]');
-        process.exit(2);
-      }
-      const logBase = (await projectDaemonUrl(logFlags)).replace(/\/$/, '');
-      const params = new URLSearchParams();
-      if (logFlags.since != null) params.set('since', logFlags.since);
-      const suffix = params.size ? `?${params.toString()}` : '';
-      const resp = await fetch(`${logBase}/api/runs/${encodeURIComponent(id)}/log${suffix}`);
-      if (!resp.ok) {
-        return structuredHttpFailure(
-          resp,
-          resp.status === 404 ? 'run-not-found'
-            : resp.status === 400 ? 'invalid-input'
-              : 'daemon-not-running',
-        );
-      }
-      const data = await resp.json();
-      if (logFlags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
-      for (const record of data?.events ?? []) {
-        process.stdout.write(JSON.stringify(record) + '\n');
-      }
       return;
     }
     case 'start': {

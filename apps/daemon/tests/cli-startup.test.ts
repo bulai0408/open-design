@@ -107,6 +107,51 @@ describe('CLI startup boundaries', () => {
     }
   });
 
+  it('keeps od run logs json output available when --since appears before --json', async () => {
+    const server = http.createServer((req, res) => {
+      if (req.url?.startsWith('/api/runs/run-1/log')) {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          runId:     'run-1',
+          nextSince: '1',
+          events:    [{ id: 1, event: 'text', data: { kind: 'text', text: 'hello' }, timestamp: 1779148801000 }],
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'run not found' } }));
+    });
+
+    try {
+      const baseUrl = await listen(server);
+      const { stdout } = await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          cliEntry,
+          'run',
+          'logs',
+          '--daemon-url',
+          baseUrl,
+          '--since',
+          '2026-05-19T00:00:00.000Z',
+          '--json',
+          'run-1',
+        ],
+        { cwd: daemonRoot },
+      );
+
+      expect(JSON.parse(stdout)).toMatchObject({
+        runId:  'run-1',
+        events: [{ id: 1, event: 'text' }],
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('reports invalid run log cursors as input errors', async () => {
     const server = http.createServer((req, res) => {
       if (req.url?.startsWith('/api/runs/run-1/log')) {
@@ -148,6 +193,81 @@ describe('CLI startup boundaries', () => {
           message: 'invalid since: expected an RFC3339 timestamp',
         },
       });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('rejects od run logs string flags followed by another flag', async () => {
+    const requests: string[] = [];
+    const server = http.createServer((req, res) => {
+      requests.push(req.url ?? '');
+      res.statusCode = 500;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: { code: 'UNEXPECTED', message: 'unexpected request' } }));
+    });
+
+    try {
+      const baseUrl = await listen(server);
+      await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          cliEntry,
+          'run',
+          'logs',
+          '--daemon-url',
+          baseUrl,
+          '--since',
+          '--json',
+          'run-1',
+        ],
+        { cwd: daemonRoot },
+      );
+      throw new Error('od run logs unexpectedly succeeded');
+    } catch (error: unknown) {
+      const failed = error as { code?: number; stderr?: string };
+      expect(failed.code).toBe(2);
+      expect(failed.stderr).toContain('flag --since requires a value');
+      expect(requests).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('rejects --since on od run subcommands other than logs', async () => {
+    const requests: string[] = [];
+    const server = http.createServer((req, res) => {
+      requests.push(req.url ?? '');
+      res.statusCode = 500;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: { code: 'UNEXPECTED', message: 'unexpected request' } }));
+    });
+
+    try {
+      const baseUrl = await listen(server);
+      await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          cliEntry,
+          'run',
+          'list',
+          '--daemon-url',
+          baseUrl,
+          '--since',
+          '1',
+        ],
+        { cwd: daemonRoot },
+      );
+      throw new Error('od run list unexpectedly succeeded');
+    } catch (error: unknown) {
+      const failed = error as { code?: number; stderr?: string };
+      expect(failed.code).toBe(1);
+      expect(failed.stderr).toContain('unknown flag: --since');
+      expect(requests).toEqual([]);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
