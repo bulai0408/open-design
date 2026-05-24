@@ -109,7 +109,7 @@ interface ScheduledTimer {
   fireAt: Date;
 }
 
-function clearScheduledPlaceholderId(value: string): string {
+function clearRoutinePlaceholderId(value: string): string {
   return value.startsWith('routine-pending-') ? '' : value;
 }
 
@@ -565,16 +565,10 @@ export class RoutineService {
       };
       const scheduledSlotAt = options.scheduledSlotAt;
       const wasScheduled = scheduledSlotAt != null;
-      const publicProjectId = () => (
-        wasScheduled ? clearScheduledPlaceholderId(run.projectId) : run.projectId
-      );
-      const publicConversationId = () => (
-        wasScheduled ? clearScheduledPlaceholderId(run.conversationId) : run.conversationId
-      );
-      const publicAgentRunId = () => (
-        wasScheduled ? clearScheduledPlaceholderId(run.agentRunId) : run.agentRunId
-      );
-      const scrubScheduledPlaceholders = () => {
+      const publicProjectId = () => clearRoutinePlaceholderId(run.projectId);
+      const publicConversationId = () => clearRoutinePlaceholderId(run.conversationId);
+      const publicAgentRunId = () => clearRoutinePlaceholderId(run.agentRunId);
+      const scrubRoutinePlaceholders = () => {
         run.projectId = publicProjectId();
         run.conversationId = publicConversationId();
         run.agentRunId = publicAgentRunId();
@@ -609,7 +603,12 @@ export class RoutineService {
       }
       try {
         await handlerStart.prepare?.(run);
-        if (wasScheduled) {
+        if (
+          wasScheduled
+          || run.projectId !== handlerStart.projectId
+          || run.conversationId !== handlerStart.conversationId
+          || run.agentRunId !== handlerStart.agentRunId
+        ) {
           this.persistence.updateRun(runId, {
             projectId: run.projectId,
             conversationId: run.conversationId,
@@ -633,14 +632,14 @@ export class RoutineService {
             discardError instanceof Error ? discardError.message : discardError,
           );
         }
-        // Persist IDs only after `prepare()` has replaced the scheduled
+        // Persist IDs only after `prepare()` has replaced routine
         // placeholders with real resources. If preparation failed before
         // enrichment, clear the sentinels so the terminal row does not point
-        // at fabricated project/conversation IDs. The slot claim was already
-        // accepted at `insertRun()`, so retrying the same slot is not
-        // appropriate — let the error propagate so the scheduler advances
-        // to the next cadence.
-        scrubScheduledPlaceholders();
+        // at fabricated project/conversation IDs. For scheduled runs the
+        // slot claim was already accepted at `insertRun()`, so retrying the
+        // same slot is not appropriate — let the error propagate so the
+        // scheduler advances to the next cadence.
+        scrubRoutinePlaceholders();
         this.persistence.updateRun(runId, {
           status: 'failed',
           completedAt: Date.now(),

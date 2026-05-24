@@ -527,6 +527,95 @@ describe('routine prepare failure cleanup', () => {
       await new Promise<void>((resolve) => started.server.close(() => resolve()));
     }
   });
+
+  it('rolls back a manual run when conversation creation fails before the handler returns', async () => {
+    const started = await startServer({ port: 0, returnServer: true }) as {
+      url: string;
+      server: http.Server;
+      shutdown?: () => Promise<void> | void;
+    };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = openDatabase(tmp, { dataDir });
+
+    try {
+      const createRoutine = await fetch(`${started.url}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Manual early conversation failure routine',
+          prompt: 'prepare resources',
+          schedule: { kind: 'hourly', minute: 1 },
+          target: { mode: 'create_each_run' },
+          agentId: 'codex',
+          enabled: false,
+        }),
+      });
+      expect(createRoutine.status).toBe(201);
+      const created = await createRoutine.json() as { routine: { id: string } };
+
+      db.exec(`
+        DROP TRIGGER IF EXISTS fail_manual_routine_conversation_insert;
+        CREATE TRIGGER fail_manual_routine_conversation_insert
+        BEFORE INSERT ON conversations
+        WHEN NEW.id LIKE 'routine-conv-%'
+          AND NEW.project_id IN (
+            SELECT id FROM projects
+             WHERE json_extract(metadata_json, '$.routineId') = '${created.routine.id}'
+          )
+        BEGIN
+          SELECT RAISE(ABORT, 'routine conversation insert failed');
+        END;
+      `);
+
+      const runRes = await fetch(`${started.url}/api/routines/${created.routine.id}/run`, {
+        method: 'POST',
+      });
+      expect(runRes.status).toBe(500);
+      expect(await runRes.text()).toContain('routine conversation insert failed');
+
+      const rows = db.prepare(
+        `SELECT status,
+                trigger,
+                project_id AS projectId,
+                conversation_id AS conversationId,
+                agent_run_id AS agentRunId,
+                error
+           FROM routine_runs
+          WHERE routine_id = ?`,
+      ).all(created.routine.id) as Array<{
+        status: string;
+        trigger: string;
+        projectId: string;
+        conversationId: string;
+        agentRunId: string;
+        error: string | null;
+      }>;
+      expect(rows).toHaveLength(1);
+      const row = rows[0]!;
+      expect(row).toMatchObject({
+        status: 'failed',
+        trigger: 'manual',
+        error: 'routine conversation insert failed',
+      });
+      expect(row.projectId).toMatch(/^routine-/);
+      expect(row.conversationId).toBe('');
+      expect(row.agentRunId).toMatch(/^[0-9a-f-]{36}$/);
+
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM projects WHERE id = ?`).get(row.projectId))
+        .toEqual({ n: 0 });
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM conversations WHERE project_id = ?`).get(row.projectId))
+        .toEqual({ n: 0 });
+    } finally {
+      try {
+        db.exec('DROP TRIGGER IF EXISTS fail_manual_routine_conversation_insert');
+      } catch {
+        // The test may fail before the trigger exists.
+      }
+      await Promise.resolve(started.shutdown?.());
+      await new Promise<void>((resolve) => started.server.close(() => resolve()));
+    }
+  });
 });
 
 function pluginRecord(id: string): InstalledPluginRecord {

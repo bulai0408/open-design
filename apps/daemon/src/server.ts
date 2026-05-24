@@ -12098,8 +12098,6 @@ export async function startServer({
       projectId = project.id;
       projectName = project.name;
       previousProjectSnapshotId = project.appliedPluginSnapshotId ?? null;
-    } else if (trigger !== 'scheduled') {
-      createRoutineProject();
     }
 
     let conversationId = `routine-conv-${randomUUID()}`;
@@ -12128,9 +12126,6 @@ export async function startServer({
         createdAt: now,
       };
     };
-    if (trigger !== 'scheduled') {
-      createRoutineConversation();
-    }
 
     const assistantMessageId = `routine-assistant-${randomUUID()}`;
     let resolvedRoutineSnapshot = null;
@@ -12157,10 +12152,6 @@ export async function startServer({
       }
       resolvedRoutineSnapshot = resolved;
     };
-    if (trigger !== 'scheduled') {
-      await resolveRoutinePluginSnapshot();
-    }
-
     const run = design.runs.create({
       projectId: projectId ?? scheduledPlaceholderProjectId,
       conversationId: createdConversationId ? conversationId : scheduledPlaceholderConversationId,
@@ -12175,11 +12166,18 @@ export async function startServer({
         : {}),
     });
     const persistPreparedRun = async (routineRun = null) => {
+      if (!projectId) {
+        createRoutineProject();
+      }
+      if (projectId) {
+        run.projectId = projectId;
+        if (routineRun) {
+          routineRun.projectId = projectId;
+        }
+      }
       createRoutineConversation();
-      run.projectId = projectId;
       run.conversationId = conversationId;
       if (routineRun) {
-        routineRun.projectId = projectId;
         routineRun.conversationId = conversationId;
         routineRun.agentRunId = run.id;
       }
@@ -12209,9 +12207,9 @@ export async function startServer({
 
     const modelPrefs = appConfig.agentModels?.[agentId] ?? {};
     const start = () => {
-      // Notify any open `ProjectView` only after the scheduled run row has
-      // been accepted, so duplicate scheduled slots do not surface phantom
-      // conversations (#1361).
+      // Notify any open `ProjectView` only after the routine run row has
+      // been accepted and preparation has completed, so failed setup does not
+      // surface phantom conversations (#1361).
       if (conversationCreatedEvent) emitProjectEvent(projectId, conversationCreatedEvent);
       design.runs.start(run, () => startChatRun({
         agentId,
