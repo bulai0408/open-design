@@ -318,6 +318,7 @@ export function PreviewDrawOverlay({
     const hasTarget = Boolean(captureTarget);
     const shouldCapture = hasInk || hasTarget;
     const canSubmit = shouldCapture || Boolean(note.trim());
+    if (action === 'send' && sendDisabled) return;
     if (sending || !canSubmit) return;
     setPendingAction(action);
     try {
@@ -369,7 +370,7 @@ export function PreviewDrawOverlay({
   const overlayPointer = mode === 'draw' ? 'auto' : 'none';
   const showCanvas = active || mode === 'draw' || hasInk;
   const canSubmit = hasInk || Boolean(captureTarget) || Boolean(note.trim());
-  const canSend = canSubmit;
+  const canSend = canSubmit && !sendDisabled;
 
   return (
     <div
@@ -481,26 +482,28 @@ export function PreviewDrawOverlay({
               'Queue'
             )}
           </button>
-          <button
-            type="button"
-            onClick={() => void send('send')}
-            disabled={sending || !canSend}
-            title={sendDisabled ? sendDisabledReason : undefined}
-            style={{
-              ...pillStyle(true),
-              opacity: canSend ? 1 : 0.4,
-              cursor: sending ? 'wait' : (canSend ? 'pointer' : 'not-allowed'),
-            }}
-          >
-            {pendingAction === 'send' ? (
-              <>
-                <Icon name="spinner" size={12} />
-                <span>Sending...</span>
-              </>
-            ) : (
-              'Send'
-            )}
-          </button>
+          {sendDisabled ? null : (
+            <button
+              type="button"
+              onClick={() => void send('send')}
+              disabled={sending || !canSend}
+              title={sendDisabled ? sendDisabledReason : undefined}
+              style={{
+                ...pillStyle(true),
+                opacity: canSend ? 1 : 0.4,
+                cursor: sending ? 'wait' : (canSend ? 'pointer' : 'not-allowed'),
+              }}
+            >
+              {pendingAction === 'send' ? (
+                <>
+                  <Icon name="spinner" size={12} />
+                  <span>Sending...</span>
+                </>
+              ) : (
+                'Send'
+              )}
+            </button>
+          )}
         </div>
       ) : null}
     </div>

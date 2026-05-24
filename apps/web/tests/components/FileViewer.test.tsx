@@ -801,6 +801,69 @@ describe('FileViewer SVG artifacts', () => {
     expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-downloads');
   });
 
+  it('points sibling Babel modules at the HTML entry instead of rendering a standalone React preview', async () => {
+    const file = baseFile({
+      name: 'icons.jsx',
+      path: 'icons.jsx',
+      mime: 'text/jsx',
+      kind: 'code',
+      artifactManifest: {
+        version: 1,
+        kind: 'react-component',
+        title: 'Icons',
+        entry: 'icons.jsx',
+        renderer: 'react-component',
+        exports: ['jsx', 'html', 'zip'],
+      },
+    });
+    const htmlFile = baseFile({
+      name: 'Backups Panel.html',
+      path: 'Backups Panel.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Backups Panel',
+        entry: 'Backups Panel.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+    const onOpenFileReplacing = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (url === '/api/projects/project-1/files') {
+        return new Response(JSON.stringify({ files: [file, htmlFile] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url === '/api/projects/project-1/raw/icons.jsx') {
+        return new Response('const IconSet = { Chevron: () => null };');
+      }
+      if (url === '/api/projects/project-1/raw/Backups%20Panel.html') {
+        return new Response('<script type="text/babel" src="icons.jsx"></script>');
+      }
+      return new Response('', { status: 404 });
+    }));
+
+    const { container } = render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        onOpenFileReplacing={onOpenFileReplacing}
+      />,
+    );
+
+    expect(await screen.findByText('No standalone preview')).toBeTruthy();
+    expect(container.querySelector('[data-testid="react-component-preview-frame"]')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Backups Panel\.html/ }));
+    expect(onOpenFileReplacing).toHaveBeenCalledWith('Backups Panel.html', 'icons.jsx');
+  });
+
   it('keeps decks on the srcDoc path so the deck postMessage bridge can run', () => {
     const file = baseFile({
       name: 'deck.html',

@@ -44,17 +44,30 @@ function injectPreviewNavigationBridge(html: string): string {
     try { window.parent.postMessage(state(), '*'); } catch (_) {}
   }
   function restore(data){
+    var prevHash = location.hash;
     try {
       var hash = typeof data.hash === 'string' ? data.hash : location.hash;
       var pathname = typeof data.pathname === 'string' && data.pathname.charAt(0) === '/' ? data.pathname : location.pathname;
       var search = typeof data.search === 'string' ? data.search : location.search;
       history.replaceState('state' in data ? data.state : history.state, '', pathname + search + hash);
-      post();
+      try { window.dispatchEvent(new PopStateEvent('popstate', { state: history.state })); } catch (__) {}
+      if (location.hash !== prevHash) {
+        try {
+          var hashEv = typeof HashChangeEvent === 'function'
+            ? new HashChangeEvent('hashchange', { oldURL: '', newURL: location.href })
+            : new Event('hashchange');
+          window.dispatchEvent(hashEv);
+        } catch (__) {}
+      }
     } catch (_) {
       if (typeof data.hash === 'string' && location.hash !== data.hash) {
         try { location.hash = data.hash; } catch (__) {}
       }
+      if ('state' in data) {
+        try { history.replaceState(data.state, '', location.href); } catch (__) {}
+      }
     }
+    post();
   }
   function patch(name){
     var original = history[name];

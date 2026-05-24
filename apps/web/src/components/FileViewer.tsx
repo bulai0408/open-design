@@ -32,6 +32,7 @@ import {
   fetchDeployConfig,
   fetchProjectDeployments,
   fetchProjectFilePreview,
+  fetchProjectFiles,
   fetchProjectFileText,
   uploadProjectFiles,
   liveArtifactPreviewUrl,
@@ -63,6 +64,7 @@ import {
   requestPreviewSnapshot,
 } from '../runtime/exports';
 import { buildReactComponentSrcdoc } from '../runtime/react-component';
+import { findHtmlEntriesReferencing } from '../runtime/jsx-module-refs';
 import {
   buildSrcdoc,
   canActivateSrcDocTransport,
@@ -633,6 +635,7 @@ export function FileViewer({
   onRemovePreviewComment,
   onSendBoardCommentAttachments,
   onFileSaved,
+  onOpenFileReplacing,
 }: Props) {
   const rendererMatch = artifactRendererRegistry.resolve({
     file,
@@ -674,7 +677,13 @@ export function FileViewer({
     );
   }
   if (rendererMatch?.renderer.id === 'react-component') {
-    return <ReactComponentViewer projectId={projectId} file={file} />;
+    return (
+      <ReactComponentViewer
+        projectId={projectId}
+        file={file}
+        onOpenFileReplacing={onOpenFileReplacing}
+      />
+    );
   }
   if (rendererMatch?.renderer.id === 'markdown') {
     return <MarkdownViewer projectId={projectId} file={file} />;
@@ -3134,12 +3143,50 @@ function clampBridgeCoordinate(value: unknown): number {
   return Math.max(-MAX_BRIDGE_COORDINATE, Math.min(MAX_BRIDGE_COORDINATE, Math.round(numeric)));
 }
 
+// A .jsx/.tsx file loaded by a sibling HTML entry is a module, not a complete
+// artifact preview. Point the user at the page that owns the shared Babel
+// runtime instead of rendering the module alone.
+function ReactModulePointer({
+  entries,
+  onOpenEntry,
+}: {
+  entries: string[];
+  onOpenEntry?: (name: string) => void;
+}) {
+  const t = useT();
+  return (
+    <div className="viewer-module-pointer" role="note">
+      <Icon name="info" size={20} />
+      <h2 className="viewer-module-pointer__title">{t('fileViewer.jsxModuleTitle')}</h2>
+      <p className="viewer-module-pointer__body">{t('fileViewer.jsxModuleBody')}</p>
+      <p className="viewer-module-pointer__cta">{t('fileViewer.jsxModuleCta')}</p>
+      <ul className="viewer-module-pointer__entries">
+        {entries.map((name) => (
+          <li key={name}>
+            <button
+              type="button"
+              className="viewer-module-pointer__link"
+              onClick={() => onOpenEntry?.(name)}
+              disabled={!onOpenEntry}
+            >
+              <Icon name="external-link" size={14} />
+              <span>{name}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function ReactComponentViewer({
   projectId,
   file,
+  onOpenFileReplacing,
 }: {
   projectId: string;
   file: ProjectFile;
+  onOpenFileReplacing?: (openName: string, closeName: string) => void;
 }) {
   const t = useT();
   const [mode, setMode] = useState<'preview' | 'source'>('preview');
@@ -3148,6 +3195,8 @@ function ReactComponentViewer({
   const [reloadKey, setReloadKey] = useState(0);
   const [shareMenuOpen, setShareMenuOpen] = useState(false);
   const shareRef = useRef<HTMLDivElement | null>(null);
+  const [moduleEntries, setModuleEntries] = useState<string[] | null>(null);
+  const isModule = (moduleEntries?.length ?? 0) > 0;
 
   useEffect(() => {
     setSource(null);
@@ -3155,6 +3204,33 @@ function ReactComponentViewer({
     void fetchProjectFileText(projectId, file.name).then((text) => {
       if (!cancelled) setSource(text ?? '');
     });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, file.name, file.mtime, reloadKey]);
+
+  useEffect(() => {
+    setModuleEntries(null);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const files = await fetchProjectFiles(projectId);
+        const htmlNames = files
+          .filter((entry) => /\.html?$/i.test(entry.name))
+          .map((entry) => entry.name);
+        const htmlSources = new Map<string, string>();
+        await Promise.all(
+          htmlNames.map(async (name) => {
+            const text = await fetchProjectFileText(projectId, name).catch(() => null);
+            if (text != null) htmlSources.set(name, text);
+          }),
+        );
+        if (cancelled) return;
+        setModuleEntries(findHtmlEntriesReferencing(file.name, htmlSources));
+      } catch {
+        if (!cancelled) setModuleEntries([]);
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -3181,7 +3257,7 @@ function ReactComponentViewer({
   const sourceExtension = file.name.toLowerCase().endsWith('.tsx') ? '.tsx' : '.jsx';
 
   useEffect(() => {
-    if (source === null) {
+    if (source === null || moduleEntries === null || isModule) {
       setSrcDoc('');
       return;
     }
@@ -3205,7 +3281,7 @@ function ReactComponentViewer({
     return () => {
       cancelled = true;
     };
-  }, [source, exportTitle]);
+  }, [source, exportTitle, moduleEntries, isModule]);
 
   return (
     <div className="viewer react-component-viewer">
@@ -3303,7 +3379,12 @@ function ReactComponentViewer({
         </div>
       </div>
       <div className="viewer-body">
-        {source === null || (mode === 'preview' && !srcDoc) ? (
+        {isModule && mode === 'preview' ? (
+          <ReactModulePointer
+            entries={moduleEntries ?? []}
+            onOpenEntry={(htmlName) => onOpenFileReplacing?.(htmlName, file.name)}
+          />
+        ) : source === null || (mode === 'preview' && !srcDoc) ? (
           <div className="viewer-empty">{t('fileViewer.loading')}</div>
         ) : mode === 'preview' ? (
           <PreviewDrawOverlay>
@@ -4984,6 +5065,9 @@ function HtmlViewer({
       setSource(result.source);
       sourceRef.current = result.source;
       setInlinedSource(null);
+      if (patch.kind !== 'set-style') {
+        setManualEditFrozenSource(result.source);
+      }
       setManualEditHistory((current) => [entry, ...current]);
       setManualEditUndone([]);
       setManualEditDraft((current) => ({ ...current, fullSource: result.source }));
@@ -5008,6 +5092,7 @@ function HtmlViewer({
     setSource(persisted);
     sourceRef.current = persisted;
     setInlinedSource(null);
+    if (manualEditMode) setManualEditFrozenSource(persisted);
     setManualEditHistory([]);
     setManualEditUndone([]);
     manualEditPendingStyleRef.current = null;
@@ -5037,6 +5122,7 @@ function HtmlViewer({
       setSource(latest.beforeSource);
       sourceRef.current = latest.beforeSource;
       setInlinedSource(null);
+      if (manualEditMode) setManualEditFrozenSource(latest.beforeSource);
       setManualEditHistory(rest);
       setManualEditUndone((current) => [latest, ...current]);
       setManualEditDraft((current) => ({ ...current, fullSource: latest.beforeSource }));
@@ -5068,6 +5154,7 @@ function HtmlViewer({
       setSource(latest.afterSource);
       sourceRef.current = latest.afterSource;
       setInlinedSource(null);
+      if (manualEditMode) setManualEditFrozenSource(latest.afterSource);
       setManualEditUndone(rest);
       setManualEditHistory((current) => [latest, ...current]);
       setManualEditDraft((current) => ({ ...current, fullSource: latest.afterSource }));

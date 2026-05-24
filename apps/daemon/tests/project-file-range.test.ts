@@ -237,6 +237,8 @@ describe('GET /api/projects/:id/raw/* range request route', () => {
     expect(text).toContain("type: 'od:preview-navigation'");
     expect(text).toContain("data.type === 'od:preview-navigation-request'");
     expect(text).toContain("data.type === 'od:preview-navigation-restore'");
+    expect(text).toContain("window.dispatchEvent(new PopStateEvent('popstate'");
+    expect(text).toContain('new HashChangeEvent');
   });
 
   it('serves a same-origin srcdoc transport shell for bridge previews', async () => {
