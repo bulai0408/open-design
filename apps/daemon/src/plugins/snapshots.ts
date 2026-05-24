@@ -189,7 +189,7 @@ export function restoreProjectSnapshotLink(
   ).run(previous, projectId, snapshotIdToDiscard);
   const expiry = unreferencedSnapshotExpiry();
   if (typeof discardedRunId === 'string' && discardedRunId.length > 0) {
-    db.prepare(
+    const result = db.prepare(
       `UPDATE applied_plugin_snapshots
           SET run_id = NULL,
               expires_at = ?
@@ -197,7 +197,7 @@ export function restoreProjectSnapshotLink(
           AND project_id = ?
           AND run_id = ?`,
     ).run(expiry, snapshotIdToDiscard, projectId, discardedRunId);
-    return;
+    if (result.changes > 0) return;
   }
   db.prepare(
     `UPDATE applied_plugin_snapshots

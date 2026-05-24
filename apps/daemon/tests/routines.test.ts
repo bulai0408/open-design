@@ -457,6 +457,34 @@ describe('RoutineService scheduled run idempotency', () => {
     }
   });
 
+  it('prepares manual runs exactly once through the service path', async () => {
+    const persistence = new SharedRoutinePersistence([fixtureRoutine()]);
+    const service = new RoutineService(persistence);
+    let prepareCalls = 0;
+
+    service.setRunHandler(async () => ({
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      agentRunId: 'agent-run-1',
+      completion: Promise.resolve({ status: 'succeeded' as const }),
+      prepare: () => {
+        prepareCalls += 1;
+      },
+    }));
+
+    await service.runNow('routine-1');
+    await Promise.resolve();
+
+    expect(prepareCalls).toBe(1);
+    expect(persistence.runs).toHaveLength(1);
+    expect(persistence.runs[0]).toMatchObject({
+      trigger: 'manual',
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      agentRunId: 'agent-run-1',
+    });
+  });
+
   it('still finalizes the failed row when prepare cleanup itself throws', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));

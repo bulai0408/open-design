@@ -338,6 +338,197 @@ describe('routine scheduled loser cleanup', () => {
   });
 });
 
+describe('routine prepare failure cleanup', () => {
+  it('clears scheduled placeholder IDs when project creation fails before real IDs are assigned', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));
+
+    const started = await startServer({ port: 0, returnServer: true }) as {
+      url: string;
+      server: http.Server;
+      shutdown?: () => Promise<void> | void;
+    };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = openDatabase(tmp, { dataDir });
+
+    try {
+      const createRoutine = await fetch(`${started.url}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Scheduled project failure routine',
+          prompt: 'create a project',
+          schedule: { kind: 'hourly', minute: 1 },
+          target: { mode: 'create_each_run' },
+          agentId: 'codex',
+          enabled: true,
+        }),
+      });
+      expect(createRoutine.status).toBe(201);
+      const created = await createRoutine.json() as { routine: { id: string } };
+
+      db.exec(`
+        DROP TRIGGER IF EXISTS fail_scheduled_routine_project_insert;
+        CREATE TRIGGER fail_scheduled_routine_project_insert
+        BEFORE INSERT ON projects
+        WHEN NEW.id LIKE 'routine-%'
+          AND json_extract(NEW.metadata_json, '$.routineId') = '${created.routine.id}'
+        BEGIN
+          SELECT RAISE(ABORT, 'routine project insert failed');
+        END;
+      `);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+
+      let stored:
+        | { status: string; projectId: string; conversationId: string; agentRunId: string }
+        | undefined;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        stored = db.prepare(
+          `SELECT status,
+                  project_id AS projectId,
+                  conversation_id AS conversationId,
+                  agent_run_id AS agentRunId
+             FROM routine_runs
+            WHERE routine_id = ?`,
+        ).get(created.routine.id) as typeof stored;
+        if (stored?.status === 'failed') break;
+        await sleep(10);
+      }
+
+      expect(stored).toBeDefined();
+      if (!stored) return;
+      expect(stored.status).toBe('failed');
+      expect(stored.projectId).toBe('');
+      expect(stored.conversationId).toBe('');
+      expect(stored.agentRunId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(stored.projectId).not.toContain('routine-pending-project');
+      expect(stored.conversationId).not.toContain('routine-pending-conv');
+
+      const runsRes = await fetch(`${started.url}/api/runs`);
+      expect(runsRes.status).toBe(200);
+      const runsJson = await runsRes.json() as {
+        runs: Array<{ status: string; projectId: string | null; conversationId: string | null; assistantMessageId: string | null }>;
+      };
+      const chatRun = runsJson.runs.find((run) =>
+        typeof run.assistantMessageId === 'string'
+        && run.assistantMessageId.startsWith('routine-assistant-'));
+      expect(chatRun).toBeDefined();
+      expect(chatRun?.status).toBe('canceled');
+      expect(String(chatRun?.projectId ?? '')).not.toContain('routine-pending-project');
+      expect(String(chatRun?.conversationId ?? '')).not.toContain('routine-pending-conv');
+    } finally {
+      vi.useRealTimers();
+      try {
+        db.exec('DROP TRIGGER IF EXISTS fail_scheduled_routine_project_insert');
+      } catch {
+        // The test may fail before the trigger exists.
+      }
+      await Promise.resolve(started.shutdown?.());
+      await new Promise<void>((resolve) => started.server.close(() => resolve()));
+    }
+  });
+
+  it('finalizes and cleans up a manual run when prepare fails after creating the conversation', async () => {
+    const started = await startServer({ port: 0, returnServer: true }) as {
+      url: string;
+      server: http.Server;
+      shutdown?: () => Promise<void> | void;
+    };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = openDatabase(tmp, { dataDir });
+
+    try {
+      const createRoutine = await fetch(`${started.url}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Manual prepare failure routine',
+          prompt: 'write messages',
+          schedule: { kind: 'hourly', minute: 1 },
+          target: { mode: 'create_each_run' },
+          agentId: 'codex',
+          enabled: false,
+        }),
+      });
+      expect(createRoutine.status).toBe(201);
+      const created = await createRoutine.json() as { routine: { id: string } };
+
+      db.exec(`
+        DROP TRIGGER IF EXISTS fail_manual_routine_message_insert;
+        CREATE TRIGGER fail_manual_routine_message_insert
+        BEFORE INSERT ON messages
+        WHEN NEW.id LIKE 'routine-user-%'
+        BEGIN
+          SELECT RAISE(ABORT, 'routine message insert failed');
+        END;
+      `);
+
+      const runRes = await fetch(`${started.url}/api/routines/${created.routine.id}/run`, {
+        method: 'POST',
+      });
+      expect(runRes.status).toBe(500);
+      expect(await runRes.text()).toContain('routine message insert failed');
+
+      const rows = db.prepare(
+        `SELECT status,
+                trigger,
+                project_id AS projectId,
+                conversation_id AS conversationId,
+                agent_run_id AS agentRunId,
+                error
+           FROM routine_runs
+          WHERE routine_id = ?`,
+      ).all(created.routine.id) as Array<{
+        status: string;
+        trigger: string;
+        projectId: string;
+        conversationId: string;
+        agentRunId: string;
+        error: string | null;
+      }>;
+      expect(rows).toHaveLength(1);
+      const row = rows[0]!;
+      expect(row).toMatchObject({
+        status: 'failed',
+        trigger: 'manual',
+        error: 'routine message insert failed',
+      });
+      expect(row.projectId).toMatch(/^routine-/);
+      expect(row.conversationId).toMatch(/^routine-conv-/);
+      expect(row.agentRunId).toMatch(/^[0-9a-f-]{36}$/);
+
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM projects WHERE id = ?`).get(row.projectId))
+        .toEqual({ n: 0 });
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM conversations WHERE id = ?`).get(row.conversationId))
+        .toEqual({ n: 0 });
+
+      const runsRes = await fetch(`${started.url}/api/runs`);
+      expect(runsRes.status).toBe(200);
+      const runsJson = await runsRes.json() as {
+        runs: Array<{ status: string; assistantMessageId: string | null }>;
+      };
+      const chatRun = runsJson.runs.find((run) =>
+        typeof run.assistantMessageId === 'string'
+        && run.assistantMessageId.startsWith('routine-assistant-'));
+      expect(chatRun).toBeDefined();
+      expect(chatRun?.status).toBe('canceled');
+    } finally {
+      try {
+        db.exec('DROP TRIGGER IF EXISTS fail_manual_routine_message_insert');
+      } catch {
+        // The test may fail before the trigger exists.
+      }
+      await Promise.resolve(started.shutdown?.());
+      await new Promise<void>((resolve) => started.server.close(() => resolve()));
+    }
+  });
+});
+
 function pluginRecord(id: string): InstalledPluginRecord {
   const manifest: PluginManifest = {
     name: id,

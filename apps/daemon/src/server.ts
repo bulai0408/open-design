@@ -12206,9 +12206,6 @@ export async function startServer({
         startedAt: now,
       });
     };
-    if (trigger !== 'scheduled') {
-      await persistPreparedRun();
-    }
 
     const modelPrefs = appConfig.agentModels?.[agentId] ?? {};
     const start = () => {
@@ -12236,6 +12233,12 @@ export async function startServer({
     };
 
     const discard = () => {
+      if (typeof run.projectId === 'string' && run.projectId.startsWith('routine-pending-')) {
+        run.projectId = null;
+      }
+      if (typeof run.conversationId === 'string' && run.conversationId.startsWith('routine-pending-')) {
+        run.conversationId = null;
+      }
       design.runs.finish(run, 'canceled');
       if (resolvedRoutineSnapshot?.ok && routine.target.mode === 'reuse') {
         restoreProjectSnapshotLink(

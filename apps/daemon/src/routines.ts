@@ -565,6 +565,20 @@ export class RoutineService {
       };
       const scheduledSlotAt = options.scheduledSlotAt;
       const wasScheduled = scheduledSlotAt != null;
+      const publicProjectId = () => (
+        wasScheduled ? clearScheduledPlaceholderId(run.projectId) : run.projectId
+      );
+      const publicConversationId = () => (
+        wasScheduled ? clearScheduledPlaceholderId(run.conversationId) : run.conversationId
+      );
+      const publicAgentRunId = () => (
+        wasScheduled ? clearScheduledPlaceholderId(run.agentRunId) : run.agentRunId
+      );
+      const scrubScheduledPlaceholders = () => {
+        run.projectId = publicProjectId();
+        run.conversationId = publicConversationId();
+        run.agentRunId = publicAgentRunId();
+      };
       let inserted = true;
       try {
         inserted = this.persistence.insertRun(run, options) !== false;
@@ -626,15 +640,16 @@ export class RoutineService {
         // accepted at `insertRun()`, so retrying the same slot is not
         // appropriate — let the error propagate so the scheduler advances
         // to the next cadence.
+        scrubScheduledPlaceholders();
         this.persistence.updateRun(runId, {
           status: 'failed',
           completedAt: Date.now(),
           summary: null,
           error: error instanceof Error ? error.message : String(error),
           errorCode: null,
-          projectId: wasScheduled ? clearScheduledPlaceholderId(run.projectId) : run.projectId,
-          conversationId: wasScheduled ? clearScheduledPlaceholderId(run.conversationId) : run.conversationId,
-          agentRunId: wasScheduled ? clearScheduledPlaceholderId(run.agentRunId) : run.agentRunId,
+          projectId: run.projectId,
+          conversationId: run.conversationId,
+          agentRunId: run.agentRunId,
         });
         throw error;
       }
