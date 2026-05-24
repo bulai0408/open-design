@@ -390,6 +390,73 @@ describe('RoutineService scheduled run idempotency', () => {
     }
   });
 
+  it('does not persist scheduled placeholder IDs when prepare fails before assigning real IDs', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));
+
+    const persistence = new SharedRoutinePersistence([fixtureRoutine()]);
+    const updatePatches: Array<Partial<RoutineRun>> = [];
+    const originalUpdate = persistence.updateRun.bind(persistence);
+    persistence.updateRun = (id: string, patch: Partial<RoutineRun>) => {
+      updatePatches.push({ ...patch });
+      originalUpdate(id, patch);
+    };
+
+    const service = new RoutineService(persistence);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    let discardCalls = 0;
+
+    service.setRunHandler(async ({ runId }) => {
+      return {
+        projectId: `routine-pending-project-${runId}`,
+        conversationId: `routine-pending-conv-${runId}`,
+        agentRunId: 'agent-run-1',
+        completion: Promise.resolve({ status: 'canceled' as const }),
+        prepare: () => {
+          // Mirrors createRoutineConversation() failing before
+          // persistPreparedRun() can copy real IDs onto the chat run or
+          // routine run.
+          throw new Error('project create failed');
+        },
+        discard: () => {
+          discardCalls += 1;
+        },
+        start: () => {
+          throw new Error('start should not run after a failed prepare');
+        },
+      };
+    });
+
+    try {
+      service.start();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(discardCalls).toBe(1);
+      expect(persistence.runs).toHaveLength(1);
+      const stored = persistence.runs[0]!;
+      expect(stored.status).toBe('failed');
+      expect(stored.completedAt).toBeTypeOf('number');
+      expect(stored.error).toContain('project create failed');
+      expect(stored.projectId).toBe('');
+      expect(stored.conversationId).toBe('');
+      expect(stored.agentRunId).toBe('agent-run-1');
+      expect(stored.projectId).not.toContain('routine-pending-project');
+      expect(stored.conversationId).not.toContain('routine-pending-conv');
+
+      const failurePatch = updatePatches.find((patch) => patch.status === 'failed');
+      expect(failurePatch).toBeDefined();
+      expect(failurePatch?.projectId).toBe('');
+      expect(failurePatch?.conversationId).toBe('');
+      expect(failurePatch?.agentRunId).toBe('agent-run-1');
+    } finally {
+      service.stop();
+      errors.mockRestore();
+    }
+  });
+
   it('still finalizes the failed row when prepare cleanup itself throws', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));

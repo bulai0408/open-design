@@ -109,6 +109,10 @@ interface ScheduledTimer {
   fireAt: Date;
 }
 
+function clearScheduledPlaceholderId(value: string): string {
+  return value.startsWith('routine-pending-') ? '' : value;
+}
+
 class ScheduledRunPersistenceError extends Error {
   constructor(
     readonly routineId: string,
@@ -615,9 +619,10 @@ export class RoutineService {
             discardError instanceof Error ? discardError.message : discardError,
           );
         }
-        // Persist the real project/conversation/agentRunId that `prepare()`
-        // assigned before throwing so the row does not retain
-        // `routine-pending-*` placeholders. The slot claim was already
+        // Persist IDs only after `prepare()` has replaced the scheduled
+        // placeholders with real resources. If preparation failed before
+        // enrichment, clear the sentinels so the terminal row does not point
+        // at fabricated project/conversation IDs. The slot claim was already
         // accepted at `insertRun()`, so retrying the same slot is not
         // appropriate — let the error propagate so the scheduler advances
         // to the next cadence.
@@ -627,9 +632,9 @@ export class RoutineService {
           summary: null,
           error: error instanceof Error ? error.message : String(error),
           errorCode: null,
-          projectId: run.projectId,
-          conversationId: run.conversationId,
-          agentRunId: run.agentRunId,
+          projectId: wasScheduled ? clearScheduledPlaceholderId(run.projectId) : run.projectId,
+          conversationId: wasScheduled ? clearScheduledPlaceholderId(run.conversationId) : run.conversationId,
+          agentRunId: wasScheduled ? clearScheduledPlaceholderId(run.agentRunId) : run.agentRunId,
         });
         throw error;
       }
