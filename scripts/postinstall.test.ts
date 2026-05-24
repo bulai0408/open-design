@@ -49,9 +49,11 @@ function distDelegatingBinTargets(directory: string, manifest: unknown): string[
   });
 }
 
-function workspaceDependencyNames(manifest: unknown): Set<string> {
+function workspaceDependencyNames(manifest: unknown, includeDevDependencies = false): Set<string> {
   assert(typeof manifest === "object" && manifest !== null);
-  const dependencyFields = ["dependencies", "optionalDependencies", "peerDependencies"] as const;
+  const dependencyFields = includeDevDependencies
+    ? ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]
+    : ["dependencies", "optionalDependencies", "peerDependencies"];
   const names = new Set<string>();
 
   for (const field of dependencyFields) {
@@ -130,6 +132,7 @@ test("root workspace depends on the daemon package so pnpm exec resolves the od 
 });
 
 test("postinstall builds workspace packages whose linkable bins delegate to dist", () => {
+  const rootManifest = readPackageJson("package.json");
   const manifests = new Map(
     workspacePackageDirectories().map((directory) => [
       directory,
@@ -137,6 +140,9 @@ test("postinstall builds workspace packages whose linkable bins delegate to dist
     ]),
   );
   const consumedWorkspacePackages = new Set<string>();
+  for (const name of workspaceDependencyNames(rootManifest, true)) {
+    consumedWorkspacePackages.add(name);
+  }
   for (const manifest of manifests.values()) {
     for (const name of workspaceDependencyNames(manifest)) {
       consumedWorkspacePackages.add(name);
