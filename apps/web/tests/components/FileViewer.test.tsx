@@ -679,6 +679,68 @@ describe('FileViewer SVG artifacts', () => {
     });
   });
 
+  it('reactivates a remounted srcdoc transport iframe with the same HTML', async () => {
+    const file = baseFile({
+      name: 'page.html',
+      path: 'page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+
+    const { container } = render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+      />,
+    );
+    const getSrcDocFrame = () =>
+      container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement | null;
+
+    const firstFrame = getSrcDocFrame();
+    expect(firstFrame).toBeTruthy();
+    const firstPostMessageSpy = vi.spyOn(firstFrame!.contentWindow!, 'postMessage');
+
+    fireEvent.click(screen.getByTestId('inspect-mode-toggle'));
+
+    await waitFor(() => {
+      expect(firstFrame!.getAttribute('data-od-active')).toBe('true');
+    });
+    await waitFor(() => {
+      expect(srcDocActivationMessages(firstPostMessageSpy.mock.calls)).toHaveLength(1);
+    });
+    const activatedHtml = srcDocActivationMessages(firstPostMessageSpy.mock.calls)[0]!.html;
+
+    fireEvent.click(container.querySelector('.viewer-mode-trigger')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: /code/i }));
+    await waitFor(() => {
+      expect(getSrcDocFrame()).toBeNull();
+    });
+
+    fireEvent.click(container.querySelector('.viewer-mode-trigger')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: /preview/i }));
+    const remountedFrame = getSrcDocFrame();
+    expect(remountedFrame).toBeTruthy();
+    expect(remountedFrame).not.toBe(firstFrame);
+    const remountedPostMessageSpy = vi.spyOn(remountedFrame!.contentWindow!, 'postMessage');
+
+    fireEvent.load(remountedFrame!);
+
+    await waitFor(() => {
+      expect(srcDocActivationMessages(remountedPostMessageSpy.mock.calls).at(-1)?.html)
+        .toBe(activatedHtml);
+    });
+  });
+
   it('uses the next file URL immediately when switching URL-loaded HTML previews', () => {
     const first = baseFile({
       name: 'first.html',
