@@ -761,11 +761,21 @@ function cliPathRepairState(
   };
 }
 
+const EXECUTABLE_CANDIDATE_RETRY_KINDS = new Set<ConnectionTestResponse['kind']>([
+  'agent_not_installed',
+  'agent_spawn_failed',
+  'unknown',
+]);
+
+function canTryNextExecutableCandidate(result: ConnectionTestResponse): boolean {
+  return !result.ok && EXECUTABLE_CANDIDATE_RETRY_KINDS.has(result.kind);
+}
+
 function nextExecutableCandidatePath(
   agent: AgentInfo,
   result: ConnectionTestResponse,
 ): string | null {
-  if (result.ok) return null;
+  if (!canTryNextExecutableCandidate(result)) return null;
   const candidates = agent.executableCandidates?.filter(
     (candidate) => candidate.available && candidate.path,
   ) ?? [];

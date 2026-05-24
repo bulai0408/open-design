@@ -1536,6 +1536,79 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
     );
   });
 
+  it.each([
+    ['agent_auth_required', 'Run opencode auth login first.'],
+    ['not_found_model', 'Selected model is not available.'],
+  ] as const)(
+    'does not offer Try next candidate for OpenCode %s failures',
+    async (kind, detail) => {
+      const opencode: AgentInfo = {
+        id: 'opencode',
+        name: 'OpenCode',
+        bin: 'opencode-cli',
+        available: true,
+        path: '/opt/homebrew/bin/opencode',
+        version: 'opencode 1.2.0',
+        models: [{ id: 'default', label: 'Default' }],
+        executableCandidates: [
+          {
+            path: '/opt/homebrew/bin/opencode',
+            bin: 'opencode',
+            version: 'opencode 1.2.0',
+            source: 'path',
+            selected: true,
+            available: true,
+          },
+          {
+            path: '/Users/mac/.opencode/bin/opencode',
+            bin: 'opencode',
+            version: 'opencode 1.2.1',
+            source: 'known',
+            selected: false,
+            available: true,
+          },
+        ],
+      };
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url === '/api/memory') {
+          return new Response(
+            JSON.stringify({ enabled: true, memories: [], extraction: null }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            kind,
+            latencyMs: 18,
+            agentName: 'OpenCode',
+            model: 'default',
+            detail,
+            usedExecutableSource: 'path',
+            usedExecutablePath: '/opt/homebrew/bin/opencode',
+            detectedExecutablePath: '/opt/homebrew/bin/opencode',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      renderSettingsDialog(
+        { mode: 'daemon', agentId: 'opencode' },
+        { agents: [opencode] },
+      );
+
+      fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*1 installed/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Retry test/i })).toBeTruthy();
+      });
+      expect(screen.queryByRole('button', { name: /Try next candidate/i })).toBeNull();
+    },
+  );
+
   it('describes known OpenCode install fallbacks without calling them PATH binaries', async () => {
     const opencode: AgentInfo = {
       id: 'opencode',

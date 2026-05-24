@@ -1,6 +1,6 @@
 import { test } from 'vitest';
 import {
-  AGENT_DEFS, assert, chmodSync, codex, cursorAgent, detectAgents, join, mkdirSync, mkdtempSync, rmSync, tmpdir, withEnvSnapshot, withPlatform, writeFileSync,
+  AGENT_DEFS, assert, chmodSync, codex, cursorAgent, detectAgents, join, mkdirSync, mkdtempSync, opencode, resolveAgentLaunch, rmSync, tmpdir, withEnvSnapshot, withPlatform, writeFileSync,
 } from './helpers/test-helpers.js';
 import { readLocalAgentProfileDefs } from '../../src/runtimes/registry.js';
 
@@ -399,6 +399,10 @@ test('opencode detection promotes a healthy known candidate when the PATH candid
         { path: staleOpenCode, available: false, version: null, selected: false },
         { path: healthyOpenCode, available: true, version: 'opencode 1.2.0', selected: true },
       ]);
+
+      const launch = resolveAgentLaunch(opencode);
+      assert.equal(launch.selectedPath, healthyOpenCode);
+      assert.equal(launch.launchPath, healthyOpenCode);
     });
   } finally {
     rmSync(pathDir, { recursive: true, force: true });

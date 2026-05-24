@@ -2,7 +2,12 @@ import path from 'node:path';
 import { execAgentFile } from './invocation.js';
 import { AGENT_DEFS } from './registry.js';
 import { DEFAULT_MODEL_OPTION, rememberLiveModels } from './models.js';
-import { applyAgentLaunchEnv, resolveAgentLaunch } from './launch.js';
+import {
+  applyAgentLaunchEnv,
+  forgetDetectedAgentLaunchSelection,
+  rememberDetectedAgentLaunchSelection,
+  resolveAgentLaunch,
+} from './launch.js';
 import { spawnEnvForAgent } from './env.js';
 import { probeAgentAuthStatus } from './auth.js';
 import { agentCapabilities } from './capabilities.js';
@@ -148,8 +153,9 @@ async function probe(
   // If detection probes the shim but chat/run spawns the native binary, the
   // UI incorrectly reports "not installed" until the user pins CODEX_BIN by
   // hand even though the real launch path is healthy.
-  const launch = resolveAgentLaunch(def, configuredEnv);
+  const launch = resolveAgentLaunch(def, configuredEnv, { useDetectedSelection: false });
   if (!launch.selectedPath || !launch.launchPath) {
+    rememberDetectedAgentLaunchSelection(def, launch, null);
     return unavailableAgent(def);
   }
   const executableCandidates = await probeExecutableCandidates(
@@ -157,17 +163,15 @@ async function probe(
     launch.executableCandidates,
     configuredEnv,
   );
-  const probeEnv = applyAgentLaunchEnv(
-    spawnEnvForAgent(
-      def.id,
-      {
-        ...process.env,
-        ...(def.env || {}),
-      },
-      configuredEnv,
-    ),
-    launch,
+  const baseProbeEnv = spawnEnvForAgent(
+    def.id,
+    {
+      ...process.env,
+      ...(def.env || {}),
+    },
+    configuredEnv,
   );
+  let probeEnv = applyAgentLaunchEnv(baseProbeEnv, launch);
   let outcome = await probeVersionAtPath(def, launch.launchPath, probeEnv);
   let detectedPath = launch.selectedPath;
   let probePath = launch.launchPath;
@@ -187,11 +191,20 @@ async function probe(
       detectedPath = promotedCandidate.path;
       probePath = promotedCandidate.path;
       outcome = { kind: 'spawned', version: promotedCandidate.version ?? null };
+      probeEnv = applyAgentLaunchEnv(
+        baseProbeEnv,
+        {
+          childPathPrepend: path.isAbsolute(promotedCandidate.path)
+            ? [path.dirname(promotedCandidate.path)]
+            : [],
+        },
+      );
       candidateList = executableCandidates.map((candidate) => ({
         ...candidate,
         selected: candidate.path === promotedCandidate.path,
       }));
     } else {
+      rememberDetectedAgentLaunchSelection(def, launch, detectedPath);
       return unavailableAgent(def, {
         path: detectedPath,
         version: null,
@@ -220,6 +233,7 @@ async function probe(
   }
   const modelResult = await fetchModels(def, probePath, probeEnv);
   const auth = await probeAgentAuthStatus(def.id, probePath, probeEnv);
+  rememberDetectedAgentLaunchSelection(def, launch, detectedPath);
   return {
     ...stripFns(def),
     models: modelResult.models,
@@ -303,6 +317,7 @@ async function safeProbe(
   try {
     return await probe(def, configuredEnv);
   } catch {
+    forgetDetectedAgentLaunchSelection(def.id);
     // Fault isolation (issue #2297): one adapter's probe blowing up
     // — e.g. a synchronous filesystem throw during PATH walking on a
     // packaged Windows daemon, or an async rejection from one of the

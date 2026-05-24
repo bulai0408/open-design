@@ -12,11 +12,95 @@ export type AgentLaunchResolution = ReturnType<typeof inspectAgentExecutableReso
   diagnostic: string | null;
 };
 
+type AgentLaunchOptions = {
+  useDetectedSelection?: boolean;
+};
+
+type LaunchResolutionKeyInput = Pick<
+  ReturnType<typeof inspectAgentExecutableResolution>,
+  'configuredOverridePath' | 'pathResolvedPath'
+>;
+
+type DetectedLaunchSelection = {
+  key: string;
+  selectedPath: string;
+};
+
+// `detectAgents()` may promote a later healthy candidate after proving the
+// primary PATH hit is stale. Cache that promoted choice so the next chat/test
+// launch uses the same binary Settings just surfaced.
+const detectedLaunchSelections = new Map<string, DetectedLaunchSelection>();
+
+function launchResolutionKey(
+  def: RuntimeAgentDef,
+  resolution: LaunchResolutionKeyInput,
+): string {
+  return [
+    def.id,
+    resolution.configuredOverridePath ?? '',
+    resolution.pathResolvedPath ?? '',
+  ].join('\0');
+}
+
+export function rememberDetectedAgentLaunchSelection(
+  def: RuntimeAgentDef,
+  resolution: Pick<AgentLaunchResolution, 'configuredOverridePath' | 'pathResolvedPath' | 'selectedPath'>,
+  selectedPath: string | null | undefined,
+): void {
+  if (
+    !selectedPath ||
+    selectedPath === resolution.selectedPath ||
+    resolution.configuredOverridePath
+  ) {
+    detectedLaunchSelections.delete(def.id);
+    return;
+  }
+  detectedLaunchSelections.set(def.id, {
+    key: launchResolutionKey(def, resolution),
+    selectedPath,
+  });
+}
+
+export function forgetDetectedAgentLaunchSelection(agentId: string): void {
+  detectedLaunchSelections.delete(agentId);
+}
+
+function detectedAgentLaunchSelection(
+  def: RuntimeAgentDef,
+  resolution: ReturnType<typeof inspectAgentExecutableResolution>,
+): string | null {
+  const cached = detectedLaunchSelections.get(def.id);
+  if (!cached) return null;
+  if (cached.key !== launchResolutionKey(def, resolution)) {
+    detectedLaunchSelections.delete(def.id);
+    return null;
+  }
+  const candidate = resolution.executableCandidates.find(
+    (item) => item.source !== 'configured' && item.path === cached.selectedPath,
+  );
+  if (!candidate) detectedLaunchSelections.delete(def.id);
+  return candidate?.path ?? null;
+}
+
 export function resolveAgentLaunch(
   def: RuntimeAgentDef,
   configuredEnv: Record<string, string> = {},
+  options: AgentLaunchOptions = {},
 ): AgentLaunchResolution {
-  const resolution = inspectAgentExecutableResolution(def, configuredEnv);
+  const baseResolution = inspectAgentExecutableResolution(def, configuredEnv);
+  const detectedSelection = options.useDetectedSelection === false
+    ? null
+    : detectedAgentLaunchSelection(def, baseResolution);
+  const resolution = detectedSelection
+    ? {
+        ...baseResolution,
+        selectedPath: detectedSelection,
+        executableCandidates: baseResolution.executableCandidates.map((candidate) => ({
+          ...candidate,
+          selected: candidate.path === detectedSelection,
+        })),
+      }
+    : baseResolution;
   if (!resolution.selectedPath) {
     return { ...resolution, launchPath: null, launchKind: 'selected', childPathPrepend: [], diagnostic: null };
   }
