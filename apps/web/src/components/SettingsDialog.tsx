@@ -776,15 +776,22 @@ function nextExecutableCandidatePath(
   result: ConnectionTestResponse,
 ): string | null {
   if (!canTryNextExecutableCandidate(result)) return null;
-  const candidates = agent.executableCandidates?.filter(
+  const candidates = agent.executableCandidates?.filter((candidate) => candidate.path) ?? [];
+  const availableCandidates = candidates.filter(
     (candidate) => candidate.available && candidate.path,
-  ) ?? [];
-  if (candidates.length < 2) return null;
+  );
+  if (availableCandidates.length === 0) return null;
   const usedPath = result.usedExecutablePath ?? result.detectedExecutablePath ?? agent.path ?? '';
-  const usedIndex = candidates.findIndex((candidate) => candidate.path === usedPath);
+  if (
+    candidates.length < 2 &&
+    availableCandidates.every((candidate) => candidate.path === usedPath)
+  ) {
+    return null;
+  }
+  const usedIndex = availableCandidates.findIndex((candidate) => candidate.path === usedPath);
   const start = usedIndex >= 0 ? usedIndex + 1 : 0;
-  for (let offset = 0; offset < candidates.length; offset += 1) {
-    const candidate = candidates[(start + offset) % candidates.length];
+  for (let offset = 0; offset < availableCandidates.length; offset += 1) {
+    const candidate = availableCandidates[(start + offset) % availableCandidates.length];
     if (candidate && candidate.path !== usedPath) return candidate.path;
   }
   return null;
