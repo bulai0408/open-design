@@ -730,8 +730,12 @@ function parseFlags(argv, opts = {}) {
       continue;
     }
     if (stringFlags.has(key)) {
+      // Generic parser stays permissive on the value side so that
+      // free-form string inputs (e.g. `--message "--help me"`,
+      // `--prompt --raw-flag`) keep working for every other command.
+      // Logs-specific strictness lives in `parseRunLogsArgs()`.
       const next = argv[i + 1];
-      if (next == null || next.startsWith('-')) {
+      if (next == null) {
         throw new Error(`flag --${key} requires a value`);
       }
       out[key] = next;
@@ -4440,7 +4444,19 @@ Common options:
     const params = new URLSearchParams();
     if (logFlags.since != null) params.set('since', logFlags.since);
     const suffix = params.size ? `?${params.toString()}` : '';
-    const resp = await fetch(`${logBase}/api/runs/${encodeURIComponent(id)}/log${suffix}`);
+    let resp;
+    try {
+      resp = await fetch(`${logBase}/api/runs/${encodeURIComponent(id)}/log${suffix}`);
+    } catch (err) {
+      // Network-level failures (refused connection, DNS, etc.) must
+      // surface as the stable `daemon-not-running` envelope so scripted
+      // callers can branch on `error.code` instead of an unstructured
+      // stack trace.
+      return exitWithStructuredError({
+        code:    'daemon-not-running',
+        message: `Cannot reach daemon at ${logBase}: ${err?.message ?? err}`,
+      });
+    }
     if (!resp.ok) {
       return structuredHttpFailure(
         resp,

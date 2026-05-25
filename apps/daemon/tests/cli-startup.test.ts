@@ -360,6 +360,99 @@ describe('CLI startup boundaries', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it('preserves shared parseFlags acceptance of string values that begin with a dash', async () => {
+    // Regression: the run-logs strict-flag fix initially leaked into the
+    // shared `parseFlags()`, which broke `--message "--something"` and
+    // other free-form string inputs across every command. The logs-only
+    // strictness must stay scoped to `parseRunLogsArgs()`; this guards
+    // that boundary by driving `od run start --message --weird-value`
+    // and asserting the value reaches the request body unchanged.
+    const requests: { url: string; body: unknown }[] = [];
+    const server = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk) => chunks.push(chunk));
+      req.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        let parsedBody: unknown = null;
+        try { parsedBody = raw ? JSON.parse(raw) : null; } catch { parsedBody = raw; }
+        requests.push({ url: req.url ?? '', body: parsedBody });
+        if (req.url === '/api/runs' && req.method === 'POST') {
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({ runId: 'run-7' }));
+          return;
+        }
+        res.statusCode = 404;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'not found' } }));
+      });
+    });
+
+    try {
+      const baseUrl = await listen(server);
+      await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          cliEntry,
+          'run',
+          'start',
+          '--daemon-url',
+          baseUrl,
+          '--project',
+          'repro',
+          '--message',
+          '--weird-value',
+        ],
+        { cwd: daemonRoot },
+      );
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        url:  '/api/runs',
+        body: { projectId: 'repro', message: '--weird-value' },
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('surfaces an unreachable daemon as a structured daemon-not-running envelope for od run logs', async () => {
+    // Regression: the run-logs route used a bare `fetch()`, so a refused
+    // connection leaked as an unstructured stack trace instead of the
+    // stable error envelope scripted callers expect. Point the CLI at a
+    // port that is guaranteed to be closed and assert the envelope shape.
+    const closedServer = http.createServer(() => undefined);
+    const baseUrl = await listen(closedServer);
+    await new Promise<void>((resolve) => closedServer.close(() => resolve()));
+
+    try {
+      await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          cliEntry,
+          'run',
+          'logs',
+          '--daemon-url',
+          baseUrl,
+          'run-1',
+        ],
+        { cwd: daemonRoot },
+      );
+      throw new Error('od run logs unexpectedly succeeded against a closed daemon');
+    } catch (error: unknown) {
+      const failed = error as { code?: number; stderr?: string };
+      expect(failed.code).toBe(64);
+      const envelope = readStructuredError(failed.stderr ?? '');
+      expect(envelope).toMatchObject({
+        error: { code: 'daemon-not-running' },
+      });
+      expect(envelope.error.message).toContain(baseUrl);
+    }
+  });
 });
 
 async function listen(server: http.Server): Promise<string> {
