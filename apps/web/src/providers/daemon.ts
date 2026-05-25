@@ -846,6 +846,22 @@ async function consumeDaemonRun({
       (!serverDeclaredSuccess &&
         (exitSignal || (exitCode !== null && exitCode !== 0)));
     if (looksLikeFailure) {
+      // On a resumed `/events` stream that does deliver `end`, `stderrBuf`
+      // may be a partial replay (the earlier provider payload was already
+      // flushed before the reattach). The daemon's persisted run record is
+      // the authoritative failure source in that case, so hydrate
+      // `fallbackRunError` / `fallbackRunErrorCode` from `GET /api/runs/:id`
+      // before classifying whenever the no-`end` fallback at line 808-827
+      // didn't already populate them. Without this the classifier sees only
+      // the truncated stderr tail and can mislabel the run or hide the
+      // useful remediation text this path is meant to preserve.
+      if (fallbackRunError === null && fallbackRunErrorCode === null) {
+        const status = await fetchChatRunStatus(runId);
+        if (status) {
+          fallbackRunError = status.error ?? null;
+          fallbackRunErrorCode = status.errorCode ?? null;
+        }
+      }
       const diagnostic = combineFailureDiagnostics(
         stderrBuf,
         runStatusDiagnostic(fallbackRunError, fallbackRunErrorCode),

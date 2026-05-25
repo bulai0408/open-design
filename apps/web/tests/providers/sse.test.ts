@@ -1204,6 +1204,77 @@ describe('streamViaDaemon', () => {
     expect(handlers.onDone).not.toHaveBeenCalled();
   });
 
+  it('hydrates the persisted run-status diagnostic when a resumed run replays partial stderr plus end', async () => {
+    const handlers = createDaemonHandlers();
+    const replayedStderr = 'late stderr chunk without the provider payload';
+    const runError = [
+      'Error: request failed',
+      '  cause: {',
+      '    code: 429,',
+      "    message: 'You have exhausted your capacity on this model.'",
+      '  },',
+      '  retryDelayMs: 10000',
+      '}',
+    ].join('\n');
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/runs/run-1/events?after=7') {
+        return sseResponse([
+          'id: 8',
+          'event: stderr',
+          `data: ${JSON.stringify({ chunk: replayedStderr })}`,
+          '',
+          'id: 9',
+          'event: end',
+          'data: {"code":1,"status":"failed"}',
+          '',
+          '',
+        ].join('\n'));
+      }
+      if (url === '/api/runs/run-1') {
+        return jsonResponse({
+          id: 'run-1',
+          projectId: null,
+          conversationId: null,
+          assistantMessageId: null,
+          agentId: 'gemini',
+          status: 'failed',
+          createdAt: 1,
+          updatedAt: 2,
+          exitCode: 1,
+          signal: null,
+          error: runError,
+          errorCode: 'AGENT_EXECUTION_FAILED',
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await reattachDaemonRun({
+      runId: 'run-1',
+      agentId: 'gemini',
+      signal: new AbortController().signal,
+      initialLastEventId: '7',
+      handlers,
+    });
+
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === '/api/runs/run-1')).toBe(true);
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      category?: string;
+      details?: string;
+      retryDelayMs?: number;
+    };
+    expect(error.category).toBe('quota_exhausted');
+    expect(error.retryDelayMs).toBe(10000);
+    expect(error.message).toContain('capacity');
+    expect(error.details).toContain(replayedStderr);
+    expect(error.details).toContain('AGENT_EXECUTION_FAILED');
+    expect(error.details).toContain(runError);
+    expect(error.message).not.toBe('agent exited with code 1');
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
   it('includes selected preview comments without requiring visible draft text', async () => {
     const handlers = createDaemonHandlers();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
