@@ -1,7 +1,18 @@
+import { realpathSync, symlinkSync } from 'node:fs';
 import { test } from 'vitest';
 import {
   AGENT_DEFS, assert, chmodSync, codex, cursorAgent, detectAgents, join, mkdirSync, mkdtempSync, opencode, resolveAgentLaunch, rmSync, tmpdir, withEnvSnapshot, withPlatform, writeFileSync,
 } from './helpers/test-helpers.js';
+
+function codexNativeTargetTriple(): string {
+  if (process.platform === 'darwin' && process.arch === 'arm64') return 'aarch64-apple-darwin';
+  if (process.platform === 'darwin' && process.arch === 'x64') return 'x86_64-apple-darwin';
+  if (process.platform === 'linux' && process.arch === 'arm64') return 'aarch64-unknown-linux-musl';
+  if (process.platform === 'linux' && process.arch === 'x64') return 'x86_64-unknown-linux-musl';
+  if (process.platform === 'win32' && process.arch === 'arm64') return 'aarch64-pc-windows-msvc';
+  if (process.platform === 'win32' && process.arch === 'x64') return 'x86_64-pc-windows-msvc';
+  return `${process.platform}-${process.arch}`;
+}
 import { readLocalAgentProfileDefs } from '../../src/runtimes/registry.js';
 
 test('AGENT_DEFS ids are unique', () => {
@@ -451,6 +462,82 @@ test('opencode detection preserves candidate diagnostics when a configured binar
   } finally {
     rmSync(configuredDir, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// Probing candidate paths directly with `--version` is incorrect for Codex
+// because the PATH-visible `codex` entry is often a `#!/usr/bin/env node`
+// wrapper that fails to invoke from a stripped GUI environment, while
+// `resolveAgentLaunch()` upgrades it to the packaged native binary that
+// the runtime actually spawns. `probeExecutableCandidates()` must route
+// every candidate through the same shared launch resolver so Settings
+// surfaces a Codex wrapper candidate as healthy whenever the real launch
+// path works — otherwise the `Use` action gets hidden for paths the
+// runtime would happily spawn.
+test('codex detection probes wrapper candidates through launch resolution', async () => {
+  const fsTest = process.platform === 'win32' ? false : true;
+  if (!fsTest) return;
+  const root = mkdtempSync(join(tmpdir(), 'od-agents-codex-wrapper-candidates-'));
+  try {
+    await withEnvSnapshot(['PATH', 'OD_AGENT_HOME'], async () => {
+      const wrapperPkgDir = join(root, 'node_modules', '@openai', 'codex');
+      const wrapperRealPath = join(wrapperPkgDir, 'bin', 'codex.js');
+      const wrapperLinkDir = join(root, 'node_modules', '.bin');
+      const wrapperLinkPath = join(wrapperLinkDir, 'codex');
+      const nativePkgDir = join(wrapperPkgDir, 'node_modules', '@openai', `codex-${process.platform}-${process.arch}`);
+      const nativePathDir = join(nativePkgDir, 'vendor', codexNativeTargetTriple(), 'path');
+      const nativeBin = join(nativePkgDir, 'vendor', codexNativeTargetTriple(), 'codex', 'codex');
+      mkdirSync(join(wrapperPkgDir, 'bin'), { recursive: true });
+      mkdirSync(wrapperLinkDir, { recursive: true });
+      mkdirSync(join(nativePkgDir, 'vendor', codexNativeTargetTriple(), 'codex'), { recursive: true });
+      mkdirSync(nativePathDir, { recursive: true });
+      // Wrapper that resembles the real @openai/codex shim but cannot be
+      // invoked from this test (the body satisfies looksLikeCodexNodeWrapper
+      // so the resolver will keep searching). When probed directly the
+      // wrapper exits with code 127, matching the "shim references a target
+      // that is not on PATH" failure mode that motivated this PR.
+      writeFileSync(
+        wrapperRealPath,
+        '#!/bin/sh\n# @openai/codex wrapper\nexit 127\n',
+      );
+      // Native binary the launch resolver upgrades to. Reports a real
+      // version string so the candidate row carries useful diagnostics.
+      writeFileSync(
+        nativeBin,
+        `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "codex 1.0.0"; exit 0; fi
+exit 0
+`,
+      );
+      chmodSync(wrapperRealPath, 0o755);
+      chmodSync(nativeBin, 0o755);
+      symlinkSync(wrapperRealPath, wrapperLinkPath);
+      process.env.PATH = wrapperLinkDir;
+      process.env.OD_AGENT_HOME = root;
+
+      const agents = await detectAgents();
+      const detected = agents.find((agent) => agent.id === 'codex');
+
+      assert.ok(detected);
+      assert.equal(detected.available, true);
+      const wrapperCandidate = detected.executableCandidates?.find(
+        (candidate) => candidate.path === wrapperLinkPath,
+      );
+      assert.ok(
+        wrapperCandidate,
+        'codex wrapper must appear as an executable candidate',
+      );
+      // Without the launch-resolution probe this assertion fails: raw
+      // `--version` against the wrapper exits 127 and the candidate is
+      // recorded as `available: false`.
+      assert.equal(wrapperCandidate.available, true);
+      assert.equal(wrapperCandidate.version, 'codex 1.0.0');
+      // realpathSync because the wrapper was reached through a symlink
+      // and detection canonicalises the native binary path.
+      assert.equal(realpathSync(nativeBin), realpathSync(nativeBin));
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

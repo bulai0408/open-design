@@ -10,7 +10,7 @@ import type {
   RuntimeExecutableCandidateSource,
 } from './types.js';
 
-const AGENT_BIN_ENV_KEYS = new Map<string, string>([
+export const AGENT_BIN_ENV_KEYS = new Map<string, string>([
   ['claude', 'CLAUDE_BIN'],
   ['codex', 'CODEX_BIN'],
   ['copilot', 'COPILOT_BIN'],

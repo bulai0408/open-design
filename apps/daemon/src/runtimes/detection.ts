@@ -2,6 +2,7 @@ import path from 'node:path';
 import { execAgentFile } from './invocation.js';
 import { AGENT_DEFS } from './registry.js';
 import { DEFAULT_MODEL_OPTION, rememberLiveModels } from './models.js';
+import { AGENT_BIN_ENV_KEYS } from './executables.js';
 import {
   applyAgentLaunchEnv,
   forgetDetectedAgentLaunchSelection,
@@ -266,17 +267,49 @@ async function probeExecutableCandidates(
     },
     configuredEnv,
   );
+  // Probe each candidate through the same launch resolution the runtime
+  // uses at spawn time. The detection-level probe must not drop below this
+  // boundary because shared launch logic can substantively rewrite the
+  // executable that actually runs — most importantly for Codex, where the
+  // PATH-visible `codex` entry is often a `#!/usr/bin/env node` wrapper
+  // that fails `--version` from a GUI-launched daemon while
+  // `resolveAgentLaunch()` upgrades it to a packaged native binary that
+  // works. Probing the raw candidate path would mark valid Codex
+  // candidates as broken, hide the `Use` action for paths the real launch
+  // would handle, and break the new candidate switcher's repair flow.
+  const envKey = AGENT_BIN_ENV_KEYS.get(def.id);
   return Promise.all(
     candidates.map(async (candidate) => {
-      const candidateEnv = applyAgentLaunchEnv(
+      // For configured candidates we already received the user-pinned path
+      // through configuredEnv; reuse it. For other candidates (and for
+      // agents without an env override key) we synthesize an override so
+      // `resolveAgentLaunch()` walks the same path the runtime walks when
+      // launched against this binary.
+      const candidateEnv: Record<string, string> =
+        candidate.source === 'configured' || !envKey
+          ? { ...configuredEnv }
+          : { ...configuredEnv, [envKey]: candidate.path };
+      const launch = resolveAgentLaunch(def, candidateEnv, { useDetectedSelection: false });
+      // resolveAgentLaunch() validates the override is a real, invocable
+      // file before it adopts it. When it refuses (vanished/perm-stripped
+      // path), fall back to probing the raw candidate so we still record
+      // the failure rather than silently dropping the entry.
+      const launchPath =
+        envKey && candidate.source !== 'configured' && launch.configuredOverridePath !== candidate.path
+          ? candidate.path
+          : launch.launchPath ?? candidate.path;
+      const probeEnv = applyAgentLaunchEnv(
         baseEnv,
         {
-          childPathPrepend: path.isAbsolute(candidate.path)
-            ? [path.dirname(candidate.path)]
-            : [],
+          childPathPrepend:
+            launch.launchPath && launch.childPathPrepend.length > 0
+              ? launch.childPathPrepend
+              : path.isAbsolute(candidate.path)
+                ? [path.dirname(candidate.path)]
+                : [],
         },
       );
-      const outcome = await probeVersionAtPath(def, candidate.path, candidateEnv);
+      const outcome = await probeVersionAtPath(def, launchPath, probeEnv);
       if (outcome.kind === 'not-invocable') {
         return { ...candidate, available: false, version: null };
       }
