@@ -1955,44 +1955,106 @@ export async function testAgentConnection(
     }
     return primaryResult;
   }
-  const fallbackResult = await testAgentConnectionInternal(
-    {
-      ...input,
-      agentCliEnv: setAgentBinOverride(
-        stripAgentBinOverride(validatedPrefs, input.agentId),
-        input.agentId,
-        pathExecutablePath,
-      ),
-      executableFailureDetail,
-    },
+  // Iterate every remaining non-configured candidate in order so the
+  // recovery flow doesn't fail closed on the first invocable-but-broken
+  // alternate. `inspectAgentExecutableCandidates()` only proves a file is
+  // version-probeable, not that the full smoke test succeeds; a realistic
+  // stale-wrapper layout is configured-binary-fails / first-PATH-candidate-
+  // fails-smoke-prompt / later-known-install-succeeds. We must exercise
+  // each alternate via `testAgentConnectionInternal()` until one passes or
+  // we run out of candidates.
+  const fallbackCandidates = collectFallbackCandidates(
+    executableResolution.executableCandidates,
+    executableResolution.configuredOverridePath,
+    pathExecutablePath,
+    def,
+    configuredAgentEnv,
   );
-  if (!fallbackResult.ok) {
+  for (const candidatePath of fallbackCandidates) {
+    const fallbackResult = await testAgentConnectionInternal(
+      {
+        ...input,
+        agentCliEnv: setAgentBinOverride(
+          stripAgentBinOverride(validatedPrefs, input.agentId),
+          input.agentId,
+          candidatePath,
+        ),
+        executableFailureDetail,
+      },
+    );
+    if (!fallbackResult.ok) continue;
+    const candidateSource = executableCandidateSource(
+      executableResolution.executableCandidates,
+      candidatePath,
+    );
+    const candidateDiagnosticSource = executableDiagnosticSource(candidateSource);
     return {
-      ...withUsedExecutableDiagnostics(primaryResult),
+      ...fallbackResult,
+      configuredExecutablePath: executableResolution.configuredOverridePath,
+      detectedExecutablePath: candidatePath,
+      ...(candidateDiagnosticSource
+        ? { detectedExecutableSource: candidateDiagnosticSource }
+        : {}),
+      usedExecutablePath: fallbackResult.usedExecutablePath ?? candidatePath,
+      usedExecutableSource: 'fallback_failed',
       detail: redactSecrets(
-        [
-          primaryResult.detail ?? '',
-          executableFailureDetail,
-        ].filter(Boolean).join(' '),
+        agentExecutableFallbackSuccessDetail(
+          input.agentId,
+          executableResolution.configuredOverridePath,
+          candidatePath,
+          candidateDiagnosticSource,
+        ),
       ),
     };
   }
   return {
-    ...fallbackResult,
-    configuredExecutablePath: executableResolution.configuredOverridePath,
-    detectedExecutablePath: pathExecutablePath,
-    ...(pathExecutableDiagnosticSource
-      ? { detectedExecutableSource: pathExecutableDiagnosticSource }
-      : {}),
-    usedExecutablePath: fallbackResult.usedExecutablePath ?? pathExecutablePath,
-    usedExecutableSource: 'fallback_failed',
+    ...withUsedExecutableDiagnostics(primaryResult),
     detail: redactSecrets(
-      agentExecutableFallbackSuccessDetail(
-        input.agentId,
-        executableResolution.configuredOverridePath,
-        pathExecutablePath,
-        pathExecutableDiagnosticSource,
-      ),
+      [
+        primaryResult.detail ?? '',
+        executableFailureDetail,
+      ].filter(Boolean).join(' '),
     ),
   };
+}
+
+/**
+ * Build the ordered list of non-configured candidate paths to retry. We
+ * start with the preselected fallback candidate (so the simple
+ * one-alternate layout keeps the same retry target as before), then
+ * fall through every other non-configured candidate from the detection
+ * scan in PATH-then-known-install order. Each path is included at most
+ * once and the configured override path is never retried (it just
+ * failed). When detection didn't produce any candidates we fall back to
+ * a live `inspectAgentExecutableCandidates()` walk so deployments
+ * without a populated detection cache still recover.
+ */
+function collectFallbackCandidates(
+  candidates: RuntimeExecutableCandidate[],
+  configuredOverridePath: string | null,
+  preselectedPath: string | null,
+  def: RuntimeAgentDef | null | undefined,
+  configuredAgentEnv: Record<string, string>,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (value: string | null | undefined) => {
+    if (!value) return;
+    if (configuredOverridePath && value === configuredOverridePath) return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    out.push(value);
+  };
+  add(preselectedPath);
+  for (const candidate of candidates) {
+    if (candidate.source === 'configured') continue;
+    add(candidate.path);
+  }
+  if (out.length === 0 && def) {
+    for (const candidate of inspectAgentExecutableCandidates(def, configuredAgentEnv)) {
+      if (candidate.source === 'configured') continue;
+      add(candidate.path);
+    }
+  }
+  return out;
 }
