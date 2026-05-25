@@ -32,6 +32,11 @@ interface Props {
   onOpenLiveArtifact: (tabId: LiveArtifactWorkspaceEntry['tabId']) => void;
   onRenameFile: (from: string, to: string) => Promise<ProjectFile | null> | ProjectFile | null;
   onCreateFolder?: (path: string) => Promise<void> | void;
+  // Project-relative folder paths that exist on disk but have no files yet.
+  // Without this, `New folder` would appear to no-op: the panel derives
+  // subdirectory rows from the prefixes of `files[].name`, so an empty
+  // folder has nothing to contribute.
+  ephemeralFolders?: string[];
   onMoveFilesToFolder?: (
     names: string[],
     toFolder: string,
@@ -133,6 +138,7 @@ export function DesignFilesPanel({
   onOpenLiveArtifact,
   onRenameFile,
   onCreateFolder,
+  ephemeralFolders,
   onMoveFilesToFolder,
   onDeleteFile,
   onDeleteFiles,
@@ -181,6 +187,8 @@ export function DesignFilesPanel({
   // Derive immediate subdirectories and files at the current directory level
   // from the flat files list. Files with names like "a/b/c.html" contribute
   // "a" as a directory when currentDir is '' and "b" when currentDir is "a".
+  // `ephemeralFolders` (e.g. just-created empty folders) is merged in so the
+  // panel surfaces folders that have no files contributing prefixes yet.
   const { dirsAtCurrentDir, filesAtCurrentDir } = useMemo(() => {
     const prefix = currentDir === '' ? '' : `${currentDir}/`;
     const dirs = new Set<string>();
@@ -195,11 +203,22 @@ export function DesignFilesPanel({
         dirs.add(remainder.slice(0, slashIdx));
       }
     }
+    if (ephemeralFolders) {
+      for (const full of ephemeralFolders) {
+        if (!full || full === currentDir) continue;
+        if (currentDir !== '' && !full.startsWith(prefix)) continue;
+        const remainder = full.slice(prefix.length);
+        if (remainder.length === 0) continue;
+        const slashIdx = remainder.indexOf('/');
+        const immediate = slashIdx === -1 ? remainder : remainder.slice(0, slashIdx);
+        dirs.add(immediate);
+      }
+    }
     return {
       dirsAtCurrentDir: [...dirs].sort((a, b) => a.localeCompare(b)),
       filesAtCurrentDir: localFiles,
     };
-  }, [files, currentDir]);
+  }, [files, currentDir, ephemeralFolders]);
 
   const kindCounts = useMemo(() => {
     const counts = new Map<ProjectFileKind, number>();
@@ -325,20 +344,29 @@ export function DesignFilesPanel({
 
   // Navigate up to the nearest ancestor that still exists when files under
   // currentDir disappear (e.g. after deleting the last file in a subfolder).
+  // An ephemeral folder at or beneath currentDir also counts as "exists" so
+  // that creating a new folder and being navigated into it doesn't immediately
+  // bounce the user back out before any files land there.
   useEffect(() => {
     if (currentDir === '') return;
     const prefix = `${currentDir}/`;
-    if (files.some((f) => f.name.startsWith(prefix))) return;
+    const ephemeral = ephemeralFolders ?? [];
+    const hasUnder = (dir: string) => {
+      const p = `${dir}/`;
+      if (files.some((f) => f.name.startsWith(p))) return true;
+      return ephemeral.some((e) => e === dir || e.startsWith(p));
+    };
+    if (hasUnder(currentDir)) return;
     const parts = currentDir.split('/');
     for (let i = parts.length - 1; i > 0; i--) {
       const ancestor = parts.slice(0, i).join('/');
-      if (files.some((f) => f.name.startsWith(`${ancestor}/`))) {
+      if (hasUnder(ancestor)) {
         setCurrentDir(ancestor);
         return;
       }
     }
     setCurrentDir('');
-  }, [files, currentDir]);
+  }, [files, currentDir, ephemeralFolders]);
 
   // Outside-click + escape to close the filter popover. Stops short of a
   // full focus trap because the popover hosts only checkboxes plus a

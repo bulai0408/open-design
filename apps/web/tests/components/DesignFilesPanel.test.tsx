@@ -511,6 +511,32 @@ describe('DesignFilesPanel large-list regression', () => {
     expect(prompt).toHaveBeenCalledWith('Folder path', 'assets');
   });
 
+  it('renders ephemeral folder rows even when no files contribute a prefix', () => {
+    renderPanel(generateFiles(1), { ephemeralFolders: ['assets'] });
+
+    const dirRows = document.querySelectorAll('.df-dir-row');
+    expect(dirRows.length).toBe(1);
+    expect(dirRows[0]!.textContent).toContain('assets');
+  });
+
+  it('renders an ephemeral nested folder at its parent level', () => {
+    renderPanel([file({ name: 'assets/logo.png', kind: 'image' })], {
+      ephemeralFolders: ['assets/icons'],
+    });
+
+    // From root, the `assets` folder row appears once even though both a real
+    // file and an ephemeral subfolder point at it.
+    const rootDirRows = document.querySelectorAll('.df-dir-row');
+    expect(rootDirRows.length).toBe(1);
+    expect(rootDirRows[0]!.textContent).toContain('assets');
+
+    fireEvent.click(rootDirRows[0]!.querySelector('.df-row-name-btn')!);
+
+    const nestedDirRows = document.querySelectorAll('.df-dir-row');
+    expect(nestedDirRows.length).toBe(1);
+    expect(nestedDirRows[0]!.textContent).toContain('icons');
+  });
+
   it('moves selected files into a prompted folder from the toolbar', async () => {
     const movedFile = file({ name: 'assets/file-1.html', kind: 'html', mime: 'text/html' });
     const onMoveFilesToFolder = vi.fn(async () => [

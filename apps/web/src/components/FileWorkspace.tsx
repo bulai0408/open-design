@@ -253,6 +253,12 @@ export function FileWorkspace({
   const [showPasteDialog, setShowPasteDialog] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [sketches, setSketches] = useState<Record<string, SketchState>>({});
+  // Folders created via "New folder" exist on disk but produce no entries in
+  // the daemon's flat file list until something is dropped into them. Keep
+  // their paths here so DesignFilesPanel can still surface them; pruned
+  // whenever the live `files` listing already accounts for the folder via a
+  // child file path prefix.
+  const [pendingEmptyFolders, setPendingEmptyFolders] = useState<string[]>([]);
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
   const [draggedTabName, setDraggedTabName] = useState<string | null>(null);
   const [dragOverTab, setDragOverTab] = useState<{
@@ -267,6 +273,26 @@ export function FileWorkspace({
     () => files.filter((file) => !isLiveArtifactImplementationPath(file.name)),
     [files],
   );
+
+  // Drop any tracked empty folders that the latest file listing already
+  // accounts for via a child path. Without this, the panel would keep an
+  // ephemeral row alive forever once a real file lands inside the folder.
+  useEffect(() => {
+    setPendingEmptyFolders((curr) => {
+      if (curr.length === 0) return curr;
+      const next = curr.filter((folder) => {
+        const prefix = `${folder}/`;
+        return !visibleFiles.some((f) => f.name.startsWith(prefix));
+      });
+      return next.length === curr.length ? curr : next;
+    });
+  }, [visibleFiles]);
+
+  // Clear ephemeral folder state when switching projects so a folder
+  // created in project A does not appear in project B's Design Files panel.
+  useEffect(() => {
+    setPendingEmptyFolders([]);
+  }, [projectId]);
 
   const liveArtifactEntries = useMemo(
     () => liveArtifacts.map(liveArtifactSummaryToWorkspaceEntry),
@@ -644,7 +670,13 @@ export function FileWorkspace({
   }
 
   async function handleCreateFolder(folderPath: string) {
-    await createProjectFolder(projectId, folderPath);
+    const response = await createProjectFolder(projectId, folderPath);
+    // The folder is empty, so the refreshed flat file listing won't include
+    // it. Track the created path locally so DesignFilesPanel still renders a
+    // row for it; the pruning effect below drops the entry as soon as a
+    // real file appears under that prefix.
+    const created = response.folder?.path ?? folderPath;
+    setPendingEmptyFolders((curr) => (curr.includes(created) ? curr : [...curr, created]));
     await onRefreshFiles();
   }
 
@@ -1059,6 +1091,7 @@ export function FileWorkspace({
               fileInputRef.current?.click();
             }}
             onCreateFolder={handleCreateFolder}
+            ephemeralFolders={pendingEmptyFolders}
             onMoveFilesToFolder={handleMoveFilesToFolder}
             onUploadFiles={(picked) => void uploadFiles(picked)}
             onPaste={() => {

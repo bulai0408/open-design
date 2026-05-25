@@ -10,6 +10,7 @@ import { FileWorkspace, scrollWorkspaceTabsWithWheel } from '../../src/component
 import { DesignFilesPanel } from '../../src/components/DesignFilesPanel';
 import { projectSplitClassName } from '../../src/components/ProjectView';
 import {
+  createProjectFolder,
   fetchProjectFileText,
   uploadProjectFiles,
   writeProjectTextFile,
@@ -25,12 +26,14 @@ vi.mock('../../src/providers/registry', async () => {
     fetchProjectFileText: vi.fn(),
     uploadProjectFiles: vi.fn(),
     writeProjectTextFile: vi.fn(),
+    createProjectFolder: vi.fn(),
   };
 });
 
 const mockedFetchProjectFileText = vi.mocked(fetchProjectFileText);
 const mockedUploadProjectFiles = vi.mocked(uploadProjectFiles);
 const mockedWriteProjectTextFile = vi.mocked(writeProjectTextFile);
+const mockedCreateProjectFolder = vi.mocked(createProjectFolder);
 
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
@@ -448,6 +451,55 @@ describe('DesignFilesPanel plugin folders', () => {
     expect(container.textContent).not.toContain(
       'Sent to the agent. The CLI run will continue in chat.',
     );
+  });
+});
+
+describe('FileWorkspace folder creation', () => {
+  it('keeps a newly created empty folder visible in Design Files after refresh', async () => {
+    mockedCreateProjectFolder.mockResolvedValueOnce({
+      folder: {
+        name: 'assets',
+        path: 'assets',
+        type: 'dir',
+        size: 0,
+        mtime: Date.now(),
+        kind: 'binary',
+        mime: 'inode/directory',
+      },
+    });
+    vi.stubGlobal('prompt', vi.fn(() => 'assets'));
+
+    const onRefreshFiles = vi.fn(async () => undefined);
+
+    render(
+      <FileWorkspace
+        projectId="project-1"
+        projectKind="prototype"
+        files={[workspaceFile('readme.md')]}
+        liveArtifacts={[]}
+        onRefreshFiles={onRefreshFiles}
+        isDeck={false}
+        tabsState={{ tabs: [], active: null }}
+        onTabsStateChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'New folder' }));
+
+    await waitFor(() => {
+      expect(mockedCreateProjectFolder).toHaveBeenCalledWith('project-1', 'assets');
+    });
+
+    // The daemon's flat file list returned no entry for the empty folder, so
+    // without ephemeral folder tracking the row would disappear. Confirm the
+    // panel still shows it.
+    await waitFor(() => {
+      const dirRows = document.querySelectorAll('.df-dir-row');
+      const hasAssets = Array.from(dirRows).some((row) =>
+        row.textContent?.includes('assets'),
+      );
+      expect(hasAssets).toBe(true);
+    });
   });
 });
 
