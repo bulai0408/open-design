@@ -27,6 +27,7 @@ import {
 import {
   createProject,
   deleteProject,
+  getProject,
   listProjects,
   listTemplates,
   patchProject,
@@ -36,11 +37,18 @@ vi.mock('../../src/components/EntryView', () => ({
   EntryView: ({
     onCreateProject,
     onDeleteProject,
+    onImportFolderResponse,
     onOpenProject,
     projects,
   }: {
     onCreateProject: (input: unknown) => void;
     onDeleteProject: (id: string) => void;
+    onImportFolderResponse?: (response: {
+      conversationId: string;
+      entryFile: string | null;
+      ok: true;
+      projectId: string;
+    }) => Promise<void> | void;
     onOpenProject: (id: string) => void;
     projects: Project[];
   }) => (
@@ -57,6 +65,19 @@ vi.mock('../../src/components/EntryView', () => ({
         }
       >
         Create project
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          void onImportFolderResponse?.({
+            conversationId: 'conv-import',
+            entryFile: null,
+            ok: true,
+            projectId: 'project-new',
+          })
+        }
+      >
+        Host import folder
       </button>
       {projects.map((project) => (
         <div key={project.id} data-testid={`entry-project-${project.id}`}>
@@ -139,6 +160,7 @@ vi.mock('../../src/state/projects', async () => {
     ...actual,
     createProject: vi.fn(),
     deleteProject: vi.fn(),
+    getProject: vi.fn(),
     listProjects: vi.fn(),
     listTemplates: vi.fn(),
     patchProject: vi.fn(),
@@ -171,6 +193,7 @@ const mockedFetchSkills = vi.mocked(fetchSkills);
 const mockedUploadProjectFiles = vi.mocked(uploadProjectFiles);
 const mockedCreateProject = vi.mocked(createProject);
 const mockedDeleteProject = vi.mocked(deleteProject);
+const mockedGetProject = vi.mocked(getProject);
 const mockedListProjects = vi.mocked(listProjects);
 const mockedListTemplates = vi.mocked(listTemplates);
 const mockedPatchProject = vi.mocked(patchProject);
@@ -241,6 +264,7 @@ describe('App project creation routing', () => {
       conversationId: 'conv-new',
     });
     mockedDeleteProject.mockResolvedValue(true);
+    mockedGetProject.mockResolvedValue(null);
     mockedPatchProject.mockResolvedValue(freshProject);
     vi.stubGlobal(
       'fetch',
@@ -395,5 +419,42 @@ describe('App project creation routing', () => {
     });
 
     expect(screen.queryByTestId('entry-project-project-new')).toBeNull();
+  });
+
+  it('keeps a host-imported project routable when getProject and the list lag behind', async () => {
+    // Desktop import flow (handleImportFolderResponse fallback): the host
+    // bridge has already POSTed the import, but `/api/projects/:id` and
+    // `/api/projects` are both still catching up. Without a placeholder
+    // the stale `[]` list response would drop the just-imported project
+    // from state and the route-guard effect would bounce to Home.
+    const bootstrapProjects = deferred<Project[]>();
+    const importListProjects = deferred<Project[]>();
+    mockedListProjects
+      .mockReturnValueOnce(bootstrapProjects.promise)
+      .mockReturnValueOnce(importListProjects.promise)
+      .mockResolvedValue([]);
+    mockedGetProject.mockResolvedValue(null);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Host import folder' }));
+
+    await act(async () => {
+      importListProjects.resolve([]);
+      await importListProjects.promise;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('project-view')).toBeTruthy();
+    });
+    expect(window.location.pathname).toBe('/projects/project-new');
+
+    await act(async () => {
+      bootstrapProjects.resolve([]);
+      await bootstrapProjects.promise;
+    });
+
+    expect(screen.getByTestId('project-view')).toBeTruthy();
+    expect(window.location.pathname).toBe('/projects/project-new');
   });
 });

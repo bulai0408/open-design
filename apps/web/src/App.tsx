@@ -1095,6 +1095,23 @@ export function App() {
     if (project != null) {
       setProjects((curr) => [project, ...curr.filter((p) => p.id !== project.id)]);
     } else {
+      // Daemon hasn't materialized the full record yet (race between the
+      // host's import POST and our /api/projects read). Seed a minimal
+      // placeholder so the route stays alive and ProjectView mounts; the
+      // pending-local id keeps reconcileFetchedProjects from evicting the
+      // stub until a project-list snapshot actually includes it, and the
+      // next refresh swaps it for the real Project record. Without the
+      // stub, a stale `[]` list response would replace `projects` with `[]`
+      // and the route-guard effect would bounce the user back to Home.
+      const stub: Project = {
+        id: result.projectId,
+        name: '',
+        skillId: null,
+        designSystemId: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      setProjects((curr) => [stub, ...curr.filter((p) => p.id !== stub.id)]);
       const request = beginProjectListRequest();
       const list = await listProjects();
       reconcileFetchedProjects(list, request);
