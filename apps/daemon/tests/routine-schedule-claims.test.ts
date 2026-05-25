@@ -256,6 +256,218 @@ describe('routine scheduled loser cleanup', () => {
     }
   });
 
+  it('does not expose a phantom canceled run when a duplicate scheduled slot is lost', async () => {
+    // Reviewer regression: `server.ts` now creates the in-memory
+    // `design.runs` entry before `insertScheduledRoutineRun()` decides
+    // whether this daemon won the slot. The loser path used to call
+    // `design.runs.finish(run, 'canceled')`, which surfaced a phantom
+    // canceled chat run via `/api/runs` even though no `routine_runs` row,
+    // conversation, or messages were ever committed. The fix routes the
+    // never-inserted path through `design.runs.drop()` so duplicate losers
+    // do not leak in-memory runs back through the public API.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));
+
+    const started = await startServer({ port: 0, returnServer: true }) as {
+      url: string;
+      server: http.Server;
+      shutdown?: () => Promise<void> | void;
+    };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = openDatabase(tmp, { dataDir });
+    const projectId = 'routine-phantom-loser-project';
+    insertProject(db, {
+      id: projectId,
+      name: 'Routine phantom loser target',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    try {
+      const createRoutine = await fetch(`${started.url}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Scheduled phantom-loser routine',
+          prompt: 'fresh prompt',
+          schedule: { kind: 'hourly', minute: 1 },
+          target: { mode: 'reuse', projectId },
+          agentId: 'codex',
+          enabled: true,
+        }),
+      });
+      expect(createRoutine.status).toBe(201);
+      const created = await createRoutine.json() as { routine: { id: string } };
+      const slotAt = Date.UTC(2026, 4, 17, 10, 1);
+      // Pre-claim the slot from a sibling daemon so the loser branch fires
+      // in this process. The winning row carries the same routine and slot.
+      insertScheduledRoutineRun(db, {
+        ...makeRun('phantom-winning-run', {
+          routineId: created.routine.id,
+          projectId,
+          conversationId: 'phantom-winning-conversation',
+          agentRunId: 'phantom-winning-agent-run',
+        }),
+      }, slotAt);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+
+      // Wait until at least one tick after the scheduled timer fired so the
+      // loser branch has had a chance to clean up.
+      await sleep(50);
+
+      // The only routine_runs row is the pre-seeded winner; the loser
+      // never made it through `insertScheduledRoutineRun()`.
+      const rows = db.prepare(
+        `SELECT id FROM routine_runs WHERE routine_id = ? ORDER BY id`,
+      ).all(created.routine.id) as Array<{ id: string }>;
+      expect(rows).toEqual([{ id: 'phantom-winning-run' }]);
+
+      // `/api/runs` must not surface the loser's in-memory chat run as
+      // `canceled` — `design.runs.drop()` removes it from the registry.
+      const runsRes = await fetch(`${started.url}/api/runs`);
+      expect(runsRes.status).toBe(200);
+      const runsJson = await runsRes.json() as {
+        runs: Array<{ status: string; assistantMessageId: string | null }>;
+      };
+      const phantom = runsJson.runs.find((run) =>
+        typeof run.assistantMessageId === 'string'
+        && run.assistantMessageId.startsWith('routine-assistant-'));
+      expect(phantom).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      await Promise.resolve(started.shutdown?.());
+      await new Promise<void>((resolve) => started.server.close(() => resolve()));
+    }
+  });
+
+  it('restores the reused project pin when the snapshot resolver throws mid-link', async () => {
+    // Reviewer regression: `resolveRoutinePluginSnapshot()` only assigns
+    // `resolvedRoutineSnapshot` AFTER the resolver returns, but
+    // `resolvePluginSnapshot()` already calls `linkSnapshotToProject()`
+    // inside `finalizeOk()` before linking the conversation or run. If
+    // `linkSnapshotToConversation()` throws (e.g. a CHECK constraint, a
+    // missing conversation row, a trigger), `discard()` previously landed
+    // with `resolvedRoutineSnapshot === null` and never restored the
+    // project's prior pin — leaving the reused project pointed at a
+    // snapshot the routine never durably claimed.
+    //
+    // The fix captures the intermediate pin in `partiallyAppliedSnapshotId`
+    // when the resolver throws, and `discard()` falls back to it when
+    // `resolvedRoutineSnapshot` is still null. This test forces the link
+    // step to fail via a SQLite trigger on `conversations` (the resolver
+    // links the snapshot to the conversation row before returning, and
+    // that link path updates `conversations.applied_plugin_snapshot_id`).
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));
+
+    const started = await startServer({ port: 0, returnServer: true }) as {
+      url: string;
+      server: http.Server;
+      shutdown?: () => Promise<void> | void;
+    };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = openDatabase(tmp, { dataDir });
+    const projectId = 'routine-mid-link-rollback-project';
+    const routinePlugin = pluginRecord('routine-mid-link-plugin');
+    upsertInstalledPlugin(db, routinePlugin);
+    insertProject(db, {
+      id: projectId,
+      name: 'Routine mid-link rollback target',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    const previousSnapshot = createSnapshot(db, {
+      projectId,
+      pluginId: routinePlugin.id,
+      pluginVersion: routinePlugin.version,
+      manifestSourceDigest: '3'.repeat(64),
+      taskKind: 'new-generation',
+      inputs: { prompt: 'previous prompt' },
+      resolvedContext: { items: [] },
+      capabilitiesGranted: ['prompt:inject'],
+      capabilitiesRequired: ['prompt:inject'],
+      assetsStaged: [],
+      connectorsRequired: [],
+      connectorsResolved: [],
+      mcpServers: [],
+      query: 'Previous {{prompt}}',
+    });
+    linkSnapshotToProject(db, previousSnapshot.snapshotId, projectId);
+
+    try {
+      const createRoutine = await fetch(`${started.url}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Scheduled mid-link rollback routine',
+          prompt: 'fresh prompt',
+          schedule: { kind: 'hourly', minute: 1 },
+          target: { mode: 'reuse', projectId },
+          context: { pluginIds: [routinePlugin.id] },
+          agentId: 'codex',
+          enabled: true,
+        }),
+      });
+      expect(createRoutine.status).toBe(201);
+      const created = await createRoutine.json() as { routine: { id: string } };
+
+      // Trigger after `linkSnapshotToProject()` but during
+      // `linkSnapshotToConversation()`. The resolver runs
+      // `UPDATE applied_plugin_snapshots SET conversation_id = ?, expires_at = NULL`
+      // followed by `UPDATE conversations SET applied_plugin_snapshot_id = ?`.
+      // We fail on the conversations.applied_plugin_snapshot_id update so the
+      // project pin has already moved but the resolver throws before
+      // returning a snapshot to the caller.
+      db.exec(`
+        DROP TRIGGER IF EXISTS fail_routine_conv_snapshot_link;
+        CREATE TRIGGER fail_routine_conv_snapshot_link
+        BEFORE UPDATE OF applied_plugin_snapshot_id ON conversations
+        WHEN NEW.applied_plugin_snapshot_id IS NOT NULL
+          AND NEW.id LIKE 'routine-conv-%'
+        BEGIN
+          SELECT RAISE(ABORT, 'routine conversation snapshot link failed');
+        END;
+      `);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+
+      // Wait for the routine_runs row to land in a terminal failed state —
+      // the scheduled prepare-failure path patches the row to 'failed'
+      // after the slot claim is accepted.
+      let stored: { status: string } | undefined;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        stored = db.prepare(
+          `SELECT status FROM routine_runs WHERE routine_id = ?`,
+        ).get(created.routine.id) as typeof stored;
+        if (stored?.status === 'failed') break;
+        await sleep(10);
+      }
+      expect(stored?.status).toBe('failed');
+
+      // The reused project's pin must point back at the pre-existing
+      // snapshot, not at the half-applied one. Without the rollback fix,
+      // `applied_plugin_snapshot_id` would still be the resolver's new id.
+      expect(getProject(db, projectId)?.appliedPluginSnapshotId)
+        .toBe(previousSnapshot.snapshotId);
+    } finally {
+      vi.useRealTimers();
+      try {
+        db.exec('DROP TRIGGER IF EXISTS fail_routine_conv_snapshot_link');
+      } catch {
+        // The test may fail before the trigger exists.
+      }
+      await Promise.resolve(started.shutdown?.());
+      await new Promise<void>((resolve) => started.server.close(() => resolve()));
+    }
+  });
+
   it('does not create provisional database state for a reuse-mode loser before the slot is won', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));

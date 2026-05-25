@@ -79,7 +79,22 @@ export interface RoutineRunHandlerStart {
   completion: Promise<RoutineRunCompletion>;
   prepare?: (run: RoutineRun) => void | Promise<void>;
   start?: () => void;
+  // Tear-down for the case where the handler returned a start handle but
+  // `RoutineService` later reached `prepare()` and it failed — i.e. the
+  // routine_run row exists, prepare may have partially mutated project /
+  // conversation / snapshot state, and the in-memory chat run still needs
+  // to terminate as `canceled`. Callers MUST surface failures rather than
+  // swallow them (the loser-retry path depends on it).
   discard?: () => void;
+  // Tear-down for the case where the run was NEVER durably inserted —
+  // either `insertRun()` threw, or `insertRun()` returned `false` because
+  // a sibling daemon already won the scheduled slot. Prepare has not run,
+  // so no project / conversation / snapshot writes need rolling back. The
+  // in-memory chat run must also be removed from the registry instead of
+  // being finalized as `canceled`, otherwise duplicate-loser slots would
+  // surface phantom canceled runs on `/api/runs`. Falls back to `discard`
+  // when the handler does not distinguish the two cases.
+  discardUnstarted?: () => void;
 }
 
 export interface RoutineRunCompletion {
@@ -573,12 +588,20 @@ export class RoutineService {
         run.conversationId = publicConversationId();
         run.agentRunId = publicAgentRunId();
       };
+      // Tear-down to use when the durable routine_run row was never
+      // inserted (insertRun threw, or another daemon already won the slot).
+      // Prefer the explicit `discardUnstarted` callback when the handler
+      // distinguishes the two cases — that one drops the in-memory chat run
+      // entirely instead of finalizing it as `canceled`, so duplicate
+      // scheduled losers do not surface phantom runs on `/api/runs`.
+      // Handlers that do not implement the split still see `discard`.
+      const discardUnstarted = handlerStart.discardUnstarted ?? handlerStart.discard;
       let inserted = true;
       try {
         inserted = this.persistence.insertRun(run, options) !== false;
       } catch (error) {
         try {
-          handlerStart.discard?.();
+          discardUnstarted?.();
         } catch (discardError) {
           if (wasScheduled) {
             throw new ScheduledRunPersistenceError(routine.id, scheduledSlotAt, discardError);
@@ -592,7 +615,7 @@ export class RoutineService {
       }
       if (!inserted) {
         try {
-          handlerStart.discard?.();
+          discardUnstarted?.();
         } catch (discardError) {
           if (wasScheduled) {
             throw new ScheduledRunPersistenceError(routine.id, scheduledSlotAt, discardError);

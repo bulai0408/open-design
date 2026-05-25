@@ -12129,25 +12129,56 @@ export async function startServer({
 
     const assistantMessageId = `routine-assistant-${randomUUID()}`;
     let resolvedRoutineSnapshot = null;
+    // Tracks any snapshot id that `resolvePluginSnapshot()` already pinned
+    // to the reused project before the resolver threw on a later linking
+    // step. `finalizeOk()` performs `linkSnapshotToProject()` BEFORE
+    // `linkSnapshotToConversation()` / `linkSnapshotToRun()`, so a failure
+    // mid-resolve can leave `projects.applied_plugin_snapshot_id` repointed
+    // at a snapshot the routine never durably claimed. The rollback path in
+    // `discard()` falls back to this id when `resolvedRoutineSnapshot` is
+    // still null so the reused project pin is restored either way.
+    let partiallyAppliedSnapshotId: string | null = null;
     const primaryPluginId = routineContext.pluginIds?.[0] ?? null;
     const resolveRoutinePluginSnapshot = async () => {
       if (!primaryPluginId || resolvedRoutineSnapshot) return;
       const registry = await loadPluginRegistryView();
-      const resolved = resolvePluginSnapshot({
-        db,
-        body: {
-          pluginId: primaryPluginId,
-          pluginInputs: { prompt: routine.prompt },
-        },
-        projectId,
-        conversationId,
-        registry,
-        activeProjectDesignSystem:
-          typeof appConfig.designSystemId === 'string' && appConfig.designSystemId.length > 0
-            ? { id: appConfig.designSystemId }
-            : undefined,
-      });
+      const projectSnapshotBefore = routine.target.mode === 'reuse'
+        ? getProject(db, routine.target.projectId)?.appliedPluginSnapshotId ?? null
+        : null;
+      let resolved;
+      try {
+        resolved = resolvePluginSnapshot({
+          db,
+          body: {
+            pluginId: primaryPluginId,
+            pluginInputs: { prompt: routine.prompt },
+          },
+          projectId,
+          conversationId,
+          registry,
+          activeProjectDesignSystem:
+            typeof appConfig.designSystemId === 'string' && appConfig.designSystemId.length > 0
+              ? { id: appConfig.designSystemId }
+              : undefined,
+        });
+      } catch (resolverError) {
+        // `resolvePluginSnapshot()` may have already updated the reused
+        // project's pin via `linkSnapshotToProject()` before throwing on
+        // `linkSnapshotToConversation()` (or `linkSnapshotToRun()`). Capture
+        // whatever pin it left behind so `discard()` can roll it back even
+        // though `resolvedRoutineSnapshot` will stay null.
+        if (routine.target.mode === 'reuse') {
+          const after = getProject(db, routine.target.projectId)?.appliedPluginSnapshotId ?? null;
+          if (after && after !== projectSnapshotBefore) {
+            partiallyAppliedSnapshotId = after;
+          }
+        }
+        throw resolverError;
+      }
       if (resolved && !resolved.ok) {
+        // Non-throwing resolver failures cannot have called `finalizeOk()`,
+        // so the project pin is still the previous one — nothing to roll
+        // back beyond the loser cleanup the caller will perform.
         throw new Error(`Automation plugin ${primaryPluginId} could not be applied: ${JSON.stringify(resolved.body)}`);
       }
       resolvedRoutineSnapshot = resolved;
@@ -12230,6 +12261,16 @@ export async function startServer({
       }, run));
     };
 
+    // Tear-down for the case where the durable routine_run row was never
+    // inserted (sibling daemon won the slot, or insertRun threw). The
+    // in-memory chat run was created speculatively above, but the deferred
+    // `persistPreparedRun()` has not run yet — so no project / conversation
+    // / snapshot writes have to be rolled back. Dropping the run keeps it
+    // off `/api/runs` instead of leaving a phantom canceled entry there.
+    const discardUnstarted = () => {
+      design.runs.drop(run);
+    };
+
     const discard = () => {
       if (typeof run.projectId === 'string' && run.projectId.startsWith('routine-pending-')) {
         run.projectId = null;
@@ -12238,14 +12279,24 @@ export async function startServer({
         run.conversationId = null;
       }
       design.runs.finish(run, 'canceled');
-      if (resolvedRoutineSnapshot?.ok && routine.target.mode === 'reuse') {
-        restoreProjectSnapshotLink(
-          db,
-          projectId,
-          resolvedRoutineSnapshot.snapshotId,
-          previousProjectSnapshotId,
-          run.id,
-        );
+      if (routine.target.mode === 'reuse') {
+        // Prefer the fully-resolved snapshot id; fall back to whatever id
+        // `resolvePluginSnapshot()` left pinned on the project if it threw
+        // partway through linking — see the comment on
+        // `partiallyAppliedSnapshotId` above.
+        const snapshotIdToDiscard =
+          resolvedRoutineSnapshot?.ok
+            ? resolvedRoutineSnapshot.snapshotId
+            : partiallyAppliedSnapshotId;
+        if (snapshotIdToDiscard) {
+          restoreProjectSnapshotLink(
+            db,
+            projectId,
+            snapshotIdToDiscard,
+            previousProjectSnapshotId,
+            run.id,
+          );
+        }
       }
       if (createdConversationId) {
         deleteConversation(db, createdConversationId);
@@ -12311,6 +12362,7 @@ export async function startServer({
       prepare: persistPreparedRun,
       start,
       discard,
+      discardUnstarted,
     };
   });
   routineService.start();
