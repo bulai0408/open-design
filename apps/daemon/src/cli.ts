@@ -4462,7 +4462,7 @@ Common options:
         resp,
         resp.status === 404 ? 'run-not-found'
           : resp.status === 400 ? 'invalid-input'
-            : 'daemon-not-running',
+            : 'daemon-http-error',
       );
     }
     const data = await resp.json();

@@ -453,6 +453,50 @@ describe('CLI startup boundaries', () => {
       expect(envelope.error.message).toContain(baseUrl);
     }
   });
+
+  it('classifies reachable daemon HTTP failures separately from daemon-not-running for od run logs', async () => {
+    const server = http.createServer((req, res) => {
+      if (req.url?.startsWith('/api/runs/run-1/log')) {
+        res.statusCode = 500;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ error: { code: 'UNEXPECTED', message: 'log storage failed' } }));
+        return;
+      }
+      res.statusCode = 404;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'not found' } }));
+    });
+
+    try {
+      const baseUrl = await listen(server);
+      await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          cliEntry,
+          'run',
+          'logs',
+          '--daemon-url',
+          baseUrl,
+          'run-1',
+        ],
+        { cwd: daemonRoot },
+      );
+      throw new Error('od run logs unexpectedly succeeded against a failing daemon');
+    } catch (error: unknown) {
+      const failed = error as { code?: number; stderr?: string };
+      expect(failed.code).toBe(1);
+      expect(readStructuredError(failed.stderr ?? '')).toMatchObject({
+        error: {
+          code:    'daemon-http-error',
+          message: 'log storage failed',
+        },
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
 
 async function listen(server: http.Server): Promise<string> {
