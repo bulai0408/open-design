@@ -17,6 +17,8 @@ import {
   validateBaseUrlResolved,
   type DnsLookupAddress,
 } from '../src/connectionTest.js';
+import { detectAgents } from '../src/agents.js';
+import { forgetDetectedAgentLaunchSelection } from '../src/runtimes/launch.js';
 import { listProviderModels } from '../src/providerModels.js';
 import { startServer } from '../src/server.js';
 
@@ -2286,6 +2288,91 @@ console.log(JSON.stringify({ type: 'text', part: { text: 'ok' } }));
         process.env.OD_AGENT_HOME = oldAgentHome;
       }
       await fsp.rm(pathDir, { recursive: true, force: true });
+      await fsp.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('reports the promoted OpenCode candidate when an invalid configured path falls back to detection', async () => {
+    const pathDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-promoted-path-'));
+    const configuredDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-promoted-conf-'));
+    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-promoted-home-'));
+    const oldPath = process.env.PATH;
+    const oldAgentHome = process.env.OD_AGENT_HOME;
+    try {
+      const stalePathBin = path.join(pathDir, 'opencode');
+      const invalidConfiguredBin = path.join(configuredDir, 'opencode-missing');
+      const knownBinDir = path.join(home, '.opencode', 'bin');
+      const knownBin = path.join(knownBinDir, 'opencode');
+      await fsp.mkdir(knownBinDir, { recursive: true });
+      await fsp.writeFile(
+        stalePathBin,
+        `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '--version') {
+  process.exit(127);
+}
+console.error('OpenCode stale PATH binary should not run');
+process.exit(1);
+`,
+      );
+      await fsp.writeFile(
+        knownBin,
+        `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '--version') {
+  console.log('opencode 1.2.0');
+  process.exit(0);
+}
+console.log(JSON.stringify({ type: 'text', part: { text: 'ok' } }));
+`,
+      );
+      await fsp.chmod(stalePathBin, 0o755);
+      await fsp.chmod(knownBin, 0o755);
+      process.env.OD_AGENT_HOME = home;
+      process.env.PATH = pathDir;
+
+      const agents = await detectAgents();
+      const detectedOpenCode = agents.find((agent) => agent.id === 'opencode');
+      expect(detectedOpenCode).toMatchObject({
+        available: true,
+        path: knownBin,
+      });
+
+      const result = await testAgentConnection({
+        agentId: 'opencode',
+        agentCliEnv: {
+          opencode: {
+            OPENCODE_BIN: invalidConfiguredBin,
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        kind: 'success',
+        agentName: 'OpenCode',
+        sample: 'ok',
+        usedExecutableSource: 'fallback_invalid',
+        configuredExecutablePath: invalidConfiguredBin,
+        detectedExecutablePath: knownBin,
+        detectedExecutableSource: 'known',
+        usedExecutablePath: knownBin,
+      });
+      expect(result.detail).toContain(
+        `Configured OpenCode path is invalid or not executable: ${invalidConfiguredBin}.`,
+      );
+      expect(result.detail).toContain('This test used the known OpenCode install at');
+      expect(result.detail).not.toContain(`This test used the PATH OpenCode CLI at ${stalePathBin}.`);
+    } finally {
+      forgetDetectedAgentLaunchSelection('opencode');
+      process.env.PATH = oldPath;
+      if (oldAgentHome === undefined) {
+        delete process.env.OD_AGENT_HOME;
+      } else {
+        process.env.OD_AGENT_HOME = oldAgentHome;
+      }
+      await fsp.rm(pathDir, { recursive: true, force: true });
+      await fsp.rm(configuredDir, { recursive: true, force: true });
       await fsp.rm(home, { recursive: true, force: true });
     }
   });

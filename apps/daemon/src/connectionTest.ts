@@ -1894,22 +1894,31 @@ export async function testAgentConnection(
         ),
       };
     }
-    if (executableResolution.pathResolvedPath) {
+    const invalidConfiguredFallbackPath =
+      executableResolution.selectedPath ?? executableResolution.pathResolvedPath;
+    if (invalidConfiguredFallbackPath) {
+      const invalidConfiguredFallbackSource = executableDiagnosticSource(
+        executableCandidateSource(
+          executableResolution.executableCandidates,
+          invalidConfiguredFallbackPath,
+        ),
+      );
       return {
         ...primaryResult,
         configuredExecutablePath: configuredAgentBin,
-        detectedExecutablePath: executableResolution.pathResolvedPath,
-        ...(pathExecutableDiagnosticSource
-          ? { detectedExecutableSource: pathExecutableDiagnosticSource }
+        detectedExecutablePath: invalidConfiguredFallbackPath,
+        ...(invalidConfiguredFallbackSource
+          ? { detectedExecutableSource: invalidConfiguredFallbackSource }
           : {}),
-        usedExecutablePath: executableResolution.launchPath ?? executableResolution.pathResolvedPath,
+        usedExecutablePath:
+          executableResolution.launchPath ?? invalidConfiguredFallbackPath,
         usedExecutableSource: 'fallback_invalid',
         detail: redactSecrets(
           agentInvalidConfiguredPathFallbackDetail(
             input.agentId,
             configuredAgentBin,
-            executableResolution.pathResolvedPath,
-            pathExecutableDiagnosticSource,
+            invalidConfiguredFallbackPath,
+            invalidConfiguredFallbackSource,
           ),
         ),
       };
