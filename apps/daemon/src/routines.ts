@@ -626,12 +626,14 @@ export class RoutineService {
       }
       try {
         await handlerStart.prepare?.(run);
-        if (
-          wasScheduled
-          || run.projectId !== handlerStart.projectId
+        const preparedIdsChanged =
+          run.projectId !== handlerStart.projectId
           || run.conversationId !== handlerStart.conversationId
-          || run.agentRunId !== handlerStart.agentRunId
-        ) {
+          || run.agentRunId !== handlerStart.agentRunId;
+        handlerStart.projectId = run.projectId;
+        handlerStart.conversationId = run.conversationId;
+        handlerStart.agentRunId = run.agentRunId;
+        if (wasScheduled || preparedIdsChanged) {
           this.persistence.updateRun(runId, {
             projectId: run.projectId,
             conversationId: run.conversationId,

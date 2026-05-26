@@ -485,6 +485,39 @@ describe('RoutineService scheduled run idempotency', () => {
     });
   });
 
+  it('returns prepared IDs from successful manual runs', async () => {
+    const persistence = new SharedRoutinePersistence([fixtureRoutine()]);
+    const service = new RoutineService(persistence);
+
+    service.setRunHandler(async () => ({
+      projectId: 'routine-pending-project',
+      conversationId: 'routine-pending-conversation',
+      agentRunId: 'routine-pending-run',
+      completion: Promise.resolve({ status: 'succeeded' as const }),
+      prepare: (run: RoutineRun) => {
+        run.projectId = 'real-project';
+        run.conversationId = 'real-conversation';
+        run.agentRunId = 'real-agent-run';
+      },
+    }));
+
+    const started = await service.runNow('routine-1');
+    await Promise.resolve();
+
+    expect(started).toMatchObject({
+      projectId: 'real-project',
+      conversationId: 'real-conversation',
+      agentRunId: 'real-agent-run',
+    });
+    expect(persistence.runs).toHaveLength(1);
+    expect(persistence.runs[0]).toMatchObject({
+      trigger: 'manual',
+      projectId: 'real-project',
+      conversationId: 'real-conversation',
+      agentRunId: 'real-agent-run',
+    });
+  });
+
   it('still finalizes the failed row when prepare cleanup itself throws', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-17T10:00:00.000Z'));

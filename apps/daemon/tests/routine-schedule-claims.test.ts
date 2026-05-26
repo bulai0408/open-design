@@ -644,6 +644,67 @@ describe('routine prepare failure cleanup', () => {
     }
   });
 
+  it('returns prepared IDs for a successful manual create_each_run response', async () => {
+    const started = await startServer({ port: 0, returnServer: true }) as {
+      url: string;
+      server: http.Server;
+      shutdown?: () => Promise<void> | void;
+    };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = openDatabase(tmp, { dataDir });
+
+    try {
+      const createRoutine = await fetch(`${started.url}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Manual response routine',
+          prompt: 'prepare and return ids',
+          schedule: { kind: 'hourly', minute: 1 },
+          target: { mode: 'create_each_run' },
+          agentId: 'missing-agent-for-route-test',
+          enabled: false,
+        }),
+      });
+      expect(createRoutine.status).toBe(201);
+      const created = await createRoutine.json() as { routine: { id: string } };
+
+      const runRes = await fetch(`${started.url}/api/routines/${created.routine.id}/run`, {
+        method: 'POST',
+      });
+      expect(runRes.status).toBe(202);
+      const runJson = await runRes.json() as {
+        projectId: string;
+        conversationId: string;
+        agentRunId: string;
+        run: {
+          projectId: string;
+          conversationId: string;
+          agentRunId: string;
+        };
+      };
+
+      expect(runJson.projectId).toMatch(/^routine-/);
+      expect(runJson.conversationId).toMatch(/^routine-conv-/);
+      expect(runJson.agentRunId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(runJson.projectId).not.toContain('routine-pending-project');
+      expect(runJson.conversationId).not.toContain('routine-pending-conv');
+      expect(runJson.run).toMatchObject({
+        projectId: runJson.projectId,
+        conversationId: runJson.conversationId,
+        agentRunId: runJson.agentRunId,
+      });
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM projects WHERE id = ?`).get(runJson.projectId))
+        .toEqual({ n: 1 });
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM conversations WHERE id = ?`).get(runJson.conversationId))
+        .toEqual({ n: 1 });
+    } finally {
+      await Promise.resolve(started.shutdown?.());
+      await new Promise<void>((resolve) => started.server.close(() => resolve()));
+    }
+  });
+
   it('finalizes and cleans up a manual run when prepare fails after creating the conversation', async () => {
     const started = await startServer({ port: 0, returnServer: true }) as {
       url: string;
