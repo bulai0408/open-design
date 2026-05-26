@@ -293,13 +293,40 @@ export function App() {
   }, []);
 
   const reconcileFetchedProjects = useCallback((list: Project[], request: ProjectListRequest) => {
-    if (request.generation < latestAppliedProjectListGenerationRef.current) {
-      return false;
-    }
-    latestAppliedProjectListGenerationRef.current = request.generation;
     const pendingLocalProjectIds = pendingLocalProjectIdsRef.current;
     const locallyDeletedProjectIds = locallyDeletedProjectIdsRef.current;
     const fetchedIds = new Set(list.map((project) => project.id));
+    if (request.generation < latestAppliedProjectListGenerationRef.current) {
+      const hydratableProjects = list.filter(
+        (project) =>
+          pendingLocalProjectIds.has(project.id) &&
+          !locallyDeletedProjectIds.has(project.id),
+      );
+      if (hydratableProjects.length === 0) return false;
+      const hydratableById = new Map(
+        hydratableProjects.map((project) => [project.id, project]),
+      );
+      for (const project of hydratableProjects) {
+        pendingLocalProjectIds.delete(project.id);
+      }
+      setProjects((current) => {
+        let changed = false;
+        const next = current.map((project) => {
+          const hydrated = hydratableById.get(project.id);
+          if (!hydrated) return project;
+          changed = true;
+          hydratableById.delete(project.id);
+          return hydrated;
+        });
+        if (hydratableById.size > 0) {
+          changed = true;
+          next.unshift(...hydratableById.values());
+        }
+        return changed ? next : current;
+      });
+      return true;
+    }
+    latestAppliedProjectListGenerationRef.current = request.generation;
     for (const id of fetchedIds) pendingLocalProjectIds.delete(id);
     for (const [id, deletedAtMutationVersion] of locallyDeletedProjectIds) {
       if (

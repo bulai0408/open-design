@@ -457,4 +457,37 @@ describe('App project creation routing', () => {
     expect(screen.getByTestId('project-view')).toBeTruthy();
     expect(window.location.pathname).toBe('/projects/project-new');
   });
+
+  it('hydrates a host-import placeholder from an older project list that contains the import', async () => {
+    const bootstrapProjects = deferred<Project[]>();
+    const importListProjects = deferred<Project[]>();
+    mockedListProjects
+      .mockReturnValueOnce(bootstrapProjects.promise)
+      .mockReturnValueOnce(importListProjects.promise)
+      .mockResolvedValue([]);
+    mockedGetProject.mockResolvedValue(null);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Host import folder' }));
+
+    await act(async () => {
+      importListProjects.resolve([]);
+      await importListProjects.promise;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('project-view')).toBeTruthy();
+    });
+    expect(screen.getByTestId('project-title').textContent).toBe('');
+    expect(window.location.pathname).toBe('/projects/project-new');
+
+    await act(async () => {
+      bootstrapProjects.resolve([freshProject]);
+      await bootstrapProjects.promise;
+    });
+
+    expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
+    expect(window.location.pathname).toBe('/projects/project-new');
+  });
 });
