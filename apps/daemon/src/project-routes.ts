@@ -1020,7 +1020,7 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
   // Preflight for the raw file route. Current artifact fetches are simple GETs
   // (no preflight needed), but an explicit handler future-proofs the route if
   // artifacts ever add custom request headers.
-  app.options('/api/projects/:id/raw/*', (req, res) => {
+  app.options(/^\/api\/projects\/([^/]+)\/raw\/(.+)$/u, (req, res) => {
     if (req.headers.origin === 'null') {
       res.header('Access-Control-Allow-Origin', '*');
       res.header('Access-Control-Allow-Methods', 'GET');
@@ -1029,10 +1029,12 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
     res.sendStatus(204);
   });
 
-  app.get('/api/projects/:id/raw/*', async (req, res) => {
+  app.get(/^\/api\/projects\/([^/]+)\/raw\/(.+)$/u, async (req, res) => {
     try {
-      const relPath = (req.params as any)[0];
-      const project = getProject(db, req.params.id);
+      const params = req.params as unknown as { 0?: string; 1?: string };
+      const projectId = String(params[0] ?? '');
+      const relPath = String(params[1] ?? '');
+      const project = getProject(db, projectId);
       // PreviewModal loads artifact HTML via srcdoc, giving the iframe Origin: "null".
       // data: URIs, file://, and some sandboxed iframes also send null — all are
       // local-only callers, so this is safe. Real cross-origin sites send a real
@@ -1043,7 +1045,7 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
 
       const meta = await resolveProjectFilePath(
         PROJECTS_DIR,
-        req.params.id,
+        projectId,
         relPath,
         project?.metadata,
       );
@@ -1092,7 +1094,7 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
         return;
       }
 
-      const file = await readProjectFile(PROJECTS_DIR, req.params.id, relPath, project?.metadata);
+      const file = await readProjectFile(PROJECTS_DIR, projectId, relPath, project?.metadata);
       if (file.mime.startsWith('text/html') && shouldInjectPreviewNavigationBridge(req.query.odSrcdocTransport)) {
         res.type(file.mime).send(buildSrcdocTransportShell());
         return;
@@ -1113,10 +1115,13 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
     }
   });
 
-  app.delete('/api/projects/:id/raw/*', async (req, res) => {
+  app.delete(/^\/api\/projects\/([^/]+)\/raw\/(.+)$/u, async (req, res) => {
     try {
-      const project = getProject(db, req.params.id);
-      await deleteProjectFile(PROJECTS_DIR, req.params.id, (req.params as any)[0], project?.metadata);
+      const params = req.params as unknown as { 0?: string; 1?: string };
+      const projectId = String(params[0] ?? '');
+      const rawSplat = String(params[1] ?? '');
+      const project = getProject(db, projectId);
+      await deleteProjectFile(PROJECTS_DIR, projectId, rawSplat, project?.metadata);
       /** @type {import('@open-design/contracts').DeleteProjectFileResponse} */
       const body = { ok: true };
       res.json(body);
@@ -1158,13 +1163,16 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
     }
   });
 
-  app.get('/api/projects/:id/files/*', async (req, res) => {
+  app.get(/^\/api\/projects\/([^/]+)\/files\/(.+)$/u, async (req, res) => {
     try {
-      const project = getProject(db, req.params.id);
+      const params = req.params as unknown as { 0?: string; 1?: string };
+      const projectId = String(params[0] ?? '');
+      const fileSplat = String(params[1] ?? '');
+      const project = getProject(db, projectId);
       const file = await readProjectFile(
         PROJECTS_DIR,
-        req.params.id,
-        (req.params as any)[0],
+        projectId,
+        fileSplat,
         project?.metadata,
       );
       res.type(file.mime).send(file.buffer);
