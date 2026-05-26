@@ -30,8 +30,8 @@ function shouldInjectPreviewNavigationBridge(queryValue: unknown): boolean {
 
 function injectPreviewNavigationBridge(html: string): string {
   const script = `<script data-od-preview-navigation-bridge>(function(){
-  function state(){
-    return {
+  function state(requestId){
+    var message = {
       type: 'od:preview-navigation',
       href: location.href,
       pathname: location.pathname,
@@ -39,9 +39,11 @@ function injectPreviewNavigationBridge(html: string): string {
       hash: location.hash,
       state: history.state
     };
+    if (typeof requestId === 'string') message.requestId = requestId;
+    return message;
   }
-  function post(){
-    try { window.parent.postMessage(state(), '*'); } catch (_) {}
+  function post(requestId){
+    try { window.parent.postMessage(state(requestId), '*'); } catch (_) {}
   }
   function restore(data){
     var prevHash = location.hash;
@@ -86,7 +88,7 @@ function injectPreviewNavigationBridge(html: string): string {
     var data = ev && ev.data;
     if (!data) return;
     if (data.type === 'od:preview-navigation-request') {
-      post();
+      post(typeof data.requestId === 'string' ? data.requestId : undefined);
       return;
     }
     if (data.type === 'od:preview-navigation-restore') {

@@ -758,21 +758,23 @@ function injectPreviewNavigationRestore(
       return String(value);
     }
   }
-  function post(force){
+  function post(force, requestId){
     try {
       var href = snapshot();
       var fingerprint = href + '\\n' + stateFingerprint(history.state);
       if (force !== true && lastPostedFingerprint === fingerprint) return;
       lastPostedFingerprint = fingerprint;
       if (window.parent && window.parent !== window) {
-        window.parent.postMessage({
+        var message = {
           type: 'od:preview-navigation',
           href: location.href,
           pathname: location.pathname,
           search: location.search,
           hash: location.hash,
           state: history.state
-        }, '*');
+        };
+        if (typeof requestId === 'string') message.requestId = requestId;
+        window.parent.postMessage(message, '*');
       }
     } catch (_) {}
   }
@@ -818,7 +820,7 @@ function injectPreviewNavigationRestore(
     var data = ev && ev.data;
     if (!data) return;
     if (data.type === 'od:preview-navigation-request') {
-      post(true);
+      post(true, typeof data.requestId === 'string' ? data.requestId : undefined);
       return;
     }
     if (data.type === 'od:preview-navigation-restore') {

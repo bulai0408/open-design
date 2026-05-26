@@ -166,9 +166,10 @@ describe('injectPreviewNavigationRestore reporter (regression: bridge must repor
     const html = buildSrcdoc('<html><body></body></html>', { initialNavigation: null });
     const bridge = runBridge(html, { initialPathname: '/page' });
     const before = bridge.parentMessages.length;
-    bridge.triggerEvent('message', { data: { type: 'od:preview-navigation-request' } });
-    const after = bridge.parentMessages.filter((m) => m.type === 'od:preview-navigation').length;
-    expect(after).toBeGreaterThan(before);
+    bridge.triggerEvent('message', { data: { type: 'od:preview-navigation-request', requestId: 'capture-1' } });
+    const posts = bridge.parentMessages.filter((m) => m.type === 'od:preview-navigation');
+    expect(posts).toHaveLength(before + 1);
+    expect(posts.at(-1)).toMatchObject({ requestId: 'capture-1' });
   });
 
   it('dedupes redundant od:preview-navigation reports to the same URL', () => {

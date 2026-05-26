@@ -236,6 +236,7 @@ describe('GET /api/projects/:id/raw/* range request route', () => {
     expect(text).toContain('data-od-preview-navigation-bridge');
     expect(text).toContain("type: 'od:preview-navigation'");
     expect(text).toContain("data.type === 'od:preview-navigation-request'");
+    expect(text).toContain('message.requestId = requestId');
     expect(text).toContain("data.type === 'od:preview-navigation-restore'");
     expect(text).toContain("window.dispatchEvent(new PopStateEvent('popstate'");
     expect(text).toContain('new HashChangeEvent');

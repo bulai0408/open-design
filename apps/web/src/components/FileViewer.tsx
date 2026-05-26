@@ -136,6 +136,10 @@ type PreviewViewportId = 'desktop' | 'tablet' | 'mobile';
 type PreviewNavigationState = SrcdocPreviewNavigation & {
   capturedAt: number;
 };
+type PreviewNavigationCaptureRequest = {
+  id: string;
+  target: 'url' | 'srcdoc';
+};
 type PreviewNavigationTarget = 'active' | 'url' | 'srcdoc';
 type PreviewCanvasSize = { width: number; height: number };
 type PreviewViewportPreset = {
@@ -3887,6 +3891,8 @@ function HtmlViewer({
   const previewScrollRequestAtRef = useRef(0);
   const previewNavigationRef = useRef<PreviewNavigationState | null>(null);
   const previewNavigationRestoreRef = useRef<PreviewNavigationState | null>(null);
+  const previewNavigationRequestSeqRef = useRef(0);
+  const previewNavigationCaptureRequestRef = useRef<PreviewNavigationCaptureRequest | null>(null);
   const dcViewportRef = useRef({
     x: 0,
     y: 0,
@@ -4020,9 +4026,32 @@ function HtmlViewer({
     [],
   );
   const requestPreviewNavigationState = useCallback(() => {
+    const frame = iframeRef.current;
+    const source = frame?.contentWindow;
+    const target =
+      frame === urlPreviewIframeRef.current
+        ? 'url'
+        : frame === srcDocPreviewIframeRef.current
+          ? 'srcdoc'
+          : null;
+    if (!source) {
+      previewNavigationCaptureRequestRef.current = null;
+      return;
+    }
+    if (!target) {
+      previewNavigationCaptureRequestRef.current = null;
+      return;
+    }
+    previewNavigationRequestSeqRef.current += 1;
+    const requestId = `nav-${previewNavigationRequestSeqRef.current}`;
+    previewNavigationCaptureRequestRef.current = { id: requestId, target };
     try {
-      iframeRef.current?.contentWindow?.postMessage({ type: 'od:preview-navigation-request' }, '*');
-    } catch {}
+      source.postMessage({ type: 'od:preview-navigation-request', requestId }, '*');
+    } catch {
+      if (previewNavigationCaptureRequestRef.current?.id === requestId) {
+        previewNavigationCaptureRequestRef.current = null;
+      }
+    }
   }, []);
   const capturePreviewNavigationState = useCallback(() => {
     requestPreviewNavigationState();
@@ -4350,6 +4379,7 @@ function HtmlViewer({
     setPreviewSrcUrl(basePreviewSrcUrl);
     previewNavigationRef.current = null;
     previewNavigationRestoreRef.current = null;
+    previewNavigationCaptureRequestRef.current = null;
   }, [basePreviewSrcUrl]);
   const alignActivePreviewIframeRef = useCallback(() => {
     iframeRef.current = useUrlLoadPreview ? urlPreviewIframeRef.current : srcDocPreviewIframeRef.current;
@@ -4575,10 +4605,27 @@ function HtmlViewer({
         search?: unknown;
         hash?: unknown;
         state?: unknown;
+        requestId?: unknown;
       } | null;
       if (!data || data.type !== 'od:preview-navigation') return;
       const isActiveSource = isActivePreviewIframeSource(ev.source);
-      previewNavigationRef.current = {
+      const pendingRequest = previewNavigationCaptureRequestRef.current;
+      const requestId = typeof data.requestId === 'string' ? data.requestId : '';
+      const isPendingRequestSource =
+        pendingRequest?.target === 'url'
+          ? ev.source === urlPreviewIframeRef.current?.contentWindow
+          : pendingRequest?.target === 'srcdoc'
+            ? ev.source === srcDocPreviewIframeRef.current?.contentWindow
+            : false;
+      const isPendingCaptureReply = !!(
+        !isActiveSource &&
+        requestId &&
+        pendingRequest &&
+        pendingRequest.id === requestId &&
+        isPendingRequestSource
+      );
+      if (!isActiveSource && !isPendingCaptureReply) return;
+      const navigation = {
         href: typeof data.href === 'string' ? data.href : '',
         pathname: typeof data.pathname === 'string' ? data.pathname : '',
         search: typeof data.search === 'string' ? data.search : '',
@@ -4586,9 +4633,18 @@ function HtmlViewer({
         state: data.state,
         capturedAt: Date.now(),
       };
-      previewNavigationRestoreRef.current = previewNavigationRef.current;
+      if (
+        requestId &&
+        pendingRequest &&
+        pendingRequest.id === requestId &&
+        isPendingRequestSource
+      ) {
+        previewNavigationCaptureRequestRef.current = null;
+      }
+      previewNavigationRef.current = navigation;
+      previewNavigationRestoreRef.current = navigation;
       if (!isActiveSource) {
-        restorePreviewNavigationState(previewNavigationRef.current);
+        restorePreviewNavigationState(navigation);
       }
     }
     function onRestoreRequest(ev: MessageEvent) {

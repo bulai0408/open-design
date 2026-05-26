@@ -82,6 +82,19 @@ function srcDocActivationMessages(calls: readonly (readonly unknown[])[]) {
     });
 }
 
+function previewNavigationRequestId(calls: readonly (readonly unknown[])[]) {
+  const request = [...calls]
+    .reverse()
+    .map(([message]) => message)
+    .find((message): message is { type: 'od:preview-navigation-request'; requestId: string } => {
+      if (typeof message !== 'object' || message === null) return false;
+      const data = message as { type?: unknown; requestId?: unknown };
+      return data.type === 'od:preview-navigation-request' && typeof data.requestId === 'string';
+    });
+  if (!request) throw new Error('preview navigation request id not found');
+  return request.requestId;
+}
+
 function clickAgentTool(testId: string) {
   fireEvent.click(screen.getByTestId(testId));
 }
@@ -582,7 +595,11 @@ describe('FileViewer SVG artifacts', () => {
 
     fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
 
-    expect(urlPostMessageSpy).toHaveBeenCalledWith({ type: 'od:preview-navigation-request' }, '*');
+    expect(urlPostMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'od:preview-navigation-request',
+      requestId: expect.any(String),
+    }), '*');
+    const requestId = previewNavigationRequestId(urlPostMessageSpy.mock.calls);
     await waitFor(() => {
       expect(srcDocFrame.getAttribute('data-od-active')).toBe('true');
     });
@@ -599,6 +616,7 @@ describe('FileViewer SVG artifacts', () => {
         search: '?panel=metrics',
         hash: '#daily',
         state: { panel: 'metrics' },
+        requestId,
       },
     }));
 
@@ -629,6 +647,7 @@ describe('FileViewer SVG artifacts', () => {
       },
     });
     let restoreCallsDuringHandoff = 0;
+    let urlPostMessageSpy: ReturnType<typeof vi.spyOn> | null = null;
     let srcDocPostMessageSpy: ReturnType<typeof vi.spyOn> | null = null;
 
     function EarlyNavigationReplyProbe({
@@ -647,6 +666,7 @@ describe('FileViewer SVG artifacts', () => {
         const srcDocFrame = root?.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement | null;
         if (!urlFrame?.contentWindow || !srcDocFrame?.contentWindow) return;
         srcDocPostMessageSpy ??= vi.spyOn(srcDocFrame.contentWindow, 'postMessage');
+        const requestId = urlPostMessageSpy ? previewNavigationRequestId(urlPostMessageSpy.mock.calls) : '';
 
         window.dispatchEvent(new MessageEvent('message', {
           source: urlFrame.contentWindow,
@@ -657,6 +677,7 @@ describe('FileViewer SVG artifacts', () => {
             search: '',
             hash: '#q2',
             state: { report: 'q2' },
+            requestId,
           },
         }));
 
@@ -695,7 +716,9 @@ describe('FileViewer SVG artifacts', () => {
       );
     }
 
-    render(<Harness />);
+    const { container } = render(<Harness />);
+    const urlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement;
+    urlPostMessageSpy = vi.spyOn(urlFrame.contentWindow!, 'postMessage');
 
     fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
 
@@ -754,6 +777,85 @@ describe('FileViewer SVG artifacts', () => {
       search: '?v=1710000000&r=0&odPreviewNav=1',
       hash: '#/settings',
       state: { tab: 'settings' },
+    }), '*');
+  });
+
+  it('ignores stale navigation reports from an inactive preview iframe', async () => {
+    const file = baseFile({
+      name: 'page.html',
+      path: 'page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+
+    const { container } = render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+      />,
+    );
+
+    const urlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement;
+    const srcDocFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement;
+    const srcDocPostMessageSpy = vi.spyOn(srcDocFrame.contentWindow!, 'postMessage');
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: urlFrame.contentWindow,
+      data: {
+        type: 'od:preview-navigation',
+        href: 'http://localhost/api/projects/project-1/raw/page.html?v=1710000000&r=0&odPreviewNav=1#/settings',
+        pathname: '/api/projects/project-1/raw/page.html',
+        search: '?v=1710000000&r=0&odPreviewNav=1',
+        hash: '#/settings',
+        state: { tab: 'settings' },
+      },
+    }));
+
+    fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
+
+    await waitFor(() => {
+      expect(srcDocFrame.getAttribute('data-od-active')).toBe('true');
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: srcDocFrame.contentWindow,
+      data: {
+        type: 'od:preview-navigation',
+        href: 'about:srcdoc#/current',
+        pathname: '/',
+        search: '',
+        hash: '#/current',
+        state: { tab: 'current' },
+      },
+    }));
+    srcDocPostMessageSpy.mockClear();
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: urlFrame.contentWindow,
+      data: {
+        type: 'od:preview-navigation',
+        href: 'http://localhost/api/projects/project-1/raw/page.html?v=1710000000&r=0&odPreviewNav=1#/stale',
+        pathname: '/api/projects/project-1/raw/page.html',
+        search: '?v=1710000000&r=0&odPreviewNav=1',
+        hash: '#/stale',
+        state: { tab: 'stale' },
+      },
+    }));
+
+    expect(srcDocPostMessageSpy).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'od:preview-navigation-restore',
+      hash: '#/stale',
+      state: { tab: 'stale' },
     }), '*');
   });
 
