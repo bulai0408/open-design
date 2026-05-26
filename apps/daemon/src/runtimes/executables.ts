@@ -11,6 +11,7 @@ import type {
 } from './types.js';
 
 export const AGENT_BIN_ENV_KEYS = new Map<string, string>([
+  ['aider', 'AIDER_BIN'],
   ['claude', 'CLAUDE_BIN'],
   ['codex', 'CODEX_BIN'],
   ['copilot', 'COPILOT_BIN'],
