@@ -88,6 +88,13 @@ export interface Dict {
   'plugins.availableDetails.integrity': string;
   'plugins.availableDetails.permissions': string;
   'plugins.availableDetails.capabilitySummary': string;
+  'plugins.actions.copyInstallCommand': string;
+  'plugins.actions.copyPluginId': string;
+  'plugins.actions.copyReadmeBadge': string;
+  'plugins.actions.openSourceGithub': string;
+  'plugins.actions.openSource': string;
+  'plugins.actions.openHomepage': string;
+  'plugins.actions.openMarketplace': string;
 
   // App / brand
   'app.brand': string;
@@ -193,6 +200,7 @@ export interface Dict {
   'settings.modeDaemonInstalledMeta': string;
   'settings.modeApi': string;
   'settings.modeApiMeta': string;
+  'settings.byokNoFileToolsNotice': string;
   'settings.codeAgent': string;
   'settings.codeAgentHint': string;
   'settings.rescan': string;
@@ -376,6 +384,7 @@ export interface Dict {
   'settings.designSystems': string;
   'settings.designSystemsHint': string;
   'settings.designSystemsInstalled': string;
+  'settings.designSystemRenameFailed': string;
   'settings.designSystemsAdd': string;
   'settings.designSystemsHiddenCount': string;
   'settings.designSystemsShowAll': string;
@@ -791,6 +800,9 @@ export interface Dict {
   'workingDirPicker.replace': string;
   'workingDirPicker.recent': string;
   'handoff.toTarget': string;
+  'handoff.openInTarget': string;
+  'handoff.openAction': string;
+  'handoff.menuTitle': string;
   'handoff.action': string;
   'handoff.fallbackTitle': string;
   'handoff.chooseTargetAria': string;
@@ -913,6 +925,11 @@ export interface Dict {
   'pluginCard.publishTitle': string;
   'pluginCard.contributeAria': string;
   'pluginCard.contributeTitle': string;
+  'skillPluginCandidate.createForMe': string;
+  'skillPluginCandidate.contributeToMain': string;
+  'skillPluginCandidate.publishRepo': string;
+  'skillPluginCandidate.dismiss': string;
+  'skillPluginCandidate.repoDescription': string;
   'integrations.kicker': string;
   'integrations.lede': string;
   'integrations.agentReady': string;
@@ -1485,6 +1502,7 @@ export interface Dict {
   'designs.status.succeeded': string;
   'designs.status.failed': string;
   'designs.status.canceled': string;
+  'designs.status.published': string;
   'designs.viewToggleAria': string;
   'designs.viewGrid': string;
   'designs.viewKanban': string;
@@ -1659,6 +1677,10 @@ export interface Dict {
   'chat.comments.pinAtCoords': string;
   'chat.comments.capturedItems': string;
   'chat.comments.clear': string;
+  'chat.inspect.noEditableTargets': string;
+  'chat.inspect.noCommentTargets': string;
+  'chat.inspect.editHint': string;
+  'chat.inspect.commentHint': string;
   'chat.conversationsTitle': string;
   'chat.conversationsAria': string;
   'chat.newConversation': string;
@@ -1699,6 +1721,14 @@ export interface Dict {
   'chat.linkedFolderNotFound': string;
   'chat.linkedFolderAlready': string;
   'chat.linkedFolderPickError': string;
+  'chat.queuedHeader': string;
+  'chat.queuedToSend': string;
+  'chat.queuedEditQueuedTaskAria': string;
+  'chat.queuedSave': string;
+  'chat.queuedCancel': string;
+  'chat.queuedEdit': string;
+  'chat.queuedMore': string;
+  'chat.queuedFollowUpFallback': string;
   'chat.send': string;
   'chat.stop': string;
   'chat.removeAria': string;
@@ -1714,6 +1744,22 @@ export interface Dict {
 
   // Preview modal
   'preview.shareMenu': string;
+  'preview.exportMenu': string;
+  'preview.shareTemplateBadge': string;
+  'preview.shareToX': string;
+  'preview.shareToReddit': string;
+  'preview.shareToFacebook': string;
+  'preview.shareToLinkedIn': string;
+  'preview.shareToInstagram': string;
+  'preview.shareToXiaohongshu': string;
+  'preview.copyTemplateLink': string;
+  'preview.copyShareText': string;
+  'preview.shareSocialGroup': string;
+  'preview.shareCopyGroup': string;
+  'preview.shareExportGroup': string;
+  'preview.shareCopied': string;
+  'preview.shareCopyFailed': string;
+  'preview.shareTextDefault': string;
   'preview.openInNewTab': string;
   'preview.exit': string;
   'preview.fullscreen': string;
@@ -1882,9 +1928,11 @@ export interface Dict {
   'fileViewer.draw': string;
   'manualEdit.layers': string;
   'manualEdit.editableCount': string;
+  'manualEdit.hiddenBadge': string;
   'manualEdit.title': string;
   'manualEdit.selectLayer': string;
   'manualEdit.empty': string;
+  'manualEdit.noEditableLayers': string;
   'manualEdit.noClass': string;
   'manualEdit.tabsAria': string;
   'manualEdit.tabContent': string;

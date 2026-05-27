@@ -6,6 +6,8 @@ import { runArtifactsCli } from './artifacts-cli.js';
 import { runProjectHandoff } from './handoff-cli.js';
 import { runConnectorsToolCli } from './tools-connectors-cli.js';
 import { runDesignSystemsToolCli } from './tools-design-systems-cli.js';
+import { DESIGN_SYSTEMS_USAGE, isDesignSystemsHelpArg } from './design-systems-cli-help.js';
+import { parseDesignSystemRenameArgs } from './design-system-rename-args.js';
 import { runLiveArtifactsToolCli } from './tools-live-artifacts-cli.js';
 import { splitResearchSubcommand } from './research/cli-args.js';
 import { resolveDaemonUrl } from './daemon-url.js';
@@ -928,6 +930,7 @@ async function runPlugin(args) {
     case 'scaffold': return runPluginScaffold(rest);
     case 'validate': return runPluginValidate(rest);
     case 'pack':     return runPluginPack(rest);
+    case 'candidates': return runPluginCandidates(rest);
     case 'login':    return runPluginLogin(rest);
     case 'whoami':   return runPluginWhoami(rest);
     case 'export':   return runPluginExport(rest);
@@ -3016,6 +3019,85 @@ function coerceCliValue(raw) {
   return raw;
 }
 
+async function runPluginCandidates(rest) {
+  const sub = rest[0];
+  const args = rest.slice(1);
+  const flags = parseFlags(args, {
+    string: new Set(['daemon-url', 'project', 'action']),
+    boolean: new Set(['help', 'h', 'json', 'include-dismissed']),
+  });
+  if (!sub || flags.help || flags.h) {
+    console.log(`Usage:
+  od plugin candidates list --project <projectId> [--json] [--include-dismissed]
+  od plugin candidates draft <candidateId> --project <projectId> [--json]
+  od plugin candidates dismiss <candidateId> --project <projectId> [--json]
+
+Lists and formalizes persisted skill-to-plugin candidates.`);
+    process.exit(!sub ? 2 : 0);
+  }
+  const projectId = typeof flags.project === 'string' && flags.project.length > 0 ? flags.project : '';
+  if (!projectId) {
+    console.error('--project <projectId> is required');
+    process.exit(2);
+  }
+  const base = (await pluginDaemonUrl(flags)).replace(/\/$/, '');
+  if (sub === 'list') {
+    const qs = flags['include-dismissed'] ? '?includeDismissed=true' : '';
+    const resp = await fetch(`${base}/api/projects/${encodeURIComponent(projectId)}/plugin-candidates${qs}`);
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      console.error(`GET plugin candidates failed: ${resp.status} ${JSON.stringify(data)}`);
+      process.exit(1);
+    }
+    if (flags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+    const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+    if (candidates.length === 0) {
+      console.log('No plugin candidates.');
+      return;
+    }
+    for (const candidate of candidates) {
+      console.log(`${candidate.id}\t${candidate.status}\t${candidate.title}\t${candidate.draftPath ?? ''}`);
+    }
+    return;
+  }
+  const candidateId = args.find((a) => !a.startsWith('-') && a !== flags.project && a !== flags.action);
+  if (!candidateId) {
+    console.error(`candidate id is required for ${sub}`);
+    process.exit(2);
+  }
+  if (sub === 'draft') {
+    const resp = await fetch(`${base}/api/projects/${encodeURIComponent(projectId)}/plugin-candidates/${encodeURIComponent(candidateId)}/draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const data = await resp.json().catch(() => null);
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+    } else if (resp.ok) {
+      console.log(`[candidate] draft: ${data.draftPath}`);
+      console.log(`[candidate] validation ok=${data.validation?.ok}`);
+    } else {
+      console.error(`[candidate] draft failed: ${data?.message ?? JSON.stringify(data)}`);
+    }
+    process.exit(resp.ok ? 0 : resp.status === 422 ? 4 : 1);
+  }
+  if (sub === 'dismiss') {
+    const resp = await fetch(`${base}/api/projects/${encodeURIComponent(projectId)}/plugin-candidates/${encodeURIComponent(candidateId)}/dismiss`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const data = await resp.json().catch(() => null);
+    if (flags.json) process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+    else if (resp.ok) console.log(`[candidate] dismissed ${candidateId}`);
+    else console.error(`[candidate] dismiss failed: ${data?.message ?? JSON.stringify(data)}`);
+    process.exit(resp.ok ? 0 : 1);
+  }
+  console.error(`unknown subcommand: od plugin candidates ${sub}`);
+  process.exit(2);
+}
+
 // Phase 4 / spec §14.1 — `od plugin publish --to <catalog>`.
 //
 // Reads the installed plugin's manifest metadata (or the snapshot's
@@ -4152,6 +4234,8 @@ function printPluginHelp() {
                                           (manifest parse + atom + ref checks).
   od plugin pack <folder> [--out <path>]  Build a .tgz archive of a plugin
                                           folder for distribution.
+  od plugin candidates list --project <id>
+                                          List persisted skill-to-plugin candidates.
   od plugin publish-repo <folder>         Create/update the author's public
                                           GitHub repo for a plugin folder.
   od plugin open-design-pr <folder>       Push a community-catalog branch and
@@ -5067,8 +5151,52 @@ async function runLibraryList(name, args) {
 }
 
 async function runSkills(args)        { return runLibraryList('skills', args); }
-async function runDesignSystems(args) { return runLibraryList('design-systems', args); }
 async function runCraft(args)         { return runLibraryList('craft', args); }
+
+async function runDesignSystems(args) {
+  if (args[0] === 'rename') return runDesignSystemRename(args.slice(1));
+  if (!args[0] || isDesignSystemsHelpArg(args[0])) {
+    console.log(DESIGN_SYSTEMS_USAGE);
+    process.exit(isDesignSystemsHelpArg(args[0]) ? 0 : 2);
+  }
+  return runLibraryList('design-systems', args);
+}
+
+// od design-systems rename <id> --title <new-title> [--json]
+// Renames an editable (user-created) design system via PATCH
+// /api/design-systems/:id. Built-in systems are read-only and the daemon
+// returns 404, surfaced here as a structured failure. Arg parsing lives in
+// design-system-rename-args.ts so it can be unit-tested.
+async function runDesignSystemRename(args) {
+  if (args.length === 0 || args[0] === 'help' || args.includes('--help') || args.includes('-h')) {
+    console.log(`Usage:
+  od design-systems rename <id> --title <new-title> [--json] [--daemon-url <url>]
+  od design-systems rename <id> "<new title>" [--json]
+
+Renames an editable (user-created) design system. Built-in systems are read-only.`);
+    process.exit(args.length === 0 ? 2 : 0);
+  }
+  const parsed = parseDesignSystemRenameArgs(args);
+  if (!parsed) {
+    console.error('Usage: od design-systems rename <id> --title <new-title>');
+    process.exit(2);
+  }
+  const flags = parseFlags(args, {
+    string: new Set([...LIBRARY_STRING_FLAGS, 'title']),
+    boolean: LIBRARY_BOOLEAN_FLAGS,
+  });
+  const base = (await libraryDaemonUrl(flags)).replace(/\/$/, '');
+  const resp = await fetch(`${base}/api/design-systems/${encodeURIComponent(parsed.id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: parsed.title }),
+  });
+  if (!resp.ok) return structuredHttpFailure(resp);
+  const data = await resp.json();
+  if (flags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+  const renamed = data.designSystem ?? data;
+  console.log(`Renamed ${parsed.id} -> ${renamed.title ?? parsed.title}`);
+}
 
 async function runStatus(args) {
   // Alias of `od daemon status`.

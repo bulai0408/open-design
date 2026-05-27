@@ -39,7 +39,11 @@ import type { PluginFolderAgentAction } from "./design-files/pluginFolderActions
 import { Icon } from "./Icon";
 import { useT } from "../i18n";
 import { deriveFileOps, type FileOpEntry } from "../runtime/file-ops";
-import { unfinishedTodosFromEvents, type TodoItem } from "../runtime/todos";
+import {
+  isTodoWriteToolName,
+  unfinishedTodosFromEvents,
+  type TodoItem,
+} from "../runtime/todos";
 import type { Dict } from "../i18n/types";
 import { agentDisplayName, exactAgentDisplayName } from "../utils/agentLabels";
 import {
@@ -97,6 +101,177 @@ function ActionNoticeView({ notice }: { notice: ActionNotice | null }) {
         </>
       ) : null}
     </>
+  );
+}
+
+type SkillPluginCandidateBlock = Extract<Block, { kind: "plugin-candidate" }>;
+
+function SkillPluginCandidateCard({
+  block,
+  projectId,
+  onDismissed,
+  onRequestOpenFile,
+}: {
+  block: SkillPluginCandidateBlock;
+  projectId: string | null;
+  onDismissed: (candidateId: string) => void;
+  onRequestOpenFile?: (name: string) => void;
+}) {
+  const t = useT();
+  const [busy, setBusy] = useState<null | "draft" | "publish" | "contribute" | "dismiss">(null);
+  const [notice, setNotice] = useState<ActionNotice | null>(null);
+  const disabled = !projectId || busy !== null;
+  const description =
+    block.description === "Reusable skill material detected from a repository link." ||
+    block.description === "This repo looks like it could work as a plugin."
+      ? t("skillPluginCandidate.repoDescription")
+      : block.description || t("skillPluginCandidate.repoDescription");
+
+  async function post(path: string, body: Record<string, unknown> = {}) {
+    const resp = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      const message =
+        data?.message ??
+        (typeof data?.error === "string" ? data.error : data?.error?.message) ??
+        resp.statusText;
+      throw new Error(message || "Plugin candidate action failed.");
+    }
+    return data;
+  }
+
+  async function createDraft() {
+    if (!projectId) return;
+    setBusy("draft");
+    setNotice(null);
+    try {
+      const data = await post(
+        `/api/projects/${encodeURIComponent(projectId)}/plugin-candidates/${encodeURIComponent(block.candidateId)}/draft`,
+      );
+      const draftPath = String(data?.draftPath ?? "");
+      if (data?.validation?.ok === false) {
+        setNotice({ message: "Draft created with validation issues." });
+      } else if (draftPath) {
+        const install = await post(
+          `/api/projects/${encodeURIComponent(projectId)}/plugins/install-folder`,
+          { path: draftPath },
+        );
+        if (install?.ok === false) {
+          setNotice({ message: install?.message ?? "Plugin draft created, but install failed." });
+        } else {
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("open-design:plugins-changed"));
+          }
+          setNotice({ message: install?.message ?? "Plugin draft created and added to My plugins." });
+        }
+      } else {
+        setNotice({ message: "Plugin draft created." });
+      }
+      if (draftPath && onRequestOpenFile) onRequestOpenFile(`${draftPath}/open-design.json`);
+    } catch (err) {
+      setNotice({ message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function share(action: "publish-github" | "contribute-open-design") {
+    if (!projectId) return;
+    setBusy(action === "publish-github" ? "publish" : "contribute");
+    setNotice(null);
+    try {
+      const data = await post(
+        `/api/projects/${encodeURIComponent(projectId)}/plugin-candidates/${encodeURIComponent(block.candidateId)}/share-tasks`,
+        { action },
+      );
+      setNotice({
+        message:
+          action === "publish-github"
+            ? `GitHub publish task started for ${data?.path ?? "the draft"}.`
+            : `Open Design contribution task started for ${data?.path ?? "the draft"}.`,
+      });
+    } catch (err) {
+      setNotice({ message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function dismiss() {
+    if (!projectId) return;
+    setBusy("dismiss");
+    try {
+      await post(
+        `/api/projects/${encodeURIComponent(projectId)}/plugin-candidates/${encodeURIComponent(block.candidateId)}/dismiss`,
+      );
+      onDismissed(block.candidateId);
+    } catch (err) {
+      setNotice({ message: err instanceof Error ? err.message : String(err) });
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="plugin-action-panel" data-testid={`skill-plugin-candidate-${block.candidateId}`}>
+      <div className="plugin-action-card">
+        <div className="plugin-action-card__body">
+          <div className="plugin-action-card__title">
+            <Icon name="sparkles" size={14} />
+            <span>{block.title}</span>
+          </div>
+          <p className="plugin-action-card__description">
+            {description}
+          </p>
+          <div className="plugin-action-card__actions">
+            <button
+              type="button"
+              className="plugin-action-button plugin-action-button--primary"
+              disabled={disabled}
+              onClick={() => void createDraft()}
+            >
+              <Icon name={busy === "draft" ? "spinner" : "plus"} size={13} />
+              <span>{busy === "draft" ? "Creating..." : t("skillPluginCandidate.createForMe")}</span>
+            </button>
+            <button
+              type="button"
+              className="plugin-action-button"
+              disabled={disabled}
+              onClick={() => void share("contribute-open-design")}
+            >
+              <Icon name={busy === "contribute" ? "spinner" : "share"} size={13} />
+              <span>{busy === "contribute" ? "Starting..." : t("skillPluginCandidate.contributeToMain")}</span>
+            </button>
+            <button
+              type="button"
+              className="plugin-action-button"
+              disabled={disabled}
+              onClick={() => void share("publish-github")}
+            >
+              <Icon name={busy === "publish" ? "spinner" : "github"} size={13} />
+              <span>{busy === "publish" ? "Starting..." : t("skillPluginCandidate.publishRepo")}</span>
+            </button>
+            <button
+              type="button"
+              className="plugin-action-button"
+              disabled={disabled}
+              onClick={() => void dismiss()}
+            >
+              <Icon name={busy === "dismiss" ? "spinner" : "close"} size={13} />
+              <span>{t("skillPluginCandidate.dismiss")}</span>
+            </button>
+          </div>
+          {notice ? (
+            <div className="plugin-action-card__notice" role="status">
+              <ActionNoticeView notice={notice} />
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -200,6 +375,64 @@ export function AssistantMessage({
         : [],
     [displayedProduced, fileOps, hiddenPluginActionPaths, isLast, message.content, projectFiles, projectId, streaming],
   );
+  // Plugin action state lives at the AssistantMessage level (not inside
+  // PluginActionPanel) so the success notice survives the unmount/remount
+  // cycle ProjectView triggers via `hiddenPluginActionPaths` during install
+  // (issue #2876). If state lived inside the panel the setNoticeByFolder
+  // call after `await onRequestPluginFolderAgentAction(...)` would land on
+  // a dead fiber and the user would see nothing change after "Sending...".
+  const [pluginBusyKey, setPluginBusyKey] = useState<string | null>(null);
+  const [pluginNoticeByFolder, setPluginNoticeByFolder] = useState<Record<string, ActionNotice>>({});
+  const runPluginAction = useCallback(
+    async (folder: PluginFolderCandidate, action: PluginFolderAgentAction) => {
+      if (pluginBusyKey || !onRequestPluginFolderAgentAction) return;
+      const key = `${action}:${folder.path}`;
+      setPluginBusyKey(key);
+      setPluginNoticeByFolder((prev) => {
+        if (!(folder.path in prev)) return prev;
+        const next = { ...prev };
+        delete next[folder.path];
+        return next;
+      });
+      try {
+        const outcome = await onRequestPluginFolderAgentAction(folder.path, action);
+        const url =
+          outcome && typeof outcome === "object" && typeof outcome.url === "string"
+            ? outcome.url
+            : "";
+        const message =
+          outcome && typeof outcome === "object" && typeof outcome.message === "string"
+            ? outcome.message
+            : "";
+        // The install endpoint's PluginInstallOutcome contract leaves
+        // `message` optional. When both message and url are absent we still
+        // need to confirm success — the bug report explicitly describes
+        // "the plugin was in fact added successfully, but the original
+        // screen did not communicate that outcome." Default to a short
+        // success label keyed off the action.
+        const notice: ActionNotice | null =
+          message || url
+            ? buildActionNotice(message || url, url)
+            : action === "install"
+              ? { message: "Added to My plugins." }
+              : null;
+        if (notice) {
+          setPluginNoticeByFolder((prev) => ({
+            ...prev,
+            [folder.path]: notice,
+          }));
+        }
+      } catch (err) {
+        setPluginNoticeByFolder((prev) => ({
+          ...prev,
+          [folder.path]: { message: err instanceof Error ? err.message : String(err) },
+        }));
+      } finally {
+        setPluginBusyKey(null);
+      }
+    },
+    [pluginBusyKey, onRequestPluginFolderAgentAction],
+  );
   const usage = events.find((e) => e.kind === "usage") as
     | Extract<AgentEvent, { kind: "usage" }>
     | undefined;
@@ -235,6 +468,9 @@ export function AssistantMessage({
   // Track which forms the user submitted in this session so we lock them
   // immediately on click (without waiting for the parent to re-render).
   const [locallySubmitted, setLocallySubmitted] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [dismissedCandidateIds, setDismissedCandidateIds] = useState<Set<string>>(
     () => new Set()
   );
   // Route interactive tool answers (currently AskUserQuestion) back to the
@@ -314,6 +550,24 @@ export function AssistantMessage({
               />
             );
           }
+          if (b.kind === "plugin-candidate") {
+            if (dismissedCandidateIds.has(b.candidateId)) return null;
+            return (
+              <SkillPluginCandidateCard
+                key={i}
+                block={b}
+                projectId={projectId}
+                onDismissed={(candidateId) =>
+                  setDismissedCandidateIds((prev) => {
+                    const next = new Set(prev);
+                    next.add(candidateId);
+                    return next;
+                  })
+                }
+                onRequestOpenFile={onRequestOpenFile}
+              />
+            );
+          }
           if (b.kind === "status")
             return <StatusPill key={i} label={b.label} detail={b.detail} />;
           return null;
@@ -328,10 +582,36 @@ export function AssistantMessage({
         {!streaming && projectId && pluginActionFolders.length > 0 ? (
           <PluginActionPanel
             folders={pluginActionFolders}
+            notices={pluginNoticeByFolder}
+            busyKey={pluginBusyKey}
+            onRunAction={runPluginAction}
             onRequestOpenFile={onRequestOpenFile}
             onRequestPluginFolderAgentAction={onRequestPluginFolderAgentAction}
+            activePluginActionPaths={activePluginActionPaths}
           />
         ) : null}
+        {/*
+          Notices for folders that completed an action while the panel was
+          unmounted (the parent toggled `hiddenPluginActionPaths` during the
+          install) need a place to render once the panel goes away. Without
+          this fallback, a successful "Add to My plugins" that hides the
+          folder afterwards would silently swallow the confirmation
+          (issue #2876).
+         */}
+        {!streaming && projectId
+          ? Object.entries(pluginNoticeByFolder)
+              .filter(([path]) => !pluginActionFolders.some((folder) => folder.path === path))
+              .map(([path, notice]) => (
+                <div
+                  key={`plugin-orphan-notice-${path}`}
+                  className="plugin-action-orphan-notice"
+                  role="status"
+                  data-testid={`plugin-folder-notice-${path}`}
+                >
+                  <ActionNoticeView notice={notice} />
+                </div>
+              ))
+          : null}
         {!streaming && unfinishedTodos.length > 0 ? (
           <UnfinishedTodosPanel
             todos={unfinishedTodos}
@@ -1068,13 +1348,25 @@ function ProducedFiles({
   );
 }
 
+// Pure renderer. State (busyKey, notices) and the action runner live in the
+// AssistantMessage parent so they survive the panel's unmount/remount cycle
+// during install (issue #2876).
 function PluginActionPanel({
   folders,
+  notices,
+  busyKey,
+  onRunAction,
   onRequestOpenFile,
   onRequestPluginFolderAgentAction,
   activePluginActionPaths = new Set(),
 }: {
   folders: PluginFolderCandidate[];
+  notices: Record<string, ActionNotice>;
+  busyKey: string | null;
+  onRunAction: (
+    folder: PluginFolderCandidate,
+    action: PluginFolderAgentAction,
+  ) => Promise<void> | void;
   onRequestOpenFile?: (name: string) => void;
   onRequestPluginFolderAgentAction?: (
     relativePath: string,
@@ -1082,46 +1374,8 @@ function PluginActionPanel({
   ) => Promise<{ message?: string; url?: string } | void> | { message?: string; url?: string } | void;
   activePluginActionPaths?: Set<string>;
 }) {
-  const [busyKey, setBusyKey] = useState<string | null>(null);
-  const [noticeByFolder, setNoticeByFolder] = useState<Record<string, ActionNotice>>(
-    {},
-  );
-
-  async function runAction(
-    folder: PluginFolderCandidate,
-    action: PluginFolderAgentAction,
-  ) {
-    if (busyKey || !onRequestPluginFolderAgentAction) return;
-    const key = `${action}:${folder.path}`;
-    setBusyKey(key);
-    setNoticeByFolder((prev) => {
-      const next = { ...prev };
-      delete next[folder.path];
-      return next;
-    });
-    try {
-      const outcome = await onRequestPluginFolderAgentAction(folder.path, action);
-      const url = outcome && typeof outcome === 'object' && typeof outcome.url === 'string'
-        ? outcome.url
-        : '';
-      const message = outcome && typeof outcome === 'object' && typeof outcome.message === 'string'
-        ? outcome.message
-        : '';
-      if (message || url) {
-        setNoticeByFolder((prev) => ({
-          ...prev,
-          [folder.path]: buildActionNotice(message || url, url),
-        }));
-      }
-    } catch (err) {
-      setNoticeByFolder((prev) => ({
-        ...prev,
-        [folder.path]: { message: err instanceof Error ? err.message : String(err) },
-      }));
-    } finally {
-      setBusyKey(null);
-    }
-  }
+  const noticeByFolder = notices;
+  const runAction = onRunAction;
 
   return (
     <div className="plugin-action-panel" aria-label="Plugin next actions">
@@ -1592,6 +1846,8 @@ const SNAPSHOT_TOOL_NAMES = new Set([
   "ask_user_question",
   "TodoWrite",
   "todowrite",
+  "todo_write",
+  "update_plan",
 ]);
 
 function dedupeSnapshotToolRetries(items: ToolItem[]): ToolItem[] {
@@ -1619,9 +1875,7 @@ function dedupeSnapshotToolRetries(items: ToolItem[]): ToolItem[] {
   // differ). We detect by checking whether all items share a TodoWrite
   // name after the input-key dedupe above.
   const collapsed = Array.from(lastByKey.values());
-  const allTodoWrite = collapsed.every(
-    (it) => it.use.name === "TodoWrite" || it.use.name === "todowrite",
-  );
+  const allTodoWrite = collapsed.every((it) => isTodoWriteToolName(it.use.name));
   if (allTodoWrite && collapsed.length > 1) {
     return [collapsed[collapsed.length - 1]!];
   }
@@ -1749,7 +2003,7 @@ function toolFamily(name: string): string {
   if (name === "Glob" || name === "list_files") return "glob";
   if (name === "Grep") return "grep";
   if (name === "Bash") return "bash";
-  if (name === "TodoWrite") return "todo";
+  if (isTodoWriteToolName(name)) return "todo";
   if (name === "WebFetch" || name === "web_fetch") return "fetch";
   if (name === "WebSearch" || name === "web_search") return "search";
   return name.toLowerCase();
@@ -1815,6 +2069,14 @@ type Block =
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string }
   | { kind: "tool-group"; items: ToolItem[] }
+  | {
+      kind: "plugin-candidate";
+      candidateId: string;
+      title: string;
+      description?: string | undefined;
+      confidence?: number | undefined;
+      draftPath?: string | null | undefined;
+    }
   | { kind: "status"; label: string; detail?: string | undefined };
 
 /**
@@ -1830,9 +2092,7 @@ type Block =
 function stripTodoToolGroups(blocks: Block[]): Block[] {
   return blocks.filter((block) => {
     if (block.kind !== "tool-group") return true;
-    return !block.items.every(
-      (it) => it.use.name === "TodoWrite" || it.use.name === "todowrite",
-    );
+    return !block.items.every((it) => isTodoWriteToolName(it.use.name));
   });
 }
 
@@ -1901,6 +2161,17 @@ function buildBlocks(events: AgentEvent[]): Block[] {
       continue;
     }
     if (ev.kind === "tool_result") continue;
+    if (ev.kind === "plugin_candidate") {
+      out.push({
+        kind: "plugin-candidate",
+        candidateId: ev.candidateId,
+        title: ev.title,
+        description: ev.description,
+        confidence: ev.confidence,
+        draftPath: ev.draftPath,
+      });
+      continue;
+    }
     if (ev.kind === "status") {
       if (
         ev.label === "streaming" ||

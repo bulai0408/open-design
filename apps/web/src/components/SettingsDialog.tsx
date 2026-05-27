@@ -176,6 +176,8 @@ interface Props {
   onRefreshAgents: (
     options?: AgentRefreshOptions,
   ) => AgentInfo[] | Promise<AgentInfo[] | void> | void;
+  /** Re-fetch functional skills into App state after Settings mutations. */
+  onSkillsRefresh?: () => Promise<void> | void;
   daemonMediaProviders?: AppConfig['mediaProviders'] | null;
   daemonMediaProvidersFetchState?: 'idle' | 'ok' | 'error';
   mediaProvidersNotice?: string | null;
@@ -797,6 +799,7 @@ export function SettingsDialog({
   composioConfigLoading = false,
   onClose,
   onRefreshAgents,
+  onSkillsRefresh,
   daemonMediaProviders,
   daemonMediaProvidersFetchState = 'idle',
   mediaProvidersNotice,
@@ -2914,6 +2917,13 @@ export function SettingsDialog({
                   <h3>{API_PROTOCOL_LABELS[apiProtocol]}</h3>
                 </div>
               </div>
+              <p
+                className="settings-test-status warn settings-byok-no-file-tools-notice"
+                role="note"
+                data-testid="settings-byok-no-file-tools-notice"
+              >
+                {t('settings.byokNoFileToolsNotice')}
+              </p>
               {byokPreconditionNotice ? (
                 <p
                   className="settings-test-status error"
@@ -3348,7 +3358,11 @@ export function SettingsDialog({
           ) : null}
 
           {activeSection === 'skills' ? (
-            <SkillsSection cfg={cfg} setCfg={setCfg} />
+            <SkillsSection
+              cfg={cfg}
+              setCfg={setCfg}
+              onSkillsRefresh={onSkillsRefresh}
+            />
           ) : null}
 
           {activeSection === 'designSystems' ? (

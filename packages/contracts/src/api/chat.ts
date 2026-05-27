@@ -3,6 +3,7 @@ import type {
   PreviewCommentMember,
   PreviewCommentPosition,
   PreviewCommentSelectionKind,
+  PreviewAnnotationStyle,
   PreviewVisualMarkKind,
 } from './comments';
 import type { ResearchOptions } from './research';
@@ -211,6 +212,7 @@ export interface ChatCommentAttachment {
   currentText: string;
   pagePosition: PreviewCommentPosition;
   htmlHint: string;
+  style?: PreviewAnnotationStyle;
   selectionKind?: ChatCommentSelectionKind;
   memberCount?: number;
   podMembers?: PreviewCommentMember[];
@@ -244,6 +246,14 @@ export type PersistedAgentEvent =
     }
   | { kind: 'tool_use'; id: string; name: string; input: unknown }
   | { kind: 'tool_result'; toolUseId: string; content: string; isError: boolean }
+  | {
+      kind: 'plugin_candidate';
+      candidateId: string;
+      title: string;
+      description?: string;
+      confidence?: number;
+      draftPath?: string | null;
+    }
   | { kind: 'usage'; inputTokens?: number; outputTokens?: number; costUsd?: number; durationMs?: number }
   | { kind: 'raw'; line: string };
 

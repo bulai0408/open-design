@@ -127,6 +127,7 @@ test('resolveAgentExecutable supports configured binary overrides for non-Codex 
     ['copilot', 'copilot', 'COPILOT_BIN'],
     ['deepseek', 'deepseek', 'DEEPSEEK_BIN'],
     ['trae-cli', 'traecli', 'TRAE_CLI_BIN'],
+    ['aider', 'aider', 'AIDER_BIN'],
   ];
   const dir = mkdtempSync(join(tmpdir(), 'od-agent-bin-overrides-'));
   try {
@@ -193,7 +194,7 @@ test('detectAgents includes sanitized install and docs metadata from split runti
       assert.ok(deepseek);
       assert.equal(
         deepseek.docsUrl,
-        'https://github.com/deepseek-ai/DeepSeek-TUI/blob/main/README.md',
+        'https://github.com/Hmbown/CodeWhale/blob/main/README.md',
       );
     });
   } finally {
