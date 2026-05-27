@@ -2531,6 +2531,73 @@ console.log(JSON.stringify({ type: 'text', part: { text: 'ok' } }));
     }
   });
 
+  it('tries a known OpenCode install after a stale PATH candidate without OPENCODE_BIN', async () => {
+    const pathDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-direct-path-'));
+    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-direct-home-'));
+    const oldPath = process.env.PATH;
+    const oldAgentHome = process.env.OD_AGENT_HOME;
+    try {
+      forgetDetectedAgentLaunchSelection('opencode');
+      const stalePathBin = path.join(pathDir, 'opencode');
+      const knownBinDir = path.join(home, '.opencode', 'bin');
+      const knownBin = path.join(knownBinDir, 'opencode');
+      await fsp.mkdir(knownBinDir, { recursive: true });
+      await fsp.writeFile(
+        stalePathBin,
+        `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '--version') {
+  console.log('opencode 1.1.14');
+  process.exit(0);
+}
+console.error('OpenCode stale PATH binary refused the prompt');
+process.exit(1);
+`,
+      );
+      await fsp.writeFile(
+        knownBin,
+        `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '--version') {
+  console.log('opencode 1.2.0');
+  process.exit(0);
+}
+console.log(JSON.stringify({ type: 'text', part: { text: 'ok' } }));
+`,
+      );
+      await fsp.chmod(stalePathBin, 0o755);
+      await fsp.chmod(knownBin, 0o755);
+      process.env.OD_AGENT_HOME = home;
+      process.env.PATH = pathDir;
+
+      const result = await testAgentConnection({ agentId: 'opencode' });
+
+      expect(result).toMatchObject({
+        ok: true,
+        kind: 'success',
+        agentName: 'OpenCode',
+        sample: 'ok',
+        detectedExecutablePath: knownBin,
+        detectedExecutableSource: 'known',
+        usedExecutablePath: knownBin,
+        usedExecutableSource: 'known',
+      });
+      expect(result).not.toHaveProperty('configuredExecutablePath');
+      expect(result.detail).toContain(`OpenCode binary failed: ${stalePathBin}.`);
+      expect(result.detail).toContain('This test succeeded with the known OpenCode install at');
+    } finally {
+      forgetDetectedAgentLaunchSelection('opencode');
+      process.env.PATH = oldPath;
+      if (oldAgentHome === undefined) {
+        delete process.env.OD_AGENT_HOME;
+      } else {
+        process.env.OD_AGENT_HOME = oldAgentHome;
+      }
+      await fsp.rm(pathDir, { recursive: true, force: true });
+      await fsp.rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('keeps OpenCode fallback retries within one connection-test timeout when a fallback hangs', async () => {
     const pathDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-hang-path-'));
     const configuredDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-hang-conf-'));

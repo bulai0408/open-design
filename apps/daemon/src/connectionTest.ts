@@ -286,6 +286,20 @@ function agentExecutableFallbackSuccessDetail(
   return `Configured ${label} path failed: ${configuredOverridePath}. This test succeeded with ${agentExecutableSourceLabel(agentId, pathResolvedSource)} at ${pathResolvedPath}. Update ${envKey} or clear the custom path to use the detected binary.`;
 }
 
+function agentExecutableRetrySuccessDetail(
+  agentId: string,
+  failedPath: string,
+  pathResolvedPath: string,
+  pathResolvedSource: RuntimeExecutableCandidateSource | null = null,
+): string {
+  const label = agentExecutableLabel(agentId);
+  const envKey = agentBinEnvKey(agentId);
+  const guidance = envKey
+    ? ` Set ${envKey} to this path to keep using it.`
+    : '';
+  return `${label} binary failed: ${failedPath}. This test succeeded with ${agentExecutableSourceLabel(agentId, pathResolvedSource)} at ${pathResolvedPath}.${guidance}`;
+}
+
 function agentConfiguredPathSuccessDetail(
   agentId: string,
   configuredOverridePath: string,
@@ -353,23 +367,15 @@ function setAgentBinOverride(
   };
 }
 
-function firstFallbackCandidate(
-  def: RuntimeAgentDef,
-  configuredAgentEnv: Record<string, string>,
-): RuntimeExecutableCandidate | null {
-  return inspectAgentExecutableCandidates(def, configuredAgentEnv).find(
-    (candidate) => candidate.source !== 'configured',
-  ) ?? null;
-}
-
 function firstDistinctFallbackCandidate(
   candidates: RuntimeExecutableCandidate[],
-  configuredPath: string | null | undefined,
+  ...excludedPaths: Array<string | null | undefined>
 ): RuntimeExecutableCandidate | null {
+  const excluded = new Set(excludedPaths.filter((value): value is string => Boolean(value)));
   return candidates.find(
     (candidate) =>
       candidate.source !== 'configured' &&
-      (!configuredPath || candidate.path !== configuredPath),
+      !excluded.has(candidate.path),
   ) ?? null;
 }
 
@@ -1930,12 +1936,20 @@ export async function testAgentConnection(
         executableResolution.executableCandidates,
         executableResolution.configuredOverridePath,
       )
-    : executableResolution.executableCandidates.find(
-        (candidate) =>
-          candidate.path === executableResolution.pathResolvedPath &&
-          candidate.source !== 'configured',
+    : firstDistinctFallbackCandidate(
+        executableResolution.executableCandidates,
+        usedExecutablePath,
+        executableResolution.selectedPath,
+        executableResolution.pathResolvedPath,
       )
-      ?? (def ? firstFallbackCandidate(def, configuredAgentEnv) : null);
+      ?? (def
+        ? firstDistinctFallbackCandidate(
+            inspectAgentExecutableCandidates(def, configuredAgentEnv),
+            usedExecutablePath,
+            executableResolution.selectedPath,
+            executableResolution.pathResolvedPath,
+          )
+        : null);
   const pathExecutablePath = fallbackCandidate?.path
     ?? executableResolution.pathResolvedPath
     ?? null;
@@ -1992,6 +2006,18 @@ export async function testAgentConnection(
     'unknown',
   ]);
   const supportsExecutableFallback = Boolean(agentBinEnvKey(input.agentId));
+  const fallbackFailedExecutablePath =
+    executableResolution.configuredOverridePath
+      ?? usedExecutablePath
+      ?? executableResolution.selectedPath
+      ?? executableResolution.pathResolvedPath
+      ?? null;
+  const canRetryExecutableFallback = Boolean(
+    pathExecutablePath &&
+    fallbackFailedExecutablePath &&
+    pathExecutablePath !== fallbackFailedExecutablePath &&
+    (executableResolution.configuredOverridePath || input.agentId === 'opencode'),
+  );
 
   if (primaryResult.ok && configuredAgentBin) {
     if (executableResolution.configuredOverridePath) {
@@ -2050,9 +2076,7 @@ export async function testAgentConnection(
     primaryResult.ok ||
     !executableFailureKinds.has(primaryResult.kind) ||
     !supportsExecutableFallback ||
-    !executableResolution.configuredOverridePath ||
-    !pathExecutablePath ||
-    executableResolution.configuredOverridePath === pathExecutablePath
+    !canRetryExecutableFallback
   ) {
     if (
       !primaryResult.ok &&
@@ -2096,7 +2120,13 @@ export async function testAgentConnection(
   // we run out of candidates.
   const fallbackCandidates = collectFallbackCandidates(
     executableResolution.executableCandidates,
-    executableResolution.configuredOverridePath,
+    executableResolution.configuredOverridePath
+      ? [executableResolution.configuredOverridePath]
+      : [
+          usedExecutablePath,
+          executableResolution.selectedPath,
+          executableResolution.pathResolvedPath,
+        ],
     pathExecutablePath,
     def,
     configuredAgentEnv,
@@ -2126,23 +2156,35 @@ export async function testAgentConnection(
       candidatePath,
     );
     const candidateDiagnosticSource = executableDiagnosticSource(candidateSource);
+    const usedExecutableSource: ConnectionTestResponse['usedExecutableSource'] =
+      executableResolution.configuredOverridePath
+        ? 'fallback_failed'
+        : candidateDiagnosticSource ?? 'path';
+    const detail = executableResolution.configuredOverridePath
+      ? agentExecutableFallbackSuccessDetail(
+          input.agentId,
+          executableResolution.configuredOverridePath,
+          candidatePath,
+          candidateDiagnosticSource,
+        )
+      : agentExecutableRetrySuccessDetail(
+          input.agentId,
+          fallbackFailedExecutablePath!,
+          candidatePath,
+          candidateDiagnosticSource,
+        );
     return {
       ...fallbackResult,
-      configuredExecutablePath: executableResolution.configuredOverridePath,
+      ...(executableResolution.configuredOverridePath
+        ? { configuredExecutablePath: executableResolution.configuredOverridePath }
+        : {}),
       detectedExecutablePath: candidatePath,
       ...(candidateDiagnosticSource
         ? { detectedExecutableSource: candidateDiagnosticSource }
         : {}),
       usedExecutablePath: fallbackResult.usedExecutablePath ?? candidatePath,
-      usedExecutableSource: 'fallback_failed',
-      detail: redactSecrets(
-        agentExecutableFallbackSuccessDetail(
-          input.agentId,
-          executableResolution.configuredOverridePath,
-          candidatePath,
-          candidateDiagnosticSource,
-        ),
-      ),
+      usedExecutableSource,
+      detail: redactSecrets(detail),
     };
   }
   return {
@@ -2162,23 +2204,24 @@ export async function testAgentConnection(
  * one-alternate layout keeps the same retry target as before), then
  * fall through every other non-configured candidate from the detection
  * scan in PATH-then-known-install order. Each path is included at most
- * once and the configured override path is never retried (it just
- * failed). When detection didn't produce any candidates we fall back to
+ * once and paths the primary attempt already proved bad are never
+ * retried. When detection didn't produce any candidates we fall back to
  * a live `inspectAgentExecutableCandidates()` walk so deployments
  * without a populated detection cache still recover.
  */
 function collectFallbackCandidates(
   candidates: RuntimeExecutableCandidate[],
-  configuredOverridePath: string | null,
+  excludedPaths: Array<string | null | undefined>,
   preselectedPath: string | null,
   def: RuntimeAgentDef | null | undefined,
   configuredAgentEnv: Record<string, string>,
 ): string[] {
+  const excluded = new Set(excludedPaths.filter((value): value is string => Boolean(value)));
   const seen = new Set<string>();
   const out: string[] = [];
   const add = (value: string | null | undefined) => {
     if (!value) return;
-    if (configuredOverridePath && value === configuredOverridePath) return;
+    if (excluded.has(value)) return;
     if (seen.has(value)) return;
     seen.add(value);
     out.push(value);
