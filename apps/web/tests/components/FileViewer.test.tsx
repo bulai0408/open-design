@@ -859,6 +859,81 @@ describe('FileViewer SVG artifacts', () => {
     }), '*');
   });
 
+  it('ignores a delayed capture reply after the active bridge iframe reports newer navigation', async () => {
+    const file = baseFile({
+      name: 'page.html',
+      path: 'page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+
+    const { container } = render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+      />,
+    );
+
+    const urlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement;
+    const srcDocFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement;
+    const urlPostMessageSpy = vi.spyOn(urlFrame.contentWindow!, 'postMessage');
+    const srcDocPostMessageSpy = vi.spyOn(srcDocFrame.contentWindow!, 'postMessage');
+
+    fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
+
+    expect(urlPostMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'od:preview-navigation-request',
+      requestId: expect.any(String),
+    }), '*');
+    const requestId = previewNavigationRequestId(urlPostMessageSpy.mock.calls);
+
+    await waitFor(() => {
+      expect(srcDocFrame.getAttribute('data-od-active')).toBe('true');
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: srcDocFrame.contentWindow,
+      data: {
+        type: 'od:preview-navigation',
+        href: 'about:srcdoc#/current',
+        pathname: '/',
+        search: '',
+        hash: '#/current',
+        state: { tab: 'current' },
+      },
+    }));
+    srcDocPostMessageSpy.mockClear();
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: urlFrame.contentWindow,
+      data: {
+        type: 'od:preview-navigation',
+        href: 'http://localhost/api/projects/project-1/raw/page.html?v=1710000000&r=0&odPreviewNav=1#/stale-requested',
+        pathname: '/api/projects/project-1/raw/page.html',
+        search: '?v=1710000000&r=0&odPreviewNav=1',
+        hash: '#/stale-requested',
+        state: { tab: 'stale-requested' },
+        requestId,
+      },
+    }));
+
+    expect(srcDocPostMessageSpy).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'od:preview-navigation-restore',
+      hash: '#/stale-requested',
+      state: { tab: 'stale-requested' },
+    }), '*');
+  });
+
   it('restores bridge navigation when returning to URL-loaded preview mode', async () => {
     const file = baseFile({
       name: 'page.html',

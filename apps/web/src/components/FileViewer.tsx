@@ -4617,12 +4617,15 @@ function HtmlViewer({
           : pendingRequest?.target === 'srcdoc'
             ? ev.source === srcDocPreviewIframeRef.current?.contentWindow
             : false;
-      const isPendingCaptureReply = !!(
-        !isActiveSource &&
+      const matchesPendingRequest = !!(
         requestId &&
         pendingRequest &&
         pendingRequest.id === requestId &&
         isPendingRequestSource
+      );
+      const isPendingCaptureReply = !!(
+        !isActiveSource &&
+        matchesPendingRequest
       );
       if (!isActiveSource && !isPendingCaptureReply) return;
       const navigation = {
@@ -4633,12 +4636,7 @@ function HtmlViewer({
         state: data.state,
         capturedAt: Date.now(),
       };
-      if (
-        requestId &&
-        pendingRequest &&
-        pendingRequest.id === requestId &&
-        isPendingRequestSource
-      ) {
+      if (matchesPendingRequest || (isActiveSource && pendingRequest)) {
         previewNavigationCaptureRequestRef.current = null;
       }
       previewNavigationRef.current = navigation;
