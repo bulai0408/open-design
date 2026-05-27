@@ -2531,6 +2531,95 @@ console.log(JSON.stringify({ type: 'text', part: { text: 'ok' } }));
     }
   });
 
+  it('keeps OpenCode fallback retries within one connection-test timeout when a fallback hangs', async () => {
+    const pathDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-hang-path-'));
+    const configuredDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-hang-conf-'));
+    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-opencode-hang-home-'));
+    const oldPath = process.env.PATH;
+    const oldAgentHome = process.env.OD_AGENT_HOME;
+    const oldTimeout = process.env.OD_CONNECTION_TEST_AGENT_TIMEOUT_MS;
+    try {
+      const configuredBin = path.join(configuredDir, 'opencode-old');
+      const stalePathBin = path.join(pathDir, 'opencode');
+      const knownBinDir = path.join(home, '.opencode', 'bin');
+      const knownBin = path.join(knownBinDir, 'opencode');
+      await fsp.mkdir(knownBinDir, { recursive: true });
+      await fsp.writeFile(
+        configuredBin,
+        `#!/usr/bin/env node\nconsole.error('OpenCode configured binary crashed');\nprocess.exit(1);\n`,
+      );
+      await fsp.writeFile(
+        stalePathBin,
+        `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '--version') {
+  console.log('opencode 1.1.14');
+  process.exit(0);
+}
+setTimeout(() => {}, 10_000);
+`,
+      );
+      await fsp.writeFile(
+        knownBin,
+        `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '--version') {
+  console.log('opencode 1.2.0');
+  process.exit(0);
+}
+console.log(JSON.stringify({ type: 'text', part: { text: 'ok' } }));
+`,
+      );
+      await fsp.chmod(configuredBin, 0o755);
+      await fsp.chmod(stalePathBin, 0o755);
+      await fsp.chmod(knownBin, 0o755);
+      process.env.OD_AGENT_HOME = home;
+      process.env.OD_CONNECTION_TEST_AGENT_TIMEOUT_MS = '2000';
+      process.env.PATH = pathDir;
+
+      const start = Date.now();
+      const result = await testAgentConnection({
+        agentId: 'opencode',
+        agentCliEnv: {
+          opencode: {
+            OPENCODE_BIN: configuredBin,
+          },
+        },
+      });
+      const elapsedMs = Date.now() - start;
+
+      expect(result).toMatchObject({
+        ok: true,
+        kind: 'success',
+        agentName: 'OpenCode',
+        sample: 'ok',
+        usedExecutableSource: 'fallback_failed',
+        configuredExecutablePath: configuredBin,
+        detectedExecutablePath: knownBin,
+        detectedExecutableSource: 'known',
+        usedExecutablePath: knownBin,
+      });
+      expect(elapsedMs).toBeLessThan(1_900);
+      expect(result.detail).toContain(`Configured OpenCode path failed: ${configuredBin}.`);
+      expect(result.detail).toContain('This test succeeded with the known OpenCode install at');
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldAgentHome === undefined) {
+        delete process.env.OD_AGENT_HOME;
+      } else {
+        process.env.OD_AGENT_HOME = oldAgentHome;
+      }
+      if (oldTimeout === undefined) {
+        delete process.env.OD_CONNECTION_TEST_AGENT_TIMEOUT_MS;
+      } else {
+        process.env.OD_CONNECTION_TEST_AGENT_TIMEOUT_MS = oldTimeout;
+      }
+      await fsp.rm(pathDir, { recursive: true, force: true });
+      await fsp.rm(configuredDir, { recursive: true, force: true });
+      await fsp.rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('reports Cursor Agent status auth failures before running the smoke prompt', async () => {
     await withFakeCursorAgent(
       `

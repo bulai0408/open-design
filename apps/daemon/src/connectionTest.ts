@@ -468,7 +468,20 @@ type ProviderConnectionInput = ProviderTestRequest & { signal?: AbortSignal };
 type AgentConnectionInput = AgentTestRequest & { signal?: AbortSignal };
 type AgentConnectionInternalInput = AgentConnectionInput & {
   executableFailureDetail?: string;
+  timeoutMs?: number;
 };
+
+function remainingTimeoutMs(deadlineMs: number): number {
+  return Math.max(0, deadlineMs - Date.now());
+}
+
+function fallbackAttemptTimeoutMs(
+  remainingMs: number,
+  remainingAttempts: number,
+): number {
+  if (remainingAttempts <= 1) return Math.max(1, remainingMs);
+  return Math.max(1, Math.floor(remainingMs / remainingAttempts));
+}
 
 function appendVersionedApiPath(baseUrl: string, suffix: string): string {
   const url = new URL(baseUrl);
@@ -1785,7 +1798,10 @@ async function testAgentConnectionInternal(
       child.stdin.end(formatPromptForAgentStdin(def, SMOKE_PROMPT), 'utf8');
     }
     const cancellationPromise = new Promise<{ kind: 'timeout' } | { kind: 'aborted' }>((resolve) => {
-      timer = setTimeout(() => resolve({ kind: 'timeout' }), agentTimeoutMs());
+      timer = setTimeout(
+        () => resolve({ kind: 'timeout' }),
+        Math.max(1, input.timeoutMs ?? agentTimeoutMs()),
+      );
       abortHandler = () => resolve({ kind: 'aborted' });
       if (input.signal?.aborted) {
         abortHandler();
@@ -1883,7 +1899,11 @@ async function testAgentConnectionInternal(
 export async function testAgentConnection(
   input: AgentConnectionInput,
 ): Promise<ConnectionTestResponse> {
-  const primaryResult = await testAgentConnectionInternal(input);
+  const connectionTestDeadlineMs = Date.now() + agentTimeoutMs();
+  const primaryResult = await testAgentConnectionInternal({
+    ...input,
+    timeoutMs: remainingTimeoutMs(connectionTestDeadlineMs),
+  });
   const validatedPrefs = validateAgentCliEnv(input.agentCliEnv);
   const envKey = agentBinEnvKey(input.agentId);
   const configuredAgentBin =
@@ -2081,7 +2101,10 @@ export async function testAgentConnection(
     def,
     configuredAgentEnv,
   );
-  for (const candidatePath of fallbackCandidates) {
+  for (let i = 0; i < fallbackCandidates.length; i += 1) {
+    const candidatePath = fallbackCandidates[i]!;
+    const remainingMs = remainingTimeoutMs(connectionTestDeadlineMs);
+    if (remainingMs <= 0) break;
     const fallbackResult = await testAgentConnectionInternal(
       {
         ...input,
@@ -2091,6 +2114,10 @@ export async function testAgentConnection(
           candidatePath,
         ),
         executableFailureDetail,
+        timeoutMs: fallbackAttemptTimeoutMs(
+          remainingMs,
+          fallbackCandidates.length - i,
+        ),
       },
     );
     if (!fallbackResult.ok) continue;
