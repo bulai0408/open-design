@@ -108,6 +108,17 @@ describe('FileViewer preview scale', () => {
     expect(css).toContain('.viewer-action');
   });
 
+  it('keeps manual edit canvas layout aligned with comment preview on device viewports (#2960)', () => {
+    const css = readExpandedIndexCss();
+
+    expect(css).toContain(
+      '.preview-viewport:not(.preview-viewport-desktop).manual-edit-workspace .manual-edit-canvas',
+    );
+    expect(css).toMatch(
+      /\.preview-viewport:not\(\.preview-viewport-desktop\) \.preview-frame-clip,\s*\n\.preview-viewport:not\(\.preview-viewport-desktop\) \.comment-frame-clip,\s*\n\.preview-viewport:not\(\.preview-viewport-desktop\)\.manual-edit-workspace \.manual-edit-canvas \{\s*\n\s*position: relative;/,
+    );
+  });
+
   it('keeps the manual edit titlebar from overlapping the close button', () => {
     const css = readExpandedIndexCss();
 
@@ -453,22 +464,53 @@ describe('FileViewer SVG artifacts', () => {
     expect(srcDocFrame?.getAttribute('data-od-active')).toBe('false');
     expect(srcDocFrame?.getAttribute('src')).toContain('odSrcdocTransport=1');
     expect(srcDocFrame?.srcdoc).not.toContain('__odArtifactBootCount');
-    const srcDocPostMessageSpy = vi.spyOn(srcDocFrame!.contentWindow!, 'postMessage');
 
     fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
 
     const urlFrameAfter = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement | null;
     const srcDocFrameAfter = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement | null;
+    const srcDocPostMessageSpy = vi.spyOn(srcDocFrameAfter!.contentWindow!, 'postMessage');
     fireEvent.load(srcDocFrameAfter!);
 
     expect(urlFrameAfter).toBe(urlFrame);
-    expect(srcDocFrameAfter).toBe(srcDocFrame);
     expect(urlFrameAfter?.getAttribute('data-od-active')).toBe('false');
     expect(urlFrameAfter?.getAttribute('src')).toBe('about:blank');
     expect(srcDocFrameAfter?.getAttribute('data-od-active')).toBe('true');
     const activatedHtml = srcDocActivationMessages(srcDocPostMessageSpy.mock.calls).at(-1)?.html ?? '';
     expect(activatedHtml).toContain('__odArtifactBootCount');
     expect(activatedHtml).toContain('data-od-edit-bridge');
+  });
+
+  it('renders sandbox-shim artifacts on the srcdoc transport without entering edit mode (#2791)', () => {
+    const file = baseFile({
+      name: 'search.html',
+      path: 'search.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Search',
+        entry: 'search.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+
+    const { container } = render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml='<html><body><script src="app.js"></script><main data-od-id="results">Results</main></body></html>'
+      />,
+    );
+
+    const srcDocFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement | null;
+    expect(srcDocFrame?.getAttribute('data-od-active')).toBe('true');
+    expect(srcDocFrame?.srcdoc).toContain('data-od-id="results"');
+    expect(srcDocFrame?.srcdoc).not.toContain('data-od-lazy-srcdoc-transport');
+    expect(srcDocFrame?.srcdoc).toContain('data-od-sandbox-shim');
   });
 
   it('reactivates the srcDoc transport after switching source back to preview', async () => {
@@ -549,8 +591,6 @@ describe('FileViewer SVG artifacts', () => {
     );
 
     const urlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement;
-    const srcDocFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement;
-    const srcDocPostMessageSpy = vi.spyOn(srcDocFrame.contentWindow!, 'postMessage');
 
     window.dispatchEvent(new MessageEvent('message', {
       source: urlFrame.contentWindow,
@@ -565,12 +605,15 @@ describe('FileViewer SVG artifacts', () => {
     }));
 
     fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
-    fireEvent.load(srcDocFrame);
 
-    await waitFor(() => {
-      expect(srcDocFrame.getAttribute('data-od-active')).toBe('true');
-      expect(srcDocFrame.getAttribute('src')).toContain('odSrcdocTransport=1');
+    const srcDocFrame = await waitFor(() => {
+      const activeFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement;
+      expect(activeFrame.getAttribute('data-od-active')).toBe('true');
+      expect(activeFrame.getAttribute('src')).toContain('odSrcdocTransport=1');
+      return activeFrame;
     });
+    const srcDocPostMessageSpy = vi.spyOn(srcDocFrame.contentWindow!, 'postMessage');
+    fireEvent.load(srcDocFrame);
     await waitFor(() => {
       const activatedHtml = srcDocActivationMessages(srcDocPostMessageSpy.mock.calls).at(-1)?.html ?? '';
       expect(activatedHtml).toContain('data-od-preview-navigation-restore');
@@ -655,9 +698,7 @@ describe('FileViewer SVG artifacts', () => {
     );
 
     const urlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement;
-    const srcDocFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement;
     const urlPostMessageSpy = vi.spyOn(urlFrame.contentWindow!, 'postMessage');
-    const srcDocPostMessageSpy = vi.spyOn(srcDocFrame.contentWindow!, 'postMessage');
 
     fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
 
@@ -666,10 +707,13 @@ describe('FileViewer SVG artifacts', () => {
       requestId: expect.any(String),
     }), '*');
     const requestId = previewNavigationRequestId(urlPostMessageSpy.mock.calls);
-    await waitFor(() => {
-      expect(srcDocFrame.getAttribute('data-od-active')).toBe('true');
+    const srcDocFrame = await waitFor(() => {
+      const activeFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement;
+      expect(activeFrame.getAttribute('data-od-active')).toBe('true');
+      return activeFrame;
     });
     expect(srcDocFrame.getAttribute('src')).toContain('odSrcdocTransport=1');
+    const srcDocPostMessageSpy = vi.spyOn(srcDocFrame.contentWindow!, 'postMessage');
 
     window.dispatchEvent(new MessageEvent('message', {
       source: urlFrame.contentWindow,
@@ -1024,13 +1068,13 @@ describe('FileViewer SVG artifacts', () => {
     );
 
     const urlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement;
-    const srcDocFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement;
-    vi.spyOn(srcDocFrame.contentWindow!, 'postMessage');
 
     fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
 
-    await waitFor(() => {
-      expect(srcDocFrame.getAttribute('data-od-active')).toBe('true');
+    const srcDocFrame = await waitFor(() => {
+      const activeFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement;
+      expect(activeFrame.getAttribute('data-od-active')).toBe('true');
+      return activeFrame;
     });
 
     window.dispatchEvent(new MessageEvent('message', {
@@ -2057,8 +2101,6 @@ describe('FileViewer tweaks toolbar', () => {
     );
 
     expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
-    const inactiveSrcDocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
-    const postMessageSpy = vi.spyOn(inactiveSrcDocFrame.contentWindow!, 'postMessage');
     clickAgentTool('draw-overlay-toggle');
 
     const frame = await waitFor(() => {
@@ -2067,9 +2109,12 @@ describe('FileViewer tweaks toolbar', () => {
       expect(activeFrame.getAttribute('src')).toContain('odSrcdocTransport=1');
       return activeFrame;
     });
+    const postMessageSpy = vi.spyOn(frame.contentWindow!, 'postMessage');
     fireEvent.load(frame);
     await waitFor(() => {
-      expect(srcDocActivationMessages(postMessageSpy.mock.calls).at(-1)?.html).toContain('data-od-selection-bridge');
+      const activatedHtml = srcDocActivationMessages(postMessageSpy.mock.calls).at(-1)?.html ?? '';
+      expect(activatedHtml).toContain('data-od-selection-bridge');
+      expect(activatedHtml).toContain('data-od-id="hero"');
     });
     expect(screen.queryByRole('button', { name: 'Click' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
