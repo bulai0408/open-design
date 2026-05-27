@@ -21,10 +21,10 @@ interface Props {
   cfg: AppConfig;
   setCfg: Dispatch<SetStateAction<AppConfig>>;
   /**
-   * Notified after a successful design-system mutation (today: import).
+   * Notified after a successful design-system mutation.
    * Lets App.tsx evict preview iframes whose project depends on the
-   * affected design system; body-only edits on existing systems would
-   * also flow through here when an edit affordance lands.
+   * affected design system; body-only edits on existing systems also
+   * flow through here.
    */
   onDesignSystemsChanged?: (affectedDesignSystemId?: string) => void;
 }
@@ -185,6 +185,7 @@ export function DesignSystemsSection({ cfg, setCfg, onDesignSystemsChanged }: Pr
           .map((d) => (d.id === targetId ? { ...d, title: updated.title } : d))
           .sort((a, b) => a.title.localeCompare(b.title)),
       );
+      onDesignSystemsChanged?.(targetId);
     }
     // Ignore a stale completion: the user cancelled or opened another rename
     // while this PATCH was in flight, so the modal state now belongs to a
