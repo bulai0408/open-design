@@ -5,12 +5,47 @@ import { join } from 'node:path';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ANNOTATION_EVENT } from '../../src/components/PreviewDrawOverlay';
 
 const { saveTemplateMock } = vi.hoisted(() => ({
   saveTemplateMock: vi.fn(),
 }));
+
+const { buildSrcdocMock, canActivateSrcDocTransportMock } = vi.hoisted(() => ({
+  buildSrcdocMock: vi.fn(),
+  canActivateSrcDocTransportMock: vi.fn(),
+}));
+
+const { exportAsImageMock, requestPreviewSnapshotMock } = vi.hoisted(() => ({
+  exportAsImageMock: vi.fn(),
+  requestPreviewSnapshotMock: vi.fn(),
+}));
+
+vi.mock('../../src/runtime/srcdoc', async () => {
+  const actual = await vi.importActual<typeof import('../../src/runtime/srcdoc')>(
+    '../../src/runtime/srcdoc',
+  );
+  buildSrcdocMock.mockImplementation(actual.buildSrcdoc);
+  canActivateSrcDocTransportMock.mockImplementation(actual.canActivateSrcDocTransport);
+  return {
+    ...actual,
+    buildSrcdoc: buildSrcdocMock,
+    canActivateSrcDocTransport: canActivateSrcDocTransportMock,
+  };
+});
+
+vi.mock('../../src/runtime/exports', async () => {
+  const actual = await vi.importActual<typeof import('../../src/runtime/exports')>(
+    '../../src/runtime/exports',
+  );
+  requestPreviewSnapshotMock.mockImplementation(actual.requestPreviewSnapshot);
+  return {
+    ...actual,
+    exportAsImage: exportAsImageMock,
+    requestPreviewSnapshot: requestPreviewSnapshotMock,
+  };
+});
 
 vi.mock('../../src/state/projects', async () => {
   const actual = await vi.importActual<typeof import('../../src/state/projects')>(
@@ -40,6 +75,22 @@ import { I18nProvider } from '../../src/i18n';
 import type { Dict } from '../../src/i18n/types';
 import { readExpandedIndexCss } from '../helpers/read-expanded-css';
 
+beforeEach(async () => {
+  const actualSrcdoc = await vi.importActual<typeof import('../../src/runtime/srcdoc')>(
+    '../../src/runtime/srcdoc',
+  );
+  const actualExports = await vi.importActual<typeof import('../../src/runtime/exports')>(
+    '../../src/runtime/exports',
+  );
+  buildSrcdocMock.mockReset();
+  buildSrcdocMock.mockImplementation(actualSrcdoc.buildSrcdoc);
+  canActivateSrcDocTransportMock.mockReset();
+  canActivateSrcDocTransportMock.mockImplementation(actualSrcdoc.canActivateSrcDocTransport);
+  exportAsImageMock.mockReset();
+  requestPreviewSnapshotMock.mockReset();
+  requestPreviewSnapshotMock.mockImplementation(actualExports.requestPreviewSnapshot);
+});
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -66,6 +117,27 @@ function deferredResponse() {
     resolve = next;
   });
   return { promise, resolve };
+}
+
+function srcDocActivationMessages(calls: readonly (readonly unknown[])[]) {
+  return calls
+    .map(([message]) => message)
+    .filter((message): message is { type: 'od:srcdoc-transport-activate'; html: string } => {
+      if (typeof message !== 'object' || message === null) return false;
+      const data = message as { type?: unknown; html?: unknown };
+      return data.type === 'od:srcdoc-transport-activate' && typeof data.html === 'string';
+    });
+}
+
+function slideMessages(calls: readonly (readonly unknown[])[]) {
+  return calls
+    .map(([message]) => message)
+    .filter((message): message is { type: 'od:slide'; action: 'next' | 'prev' | 'first' | 'last' } => {
+      if (typeof message !== 'object' || message === null) return false;
+      const data = message as { type?: unknown; action?: unknown };
+      return data.type === 'od:slide'
+        && (data.action === 'next' || data.action === 'prev' || data.action === 'first' || data.action === 'last');
+    });
 }
 
 function clickAgentTool(testId: string) {
@@ -717,7 +789,7 @@ describe('FileViewer SVG artifacts', () => {
     expect(onOpenFileReplacing).toHaveBeenCalledWith('backups.html', 'icons.jsx');
   });
 
-  it('keeps decks on the srcDoc path so the deck postMessage bridge can run', () => {
+  it('URL-loads deck-shaped HTML until a deck bridge action is requested', () => {
     const file = baseFile({
       name: 'deck.html',
       path: 'deck.html',
@@ -741,14 +813,14 @@ describe('FileViewer SVG artifacts', () => {
     );
 
     expect(markup).toContain('data-testid="artifact-preview-frame"');
+    expect(markup).toContain('data-od-render-mode="url-load"');
+    expect(markup).toContain('data-od-render-mode="url-load" data-od-active="true"');
     expect(markup).toContain('data-od-render-mode="srcdoc"');
-    expect(markup).toContain('data-od-render-mode="srcdoc" data-od-active="true"');
-    expect(markup).toContain('data-od-render-mode="url-load" data-od-active="false"');
-    expect(markup).not.toContain('data-od-lazy-srcdoc-transport');
+    expect(markup).toContain('data-od-render-mode="srcdoc" data-od-active="false"');
     expect(markup).toContain('sandbox="allow-scripts allow-downloads"');
   });
 
-  it('falls back to srcDoc when the HTML body looks deck-shaped even without an isDeck hint', () => {
+  it('URL-loads inferred deck-shaped HTML until a deck bridge action is requested', () => {
     const file = baseFile({
       name: 'inferred.html',
       path: 'inferred.html',
@@ -770,9 +842,195 @@ describe('FileViewer SVG artifacts', () => {
       />,
     );
 
+    expect(markup).toContain('data-od-render-mode="url-load"');
+    expect(markup).toContain('data-od-render-mode="url-load" data-od-active="true"');
     expect(markup).toContain('data-od-render-mode="srcdoc"');
-    expect(markup).toContain('data-od-render-mode="srcdoc" data-od-active="true"');
-    expect(markup).toContain('data-od-render-mode="url-load" data-od-active="false"');
+    expect(markup).toContain('data-od-render-mode="srcdoc" data-od-active="false"');
+  });
+
+  it('replays the first deck navigation after opting a fresh URL-loaded deck into srcDoc', async () => {
+    const file = baseFile({
+      name: 'deck.html',
+      path: 'deck.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'deck',
+        title: 'Deck',
+        entry: 'deck.html',
+        renderer: 'deck-html',
+        exports: ['html'],
+      },
+    });
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        isDeck
+        liveHtml={'<html><body><section class="slide">one</section><section class="slide">two</section></body></html>'}
+      />,
+    );
+
+    expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
+    const srcdocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
+    const postMessageSpy = vi.spyOn(srcdocFrame.contentWindow!, 'postMessage');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next slide' }));
+
+    const activeFrame = await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      return frame;
+    });
+    expect(activeFrame).toBe(srcdocFrame);
+
+    fireEvent.load(srcdocFrame);
+
+    await waitFor(() => {
+      expect(srcDocActivationMessages(postMessageSpy.mock.calls).length).toBeGreaterThan(0);
+      expect(slideMessages(postMessageSpy.mock.calls)).toEqual([{ type: 'od:slide', action: 'next' }]);
+    });
+  });
+
+  it('keeps Share -> Export Image reachable on a fresh deck and replays the snapshot after srcdoc activation', async () => {
+    const file = baseFile({
+      name: 'deck.html',
+      path: 'deck.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'deck',
+        title: 'Deck',
+        entry: 'deck.html',
+        renderer: 'deck-html',
+        exports: ['html'],
+      },
+    });
+    requestPreviewSnapshotMock.mockResolvedValue({
+      dataUrl: 'data:image/png;base64,AAAA',
+      width: 100,
+      height: 80,
+    });
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        isDeck
+        liveHtml={'<html><body><section class="slide">one</section><section class="slide">two</section></body></html>'}
+      />,
+    );
+
+    expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
+
+    fireEvent.click(screen.getByRole('button', { name: /share/i }));
+    fireEvent.click(await screen.findByTestId('share-menu-export-image'));
+
+    const srcdocFrame = await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      return frame;
+    });
+    fireEvent.load(srcdocFrame);
+
+    await waitFor(() => {
+      expect(requestPreviewSnapshotMock).toHaveBeenCalledWith(srcdocFrame);
+      expect(exportAsImageMock).toHaveBeenCalledWith('data:image/png;base64,AAAA', 'deck');
+    });
+  });
+
+  it('drops a queued Export Image snapshot when srcdoc wrapping fails', async () => {
+    const file = baseFile({
+      name: 'deck.html',
+      path: 'deck.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'deck',
+        title: 'Deck',
+        entry: 'deck.html',
+        renderer: 'deck-html',
+        exports: ['html'],
+      },
+    });
+    requestPreviewSnapshotMock.mockResolvedValue({
+      dataUrl: 'data:image/png;base64,AAAA',
+      width: 100,
+      height: 80,
+    });
+
+    function Host() {
+      const [html, setHtml] = useState(
+        '<html><body><section class="slide">one</section><section class="slide">two</section></body></html>',
+      );
+      return (
+        <>
+          <button
+            type="button"
+            data-testid="bump-source"
+            onClick={() => setHtml('<html><body><section class="slide">updated</section></body></html>')}
+          >
+            bump source
+          </button>
+          <FileViewer
+            projectId="project-1"
+            projectKind="prototype"
+            file={file}
+            isDeck
+            liveHtml={html}
+          />
+        </>
+      );
+    }
+
+    render(<Host />);
+    canActivateSrcDocTransportMock.mockReturnValue(false);
+
+    fireEvent.click(screen.getByRole('button', { name: /share/i }));
+    fireEvent.click(await screen.findByTestId('share-menu-export-image'));
+
+    await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+    });
+    expect(requestPreviewSnapshotMock).not.toHaveBeenCalled();
+    expect(exportAsImageMock).not.toHaveBeenCalled();
+
+    buildSrcdocMock.mockImplementation(() => {
+      throw new Error('wrap failed');
+    });
+    fireEvent.click(screen.getByTestId('bump-source'));
+
+    await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('url-load');
+    });
+    expect(requestPreviewSnapshotMock).not.toHaveBeenCalled();
+    expect(exportAsImageMock).not.toHaveBeenCalled();
+
+    const srcdocActual = await vi.importActual<typeof import('../../src/runtime/srcdoc')>(
+      '../../src/runtime/srcdoc',
+    );
+    buildSrcdocMock.mockImplementation(srcdocActual.buildSrcdoc);
+    canActivateSrcDocTransportMock.mockImplementation(srcdocActual.canActivateSrcDocTransport);
+    fireEvent.click(screen.getByRole('button', { name: /next slide/i }));
+
+    const srcdocFrame = await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      return frame;
+    });
+    fireEvent.load(srcdocFrame);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(requestPreviewSnapshotMock).not.toHaveBeenCalled();
+    expect(exportAsImageMock).not.toHaveBeenCalled();
   });
 
   it('hides preview-only toolbar controls when switching an HTML deck to source view', async () => {

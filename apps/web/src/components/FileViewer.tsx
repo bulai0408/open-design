@@ -199,6 +199,7 @@ const PREVIEW_VIEWPORT_PRESETS: PreviewViewportPreset[] = [
   },
 ];
 const EXPORT_READY_NUDGE_STORAGE_PREFIX = 'open-design:export-ready-nudge:';
+const SRC_DOC_PREVIEW_WRAP_FAILURE_PLACEHOLDER = '<!doctype html><html><body></body></html>';
 
 // The five basic style facets the inspect panel exposes. Kept narrow on
 // purpose — open-slide's design tokens panel only edits global tokens, so
@@ -3935,6 +3936,11 @@ function HtmlViewer({
   const [inlinedSource, setInlinedSource] = useState<string | null>(null);
   const [zoom, setZoom] = useState(100);
   const [previewViewport, setPreviewViewport] = useState<PreviewViewportId>('desktop');
+  const [srcDocWrapFailure, setSrcDocWrapFailure] = useState<string | null>(null);
+  const [deckBridgeRequested, setDeckBridgeRequested] = useState(false);
+  const [srcDocPreviewFailedSource, setSrcDocPreviewFailedSource] = useState<string | null>(null);
+  const pendingDeckBridgeActionRef = useRef<'next' | 'prev' | 'first' | 'last' | null>(null);
+  const pendingPreviewSnapshotRef = useRef<((iframe: HTMLIFrameElement | null) => void) | null>(null);
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
   const zoomMenuRef = useRef<HTMLDivElement | null>(null);
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
@@ -4436,6 +4442,7 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
   const useUrlLoadPreview = shouldUrlLoadHtmlPreview({
     mode,
     isDeck: effectiveDeck,
+    deckBridge: deckBridgeRequested,
     commentMode: boardMode,
     editMode: manualEditMode,
     urlModeBridge,
@@ -4443,7 +4450,7 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     drawMode: drawOverlayOpen || screenshotCaptureActive,
     forceInline: forceInline || needsSandboxShim,
     needsFocusGuard,
-  });
+  }) || srcDocPreviewFailedSource === previewSource || srcDocWrapFailure === previewSource;
   const basePreviewSrcUrl = useMemo(
     () => `${projectRawUrl(projectId, file.name)}?v=${Math.round(file.mtime)}&r=${reloadKey}`,
     [projectId, file.name, file.mtime, reloadKey],
@@ -4455,6 +4462,59 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
   )
     ? previewSrcUrl
     : basePreviewSrcUrl;
+
+  const fallbackToUrlLoadPreview = useCallback((stage: string, detail?: unknown) => {
+    pendingDeckBridgeActionRef.current = null;
+    pendingPreviewSnapshotRef.current = null;
+    setDeckBridgeRequested(false);
+    if (previewSource !== null) setSrcDocPreviewFailedSource(previewSource);
+    console.warn(
+      'open-design preview fallback: srcdoc iframe failed; loading raw URL instead',
+      { stage, detail },
+    );
+  }, [previewSource]);
+
+  useEffect(() => {
+    setDeckBridgeRequested(false);
+    setSrcDocPreviewFailedSource(null);
+    setSrcDocWrapFailure(null);
+    pendingDeckBridgeActionRef.current = null;
+    pendingPreviewSnapshotRef.current = null;
+  }, [previewStateKey]);
+
+  const previousSrcdocBridgeModesRef = useRef({
+    board: false,
+    inspect: false,
+    edit: false,
+    draw: false,
+  });
+  useEffect(() => {
+    const previous = previousSrcdocBridgeModesRef.current;
+    const next = {
+      board: boardMode,
+      inspect: inspectMode,
+      edit: manualEditMode,
+      draw: drawOverlayOpen,
+    };
+    previousSrcdocBridgeModesRef.current = next;
+    const enteringSrcdocMode =
+      (next.board && !previous.board)
+      || (next.inspect && !previous.inspect)
+      || (next.edit && !previous.edit)
+      || (next.draw && !previous.draw);
+    if (!enteringSrcdocMode) return;
+    if (srcDocPreviewFailedSource === previewSource) setSrcDocPreviewFailedSource(null);
+    if (srcDocWrapFailure === previewSource) setSrcDocWrapFailure(null);
+  }, [
+    boardMode,
+    drawOverlayOpen,
+    inspectMode,
+    manualEditMode,
+    previewSource,
+    srcDocPreviewFailedSource,
+    srcDocWrapFailure,
+  ]);
+
   useEffect(() => {
     setPreviewSrcUrl(basePreviewSrcUrl);
   }, [basePreviewSrcUrl]);
@@ -4488,18 +4548,47 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     };
   }, [source, effectiveDeck, projectId, file.name, useUrlLoadPreview]);
 
-  const srcDoc = useMemo(
-    () => (previewSource ? buildSrcdoc(previewSource, {
-      deck: effectiveDeck,
-      baseHref: projectRawUrl(projectId, baseDirFor(file.name)),
-      initialSlideIndex: htmlPreviewSlideState.get(previewStateKey)?.active ?? 0,
-      selectionBridge: true,
-      editBridge: manualEditMode,
-      paletteBridge: false,
-      previewFocusGuard: true,
-    }) : ''),
-    [previewSource, effectiveDeck, projectId, file.name, previewStateKey, manualEditMode],
-  );
+  const srcDoc = useMemo(() => {
+    if (!previewSource) return '';
+    if (srcDocWrapFailure === previewSource) return SRC_DOC_PREVIEW_WRAP_FAILURE_PLACEHOLDER;
+    try {
+      return buildSrcdoc(previewSource, {
+        deck: effectiveDeck,
+        baseHref: projectRawUrl(projectId, baseDirFor(file.name)),
+        initialSlideIndex: htmlPreviewSlideState.get(previewStateKey)?.active ?? 0,
+        selectionBridge: true,
+        editBridge: manualEditMode,
+        paletteBridge: false,
+        previewFocusGuard: true,
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(
+        'open-design preview fallback: srcdoc iframe failed; loading raw URL instead',
+        {
+          file: file.name,
+          stage: 'wrap',
+          fallback: 'url-load',
+          src: activePreviewSrcUrl,
+          detail,
+        },
+      );
+      pendingDeckBridgeActionRef.current = null;
+      pendingPreviewSnapshotRef.current = null;
+      setDeckBridgeRequested(false);
+      setSrcDocWrapFailure(previewSource);
+      return SRC_DOC_PREVIEW_WRAP_FAILURE_PLACEHOLDER;
+    }
+  }, [
+    activePreviewSrcUrl,
+    previewSource,
+    srcDocWrapFailure,
+    effectiveDeck,
+    projectId,
+    file.name,
+    previewStateKey,
+    manualEditMode,
+  ]);
   const lazySrcDocTransport = useMemo(() => buildLazySrcdocTransport(), []);
   const [srcDocTransportResetKey, setSrcDocTransportResetKey] = useState(0);
   const [srcDocShellReady, setSrcDocShellReady] = useState(false);
@@ -4580,6 +4669,22 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     activatedSrcDocTransportHtmlRef.current = srcDoc;
     return true;
   }, [srcDoc, useLazySrcDocTransport, useUrlLoadPreview]);
+  const replayPendingDeckBridgeAction = useCallback((target: HTMLIFrameElement | null = srcDocPreviewIframeRef.current) => {
+    const action = pendingDeckBridgeActionRef.current;
+    if (!action) return false;
+    const win = target?.contentWindow;
+    if (!win) return false;
+    win.postMessage({ type: 'od:slide', action }, '*');
+    pendingDeckBridgeActionRef.current = null;
+    return true;
+  }, []);
+  const runPendingPreviewSnapshot = useCallback((target: HTMLIFrameElement | null = srcDocPreviewIframeRef.current) => {
+    const run = pendingPreviewSnapshotRef.current;
+    if (!run) return false;
+    pendingPreviewSnapshotRef.current = null;
+    run(target);
+    return true;
+  }, []);
   useEffect(() => {
     if (useUrlLoadPreview) {
       activatedSrcDocTransportHtmlRef.current = null;
@@ -4594,8 +4699,11 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
       activatedSrcDocTransportHtmlRef.current = null;
     }
     wasUrlLoadPreviewRef.current = false;
-    activateSrcDocTransport();
-  }, [activateSrcDocTransport, useUrlLoadPreview]);
+    if (activateSrcDocTransport()) {
+      replayPendingDeckBridgeAction();
+      runPendingPreviewSnapshot();
+    }
+  }, [activateSrcDocTransport, replayPendingDeckBridgeAction, runPendingPreviewSnapshot, useUrlLoadPreview]);
   
   // Leaving Manual Edit swaps the iframe from a fully materialized srcDoc
   // document back to the lazy transport shell. Remount the shell before
@@ -4708,6 +4816,21 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
       window.removeEventListener('message', onDcViewportMessage);
     };
   }, [isActivePreviewIframeSource, isOurPreviewIframeSource]);
+
+  useEffect(() => {
+    function onPreviewError(ev: MessageEvent) {
+      if (useUrlLoadPreview) return;
+      if (!isOurPreviewIframeSource(ev.source)) return;
+      if (!isActivePreviewIframeSource(ev.source)) return;
+      const data = ev.data as { type?: string; stage?: string; message?: string } | null;
+      if (!data || data.type !== 'od:preview-error') return;
+      const stage = data.stage || 'srcdoc';
+      if (stage !== 'srcdoc' && !stage.startsWith('srcdoc-transport')) return;
+      fallbackToUrlLoadPreview(stage, data.message);
+    }
+    window.addEventListener('message', onPreviewError);
+    return () => window.removeEventListener('message', onPreviewError);
+  }, [fallbackToUrlLoadPreview, isActivePreviewIframeSource, isOurPreviewIframeSource, useUrlLoadPreview]);
 
   useEffect(() => {
     if (!effectiveDeck) {
@@ -5437,11 +5560,19 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     return () => window.removeEventListener('message', onMessage);
   }, [inspectMode, isOurPreviewIframeSource]);
 
-  function postSlide(action: 'next' | 'prev' | 'first' | 'last') {
+  const postSlide = useCallback((action: 'next' | 'prev' | 'first' | 'last') => {
+    if (useUrlLoadPreview && effectiveDeck && !deckBridgeRequested) {
+      pendingDeckBridgeActionRef.current = action;
+      pendingPreviewSnapshotRef.current = null;
+      if (srcDocPreviewFailedSource !== null) setSrcDocPreviewFailedSource(null);
+      if (srcDocWrapFailure !== null) setSrcDocWrapFailure(null);
+      setDeckBridgeRequested(true);
+      return;
+    }
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
     win.postMessage({ type: 'od:slide', action }, '*');
-  }
+  }, [deckBridgeRequested, effectiveDeck, srcDocPreviewFailedSource, srcDocWrapFailure, useUrlLoadPreview]);
 
   function postInspectSet(elementId: string, selector: string, prop: string, value: string) {
     const win = iframeRef.current?.contentWindow;
@@ -5554,7 +5685,7 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [effectiveDeck, mode]);
+  }, [effectiveDeck, mode, postSlide]);
 
   useEffect(() => {
     if (!presentMenuOpen) return;
@@ -6157,6 +6288,14 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
   const canShare = source !== null;
   const exportTitle = file.name.replace(/\.html?$/i, '') || file.name;
   const canPptx = canShare && Boolean(onExportAsPptx) && !streaming;
+  const canRequestDeckSnapshot =
+    useUrlLoadPreview
+    && effectiveDeck
+    && !deckBridgeRequested
+    && previewSource !== null
+    && srcDocPreviewFailedSource !== previewSource
+    && srcDocWrapFailure !== previewSource;
+  const canExportImage = !useUrlLoadPreview || canRequestDeckSnapshot;
   useEffect(() => {
     const nudgeKey = `${projectId}\n${file.name}`;
     if (!canShare || exportReadyNudgeSeenRef.current.has(nudgeKey)) return;
@@ -6827,27 +6966,40 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
                     <span className="share-menu-icon"><RemixIcon name="file-ppt-line" size={15} /></span>
                     <span>{t('fileViewer.exportPptx') + '…'}</span>
                   </button>
-                  {!useUrlLoadPreview ? (
+                  {canExportImage ? (
                     <button
                       type="button"
                       className="share-menu-item share-menu-subitem"
                       role="menuitem"
+                      data-testid="share-menu-export-image"
                       onClick={async () => {
                         setShareMenuOpen(false);
-                        const iframe = iframeRef.current;
-                        if (!iframe) return;
-                        const snap = await requestPreviewSnapshot(iframe);
-                        try {
-                          if (snap) {
-                            exportAsImage(snap.dataUrl, exportTitle);
-                          } else {
-                            console.warn('[exportAsImage] snapshot capture returned null');
+                        const exportFromFrame = async (iframe: HTMLIFrameElement | null) => {
+                          if (!iframe) return;
+                          const snap = await requestPreviewSnapshot(iframe);
+                          try {
+                            if (snap) {
+                              exportAsImage(snap.dataUrl, exportTitle);
+                            } else {
+                              console.warn('[exportAsImage] snapshot capture returned null');
+                              alert(t('fileViewer.exportImageFailed'));
+                            }
+                          } catch (err) {
+                            console.warn('[exportAsImage] failed to convert snapshot:', err);
                             alert(t('fileViewer.exportImageFailed'));
                           }
-                        } catch (err) {
-                          console.warn('[exportAsImage] failed to convert snapshot:', err);
-                          alert(t('fileViewer.exportImageFailed'));
+                        };
+                        if (canRequestDeckSnapshot) {
+                          pendingPreviewSnapshotRef.current = (frame) => {
+                            void exportFromFrame(frame);
+                          };
+                          pendingDeckBridgeActionRef.current = null;
+                          if (srcDocPreviewFailedSource !== null) setSrcDocPreviewFailedSource(null);
+                          if (srcDocWrapFailure !== null) setSrcDocWrapFailure(null);
+                          setDeckBridgeRequested(true);
+                          return;
                         }
+                        await exportFromFrame(iframeRef.current);
                       }}
                     >
                       <span className="share-menu-icon"><RemixIcon name="image-line" size={15} /></span>
@@ -7036,7 +7188,7 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
                           activatedSrcDocTransportHtmlRef.current = null;
                         }
                         if (useLazySrcDocTransport) setSrcDocShellReady(true);
-                        activateLoadedSrcDocTransport(frame);
+                        const activatedSrcDocTransport = activateLoadedSrcDocTransport(frame);
                         dcViewportRestoreAtRef.current = Date.now();
                         frame?.contentWindow?.postMessage({
                           type: '__dc_set_viewport',
@@ -7044,6 +7196,8 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
                         }, '*');
                         replayInspectOverridesToIframe(frame);
                         syncBridgeModes(frame);
+                        if (!useUrlLoadPreview && activatedSrcDocTransport) replayPendingDeckBridgeAction(frame);
+                        if (!useUrlLoadPreview && activatedSrcDocTransport) runPendingPreviewSnapshot(frame);
                         if (!useUrlLoadPreview) restorePreviewScrollPosition();
                       }}
                     />
