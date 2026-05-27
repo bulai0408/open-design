@@ -16,6 +16,7 @@ function extractBridgeScript(html: string): string {
 
 interface BridgeHarness {
   parentMessages: Array<Record<string, unknown>>;
+  replaceStateCalls: Array<{ state: unknown; url: string }>;
   triggerEvent: (type: string, ev?: { data?: unknown }) => void;
   replaceState: (state: unknown, url: string) => void;
   state: { href: string; hash: string; pathname: string; search: string; state: unknown };
@@ -30,6 +31,7 @@ function runBridge(html: string, opts?: {
   const parentMessages: Array<Record<string, unknown>> = [];
   type Listener = (ev: { data?: unknown }) => void;
   const listeners = new Map<string, Listener[]>();
+  const replaceStateCalls: Array<{ state: unknown; url: string }> = [];
   const state = {
     href: 'about:srcdoc',
     pathname: opts?.initialPathname ?? '/',
@@ -44,6 +46,7 @@ function runBridge(html: string, opts?: {
       applyUrl(url);
     },
     replaceState(s: unknown, _t: string, url: string) {
+      replaceStateCalls.push({ state: s, url });
       history.state = s;
       applyUrl(url);
     },
@@ -138,6 +141,7 @@ function runBridge(html: string, opts?: {
   vm.runInContext(script, sandbox);
   return {
     parentMessages,
+    replaceStateCalls,
     triggerEvent: (type, ev) => {
       const list = listeners.get(type) ?? [];
       for (const l of list) l(ev ?? { data: null });
@@ -150,6 +154,23 @@ function runBridge(html: string, opts?: {
 }
 
 describe('injectPreviewNavigationRestore reporter (regression: bridge must report current route)', () => {
+  it('does not restore pathname/search/state while running as about:srcdoc', () => {
+    const html = buildSrcdoc('<html><body></body></html>', {
+      initialNavigation: {
+        pathname: '/api/projects/project-1/raw/page.html/dashboard',
+        search: '?panel=metrics',
+        hash: '#daily',
+        state: { panel: 'metrics' },
+      },
+    });
+    const bridge = runBridge(html, { initialPathname: '/base', initialSearch: '?old' });
+
+    expect(bridge.replaceStateCalls).toHaveLength(0);
+    expect(bridge.state.pathname).toBe('/base');
+    expect(bridge.state.search).toBe('?old');
+    expect(bridge.state.hash).toBe('#daily');
+  });
+
   it('posts od:preview-navigation on boot when navigation is provided', () => {
     const html = buildSrcdoc('<html><body></body></html>', {
       initialNavigation: { pathname: '/a', search: '', hash: '#/dash', state: { tab: 'x' } },

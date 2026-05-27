@@ -451,21 +451,24 @@ describe('FileViewer SVG artifacts', () => {
     expect(srcDocFrame).toBeTruthy();
     expect(urlFrame?.getAttribute('data-od-active')).toBe('true');
     expect(srcDocFrame?.getAttribute('data-od-active')).toBe('false');
-    expect(srcDocFrame?.srcdoc).toContain('data-od-lazy-srcdoc-transport');
+    expect(srcDocFrame?.getAttribute('src')).toContain('odSrcdocTransport=1');
     expect(srcDocFrame?.srcdoc).not.toContain('__odArtifactBootCount');
+    const srcDocPostMessageSpy = vi.spyOn(srcDocFrame!.contentWindow!, 'postMessage');
 
     fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
 
     const urlFrameAfter = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement | null;
     const srcDocFrameAfter = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement | null;
+    fireEvent.load(srcDocFrameAfter!);
 
     expect(urlFrameAfter).toBe(urlFrame);
     expect(srcDocFrameAfter).toBe(srcDocFrame);
     expect(urlFrameAfter?.getAttribute('data-od-active')).toBe('false');
     expect(urlFrameAfter?.getAttribute('src')).toBe('about:blank');
     expect(srcDocFrameAfter?.getAttribute('data-od-active')).toBe('true');
-    expect(srcDocFrameAfter?.srcdoc).toContain('__odArtifactBootCount');
-    expect(srcDocFrameAfter?.srcdoc).toContain('data-od-edit-bridge');
+    const activatedHtml = srcDocActivationMessages(srcDocPostMessageSpy.mock.calls).at(-1)?.html ?? '';
+    expect(activatedHtml).toContain('__odArtifactBootCount');
+    expect(activatedHtml).toContain('data-od-edit-bridge');
   });
 
   it('reactivates the srcDoc transport after switching source back to preview', async () => {
@@ -505,15 +508,78 @@ describe('FileViewer SVG artifacts', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Preview' }));
 
+    const activeFrame = await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      return frame;
+    });
+    const postMessageSpy = vi.spyOn(activeFrame.contentWindow!, 'postMessage');
+    fireEvent.load(activeFrame);
+
     await waitFor(() => {
-      const activeFrame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
-      expect(activeFrame.getAttribute('data-od-render-mode')).toBe('srcdoc');
-      expect(activeFrame.srcdoc).toContain('data-od-edit-bridge');
-      expect(activeFrame.srcdoc).toContain('Hero');
+      const activatedHtml = srcDocActivationMessages(postMessageSpy.mock.calls).at(-1)?.html ?? '';
+      expect(activatedHtml).toContain('data-od-edit-bridge');
+      expect(activatedHtml).toContain('Hero');
     });
   });
 
   it('restores captured hash navigation when switching a URL-loaded app into bridge mode', async () => {
+    const file = baseFile({
+      name: 'page.html',
+      path: 'page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+
+    const { container } = render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+      />,
+    );
+
+    const urlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement;
+    const srcDocFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement;
+    const srcDocPostMessageSpy = vi.spyOn(srcDocFrame.contentWindow!, 'postMessage');
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: urlFrame.contentWindow,
+      data: {
+        type: 'od:preview-navigation',
+        href: 'http://localhost/api/projects/project-1/raw/page.html?v=1710000000&r=0&odPreviewNav=1#/settings',
+        pathname: '/api/projects/project-1/raw/page.html',
+        search: '?v=1710000000&r=0&odPreviewNav=1',
+        hash: '#/settings',
+        state: { tab: 'settings' },
+      },
+    }));
+
+    fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
+    fireEvent.load(srcDocFrame);
+
+    await waitFor(() => {
+      expect(srcDocFrame.getAttribute('data-od-active')).toBe('true');
+      expect(srcDocFrame.getAttribute('src')).toContain('odSrcdocTransport=1');
+    });
+    await waitFor(() => {
+      const activatedHtml = srcDocActivationMessages(srcDocPostMessageSpy.mock.calls).at(-1)?.html ?? '';
+      expect(activatedHtml).toContain('data-od-preview-navigation-restore');
+      expect(activatedHtml).toContain('initialHash = "#/settings"');
+      expect(activatedHtml).toContain('"tab":"settings"');
+    });
+  });
+
+  it('loads the bridge iframe from the daemon srcdoc transport shell before restoring non-hash navigation', async () => {
     const file = baseFile({
       name: 'page.html',
       path: 'page.html',
@@ -545,11 +611,11 @@ describe('FileViewer SVG artifacts', () => {
       source: urlFrame.contentWindow,
       data: {
         type: 'od:preview-navigation',
-        href: 'http://localhost/api/projects/project-1/raw/page.html?v=1710000000&r=0&odPreviewNav=1#/settings',
-        pathname: '/api/projects/project-1/raw/page.html',
-        search: '?v=1710000000&r=0&odPreviewNav=1',
-        hash: '#/settings',
-        state: { tab: 'settings' },
+        href: 'http://localhost/api/projects/project-1/raw/page.html?v=1710000000&r=0&odPreviewNav=1/dashboard?panel=metrics#daily',
+        pathname: '/api/projects/project-1/raw/page.html/dashboard',
+        search: '?panel=metrics',
+        hash: '#daily',
+        state: { panel: 'metrics' },
       },
     }));
 
@@ -557,10 +623,10 @@ describe('FileViewer SVG artifacts', () => {
 
     await waitFor(() => {
       expect(srcDocFrame.getAttribute('data-od-active')).toBe('true');
-      expect(srcDocFrame.srcdoc).toContain('data-od-preview-navigation-restore');
-      expect(srcDocFrame.srcdoc).toContain('initialHash = "#/settings"');
-      expect(srcDocFrame.srcdoc).toContain('"tab":"settings"');
     });
+    expect(srcDocFrame.getAttribute('src')).toContain('/api/projects/project-1/raw/page.html?');
+    expect(srcDocFrame.getAttribute('src')).toContain('odSrcdocTransport=1');
+    expect(srcDocFrame.srcdoc).not.toContain('initialPathname = "/api/projects/project-1/raw/page.html/dashboard"');
   });
 
   it('requests and restores navigation when opening a bridge tool switches to bridge mode', async () => {
@@ -603,9 +669,7 @@ describe('FileViewer SVG artifacts', () => {
     await waitFor(() => {
       expect(srcDocFrame.getAttribute('data-od-active')).toBe('true');
     });
-    await waitFor(() => {
-      expect(srcDocFrame.srcdoc).toContain('data-od-preview-navigation-restore');
-    });
+    expect(srcDocFrame.getAttribute('src')).toContain('odSrcdocTransport=1');
 
     window.dispatchEvent(new MessageEvent('message', {
       source: urlFrame.contentWindow,
@@ -2000,16 +2064,17 @@ describe('FileViewer tweaks toolbar', () => {
     const frame = await waitFor(() => {
       const activeFrame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
       expect(activeFrame.getAttribute('data-od-render-mode')).toBe('srcdoc');
-      expect(activeFrame.srcdoc).toContain('data-od-lazy-srcdoc-transport');
+      expect(activeFrame.getAttribute('src')).toContain('odSrcdocTransport=1');
       return activeFrame;
     });
+    fireEvent.load(frame);
     await waitFor(() => {
       expect(srcDocActivationMessages(postMessageSpy.mock.calls).at(-1)?.html).toContain('data-od-selection-bridge');
     });
     expect(screen.queryByRole('button', { name: 'Click' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Redo' })).toBeTruthy();
-    expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).srcdoc).toBe(frame.srcdoc);
+    expect(screen.getByTestId('artifact-preview-frame')).toBe(frame);
   });
 
   it('lets Draw direct send emit a queued annotation while a task is running', async () => {

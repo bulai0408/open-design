@@ -66,7 +66,7 @@ import {
 } from '../runtime/exports';
 import { buildReactComponentSrcdoc } from '../runtime/react-component';
 import { findHtmlEntriesReferencing } from '../runtime/jsx-module-refs';
-import { buildLazySrcdocTransport, buildSrcdoc, canActivateSrcDocTransport, type SrcdocPreviewNavigation } from '../runtime/srcdoc';
+import { buildSrcdoc, canActivateSrcDocTransport, type SrcdocPreviewNavigation } from '../runtime/srcdoc';
 import {
   hasUrlModeBridge,
   htmlNeedsFocusGuard,
@@ -4368,6 +4368,10 @@ function HtmlViewer({
     () => `${projectRawUrl(projectId, file.name)}?v=${Math.round(file.mtime)}&r=${reloadKey}&odPreviewNav=1`,
     [projectId, file.name, file.mtime, reloadKey],
   );
+  const srcDocTransportSrcUrl = useMemo(
+    () => `${projectRawUrl(projectId, file.name)}?v=${Math.round(file.mtime)}&r=${reloadKey}&odSrcdocTransport=1`,
+    [projectId, file.name, file.mtime, reloadKey],
+  );
   const [previewSrcUrl, setPreviewSrcUrl] = useState(basePreviewSrcUrl);
   const activePreviewSrcUrl = (
     previewSrcUrl === basePreviewSrcUrl ||
@@ -4450,20 +4454,17 @@ function HtmlViewer({
       manualEditMode,
     ],
   );
-  const lazySrcDocTransport = useMemo(() => buildLazySrcdocTransport(), []);
-  const [hasLazySrcDocTransport, setHasLazySrcDocTransport] = useState(useUrlLoadPreview);
   const [srcDocTransportResetKey, setSrcDocTransportResetKey] = useState(0);
-  const [srcDocShellReady, setSrcDocShellReady] = useState(false);
+  const srcDocShellInstanceKey = `${srcDocTransportResetKey}:${srcDocTransportSrcUrl}`;
+  const [srcDocShellReadyKey, setSrcDocShellReadyKey] = useState<string | null>(null);
+  const srcDocShellReady = srcDocShellReadyKey === srcDocShellInstanceKey;
   const wasUrlLoadPreviewRef = useRef(useUrlLoadPreview);
   useEffect(() => {
-    if (useUrlLoadPreview) setHasLazySrcDocTransport(true);
-  }, [useUrlLoadPreview]);
-  // Reset the shell-ready latch whenever the srcDoc iframe re-mounts. The
-  // next shell will post `od:srcdoc-transport-ready` (or fire onLoad) and
-  // flip this back to true. See #2253.
-  useEffect(() => {
-    setSrcDocShellReady(false);
-  }, [srcDocTransportResetKey]);
+    activatedSrcDocTransportHtmlRef.current = null;
+  }, [srcDocTransportSrcUrl]);
+  // Key shell readiness to both the daemon shell URL and forced remount key.
+  // When either changes, srcDocShellReady falls false until the current shell
+  // posts `od:srcdoc-transport-ready` or fires onLoad. See #2253.
   // Listen for the shell's ready handshake. Gating activation on this is
   // what fixes the #2253 race: opening Tweaks right after a key-driven
   // re-mount used to post `activate` before the shell's listener was
@@ -4474,13 +4475,12 @@ function HtmlViewer({
       if (ev.source !== srcDocPreviewIframeRef.current?.contentWindow) return;
       const data = ev.data as { type?: string } | null;
       if (data?.type !== 'od:srcdoc-transport-ready') return;
-      setSrcDocShellReady(true);
+      setSrcDocShellReadyKey(srcDocShellInstanceKey);
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, []);
-  const useLazySrcDocTransport = !manualEditMode && (useUrlLoadPreview || hasLazySrcDocTransport);
-  const srcDocTransportContent = useLazySrcDocTransport ? lazySrcDocTransport : srcDoc;
+  }, [srcDocShellInstanceKey]);
+  const useLazySrcDocTransport = true;
   const urlTransportSrc = useUrlLoadPreview ? activePreviewSrcUrl : 'about:blank';
   const activateSrcDocTransport = useCallback((target: HTMLIFrameElement | null = srcDocPreviewIframeRef.current) => {
     if (!canActivateSrcDocTransport({
@@ -6887,7 +6887,7 @@ function HtmlViewer({
                       tabIndex={useUrlLoadPreview ? -1 : 0}
                       title={file.name}
                       sandbox="allow-scripts allow-downloads"
-                      srcDoc={srcDocTransportContent}
+                      src={srcDocTransportSrcUrl}
                       onLoad={() => {
                         const frame = srcDocPreviewIframeRef.current;
                         if (!useUrlLoadPreview) iframeRef.current = frame;
@@ -6925,7 +6925,7 @@ function HtmlViewer({
                           srcDocFrameDedupeResetForRef.current = frame;
                           activatedSrcDocTransportHtmlRef.current = null;
                         }
-                        if (useLazySrcDocTransport) setSrcDocShellReady(true);
+                        if (useLazySrcDocTransport) setSrcDocShellReadyKey(srcDocShellInstanceKey);
                         activateLoadedSrcDocTransport(frame);
                         dcViewportRestoreAtRef.current = Date.now();
                         frame?.contentWindow?.postMessage({

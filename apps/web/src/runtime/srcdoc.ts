@@ -778,8 +778,19 @@ function injectPreviewNavigationRestore(
       }
     } catch (_) {}
   }
+  function isAboutSrcdoc(){
+    try { return String(location.href || '') === 'about:srcdoc' || String(location.protocol || '') === 'about:'; }
+    catch (_) { return false; }
+  }
   function restore(){
     var prevHash = location.hash;
+    if (isAboutSrcdoc()) {
+      if (initialHash && location.hash !== initialHash) {
+        try { location.hash = initialHash; } catch (_) {}
+      }
+      post();
+      return;
+    }
     try {
       var nextPath = initialPathname || location.pathname;
       var nextSearch = initialSearch || '';
