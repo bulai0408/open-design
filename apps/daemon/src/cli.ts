@@ -3295,7 +3295,10 @@ async function runPluginUninstall(rest) {
     process.exit(1);
   }
   const data = await resp.json();
-  console.log(`[uninstall] ${data?.removedFolder ? 'ok' : 'no-op'}${data?.warning ? ` (warning: ${data.warning})` : ''}`);
+  const warnings = Array.isArray(data?.warnings)
+    ? data.warnings
+    : (data?.warning ? [data.warning] : []);
+  console.log(`[uninstall] ${data?.ok ? 'ok' : 'no-op'}${warnings.length > 0 ? ` (warning: ${warnings.join('; ')})` : ''}`);
 }
 
 async function runPluginApply(rest) {

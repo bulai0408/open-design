@@ -772,6 +772,7 @@ export async function* installFromLocalFolder(
 export interface UninstallResult {
   ok: boolean;
   removedFolder?: string;
+  notFound?: boolean;
   warning?: string;
 }
 
@@ -782,6 +783,7 @@ export async function uninstallPlugin(
 ): Promise<UninstallResult> {
   const removed = deleteInstalledPlugin(db, id);
   const folder = path.join(roots.userPluginsRoot, id);
+  const folderExisted = fs.existsSync(folder);
   let removedFolder: string | undefined;
   try {
     await fsp.rm(folder, { recursive: true, force: true });
@@ -790,9 +792,12 @@ export async function uninstallPlugin(
       // instead of silently leaving stale on-disk state.
       return { ok: removed, warning: `Folder ${folder} could not be removed` };
     }
-    removedFolder = folder;
+    if (folderExisted) removedFolder = folder;
   } catch (err) {
     return { ok: removed, warning: `Folder ${folder} removal failed: ${(err as Error).message}` };
+  }
+  if (!removed && !folderExisted) {
+    return { ok: false, notFound: true };
   }
   // Plan §3.II1 — emit a 'plugin.uninstalled' event when the
   // registry row was actually removed. We skip the event when
@@ -804,7 +809,10 @@ export async function uninstallPlugin(
       details:  removedFolder ? { removedFolder } : {},
     });
   }
-  return { ok: removed || removedFolder !== undefined, removedFolder };
+  return {
+    ok: removed || removedFolder !== undefined,
+    ...(removedFolder !== undefined ? { removedFolder } : {}),
+  };
 }
 
 // Recursive copy with budget tracking. Symlinks anywhere in the tree fail

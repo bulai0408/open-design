@@ -61,7 +61,7 @@ describe('PluginsView uninstall', () => {
 
       if (url === '/api/plugins/localized-plugin/uninstall' && init?.method === 'POST') {
         uninstalled = true;
-        return new Response(JSON.stringify({ ok: true }), {
+        return new Response(JSON.stringify({ ok: true, warnings: [] }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         });
@@ -123,7 +123,7 @@ describe('PluginsView uninstall', () => {
 
       if (url === '/api/plugins/fixture-plugin/uninstall' && init?.method === 'POST') {
         uninstalled = true;
-        return new Response(JSON.stringify({ ok: true }), {
+        return new Response(JSON.stringify({ ok: true, warnings: [] }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         });
@@ -200,7 +200,7 @@ describe('PluginsView uninstall', () => {
         return new Response(
           JSON.stringify({
             ok: true,
-            warning: 'Folder /tmp/fixture-plugin removal failed: permission denied',
+            warnings: ['Folder /tmp/fixture-plugin removal failed: permission denied'],
           }),
           {
             status: 200,
@@ -261,8 +261,11 @@ describe('PluginsView uninstall', () => {
         missing = true;
         return new Response(
           JSON.stringify({
-            error: 'plugin not found',
-            warning: 'Registry row was already missing',
+            ok: false,
+            code: 'plugin_not_found',
+            notFound: true,
+            warnings: ['Registry row was already missing'],
+            message: 'Plugin not found.',
           }),
           {
             status: 404,

@@ -16,9 +16,13 @@ import type {
   ImportFolderResponse,
   InstalledPluginRecord,
   PluginInstallOutcome,
+  PluginUninstallOutcome,
   PluginShareAction,
   ProjectPluginFolderInstallRequest,
   TerminalSession,
+} from '@open-design/contracts';
+import {
+  PluginUninstallOutcomeSchema,
 } from '@open-design/contracts';
 import { randomUUID } from '../utils/uuid';
 import type {
@@ -30,7 +34,7 @@ import type {
   ProjectTemplate,
 } from '../types';
 
-export type { PluginInstallOutcome } from '@open-design/contracts';
+export type { PluginInstallOutcome, PluginUninstallOutcome } from '@open-design/contracts';
 export type { PluginShareAction } from '@open-design/contracts';
 
 export async function listProjects(): Promise<Project[]> {
@@ -1016,15 +1020,6 @@ export async function upgradePlugin(id: string): Promise<PluginInstallOutcome> {
   }
 }
 
-export interface PluginUninstallOutcome {
-  ok: boolean;
-  status?: number;
-  notFound?: boolean;
-  removedFolder?: string;
-  warnings: string[];
-  message?: string;
-}
-
 async function postPluginUpload(url: string, form: FormData): Promise<PluginInstallOutcome> {
   try {
     const resp = await fetch(url, {
@@ -1110,38 +1105,33 @@ export async function uninstallPlugin(id: string): Promise<PluginUninstallOutcom
 }
 
 async function readPluginUninstallOutcome(resp: Response): Promise<PluginUninstallOutcome> {
-  const body = (await resp.json().catch(() => null)) as {
-    ok?: boolean;
-    removedFolder?: string;
-    warning?: string;
-    warnings?: string[];
-    error?: string | { message?: string };
-    message?: string;
-  } | null;
+  const body = await resp.json().catch(() => null) as unknown;
+  const parsed = PluginUninstallOutcomeSchema.safeParse(body);
+  if (parsed.success) {
+    const outcome = parsed.data;
+    if ((resp.ok && outcome.ok) || (!resp.ok && !outcome.ok)) {
+      return outcome;
+    }
+  }
+  const record = body && typeof body === 'object' ? body as Record<string, unknown> : null;
+  const warning = typeof record?.['warning'] === 'string' ? record['warning'].trim() : '';
   const warnings = [
-    ...(typeof body?.warning === 'string' && body.warning.trim() ? [body.warning.trim()] : []),
-    ...(Array.isArray(body?.warnings)
-      ? body.warnings.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    ...(warning ? [warning] : []),
+    ...(Array.isArray(record?.['warnings'])
+      ? record['warnings'].filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
       : []),
   ];
-  if (resp.ok && body?.ok) {
-    return {
-      ok: true,
-      status: resp.status,
-      ...(body.removedFolder ? { removedFolder: body.removedFolder } : {}),
-      warnings,
-      ...(body.message ? { message: body.message } : {}),
-    };
-  }
+  const error = record?.['error'];
   const message =
-    body?.message ??
-    (typeof body?.error === 'string' ? body.error : body?.error?.message) ??
+    (typeof record?.['message'] === 'string' ? record['message'] : undefined) ??
+    (typeof error === 'string' ? error : (
+      error && typeof error === 'object' && typeof (error as Record<string, unknown>)['message'] === 'string'
+        ? (error as Record<string, unknown>)['message'] as string
+        : undefined
+    )) ??
     (resp.statusText || `HTTP ${resp.status}`);
-  const pluginAlreadyMissing = resp.status === 404 && body?.error === 'plugin not found';
   return {
     ok: false,
-    status: resp.status,
-    ...(pluginAlreadyMissing ? { notFound: true } : {}),
     warnings,
     message,
   };

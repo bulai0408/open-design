@@ -14,9 +14,11 @@ import net from 'node:net';
 import {
   defaultScenarioPluginIdForProjectMetadata,
   type OpenDesignDiscordPresenceResponse,
+  PLUGIN_UNINSTALL_NOT_FOUND_CODE,
   type OpenDesignGithubLatestReleaseResponse,
   type OpenDesignGithubRepoResponse,
   PLUGIN_SHARE_ACTION_PLUGIN_IDS,
+  PluginUninstallOutcomeSchema,
 } from '@open-design/contracts';
 import {
   composeSystemPrompt,
@@ -7097,10 +7099,30 @@ export async function startServer({
   app.post('/api/plugins/:id/uninstall', async (req, res) => {
     try {
       const result = await uninstallPlugin(db, req.params.id, PLUGIN_REGISTRY_ROOTS);
-      if (!result.ok && !result.removedFolder) {
-        return res.status(404).json({ error: 'plugin not found', warning: result.warning });
+      const warnings = typeof result.warning === 'string' && result.warning.trim().length > 0
+        ? [result.warning.trim()]
+        : [];
+      if (result.notFound) {
+        return res.status(404).json(PluginUninstallOutcomeSchema.parse({
+          ok: false,
+          code: PLUGIN_UNINSTALL_NOT_FOUND_CODE,
+          notFound: true,
+          warnings,
+          message: 'Plugin not found.',
+        }));
       }
-      res.json(result);
+      if (!result.ok) {
+        return res.status(500).json(PluginUninstallOutcomeSchema.parse({
+          ok: false,
+          warnings,
+          message: result.warning ?? 'Plugin uninstall failed.',
+        }));
+      }
+      res.json(PluginUninstallOutcomeSchema.parse({
+        ok: true,
+        ...(result.removedFolder ? { removedFolder: result.removedFolder } : {}),
+        warnings,
+      }));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

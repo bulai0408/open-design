@@ -71,6 +71,47 @@ export const PluginInstallOutcomeSchema = z.object({
 
 export type PluginInstallOutcome = z.infer<typeof PluginInstallOutcomeSchema>;
 
+export const PLUGIN_UNINSTALL_NOT_FOUND_CODE = 'plugin_not_found';
+
+export const PluginUninstallErrorCodeSchema = z.enum([
+  PLUGIN_UNINSTALL_NOT_FOUND_CODE,
+]);
+
+export type PluginUninstallErrorCode = z.infer<typeof PluginUninstallErrorCodeSchema>;
+
+export const PluginUninstallOutcomeSchema = z.union([
+  z.object({
+    ok:            z.literal(true),
+    removedFolder: z.string().optional(),
+    warnings:      z.array(z.string()),
+    message:       z.string().optional(),
+  }),
+  z.object({
+    ok:       z.literal(false),
+    code:     PluginUninstallErrorCodeSchema.optional(),
+    notFound: z.boolean().optional(),
+    warnings: z.array(z.string()),
+    message:  z.string(),
+  }).superRefine((outcome, ctx) => {
+    if (outcome.notFound === true && outcome.code !== PLUGIN_UNINSTALL_NOT_FOUND_CODE) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Plugin uninstall notFound outcomes must use plugin_not_found code.',
+        path: ['code'],
+      });
+    }
+    if (outcome.code === PLUGIN_UNINSTALL_NOT_FOUND_CODE && outcome.notFound !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Plugin uninstall plugin_not_found code must set notFound.',
+        path: ['notFound'],
+      });
+    }
+  }),
+]);
+
+export type PluginUninstallOutcome = z.infer<typeof PluginUninstallOutcomeSchema>;
+
 export const ProjectPluginFolderInstallRequestSchema = z.object({
   path: z.string().min(1),
 });
