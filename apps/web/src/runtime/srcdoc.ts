@@ -102,12 +102,27 @@ export function buildLazySrcdocTransport(): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script data-od-lazy-srcdoc-transport>(function(){
+      function reportActivationError(err){
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+              type: 'od:preview-error',
+              stage: 'srcdoc-transport-activate',
+              message: String(err && err.message || err)
+            }, '*');
+          }
+        } catch (_) {}
+      }
       window.addEventListener('message', function(ev){
         var data = ev && ev.data;
         if (!data || data.type !== 'od:srcdoc-transport-activate' || typeof data.html !== 'string') return;
-        document.open();
-        document.write(data.html);
-        document.close();
+        try {
+          document.open();
+          document.write(data.html);
+          document.close();
+        } catch (err) {
+          reportActivationError(err);
+        }
       });
       try {
         if (window.parent && window.parent !== window) {
@@ -155,12 +170,27 @@ export function canActivateSrcDocTransport(state: SrcDocActivationInputs): boole
 
 function injectSrcdocTransportActivationBridge(doc: string): string {
   const script = `<script data-od-srcdoc-transport-activation>(function(){
+  function reportActivationError(err){
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({
+          type: 'od:preview-error',
+          stage: 'srcdoc-transport-activate',
+          message: String(err && err.message || err)
+        }, '*');
+      }
+    } catch (_) {}
+  }
   window.addEventListener('message', function(ev){
     var data = ev && ev.data;
     if (!data || data.type !== 'od:srcdoc-transport-activate' || typeof data.html !== 'string') return;
-    document.open();
-    document.write(data.html);
-    document.close();
+    try {
+      document.open();
+      document.write(data.html);
+      document.close();
+    } catch (err) {
+      reportActivationError(err);
+    }
   });
 })();</script>`;
   return injectBeforeBodyEnd(doc, script);

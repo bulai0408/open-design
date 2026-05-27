@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildLazySrcdocTransport,
+  buildSrcdoc,
   canActivateSrcDocTransport,
   type SrcDocActivationInputs,
 } from '../../src/runtime/srcdoc';
@@ -14,6 +15,16 @@ function extractShellScript(shellHtml: string): string {
   );
   if (!match || match[1] == null) {
     throw new Error('lazy transport shell script not found');
+  }
+  return match[1];
+}
+
+function extractActivationBridgeScript(srcdoc: string): string {
+  const match = srcdoc.match(
+    /<script\s+data-od-srcdoc-transport-activation>([\s\S]*?)<\/script>/,
+  );
+  if (!match || match[1] == null) {
+    throw new Error('srcdoc transport activation script not found');
   }
   return match[1];
 }
@@ -141,6 +152,70 @@ describe('buildLazySrcdocTransport (#2253)', () => {
     listener({ data: null });
     listener({ data: { type: 'unrelated' } });
     expect(writes).toEqual([]);
+  });
+
+  it('reports document.write failures to the parent preview host', () => {
+    const script = extractShellScript(buildLazySrcdocTransport());
+    const parentMessages: unknown[] = [];
+    const win: Record<string, unknown> = {
+      addEventListener(_t: string, listener: (ev: { data: unknown }) => void) {
+        (win as { __listener: typeof listener }).__listener = listener;
+      },
+    };
+    win.parent = { postMessage: (message: unknown) => parentMessages.push(message) };
+    const sandbox: Record<string, unknown> = {
+      document: {
+        open: () => {},
+        write: () => {
+          throw new Error('write failed');
+        },
+        close: () => {},
+      },
+      window: win,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(script, sandbox);
+
+    const listener = (win as { __listener: (ev: { data: unknown }) => void }).__listener;
+    listener({ data: { type: 'od:srcdoc-transport-activate', html: '<p>hi</p>' } });
+
+    expect(parentMessages).toContainEqual({
+      type: 'od:preview-error',
+      stage: 'srcdoc-transport-activate',
+      message: 'write failed',
+    });
+  });
+
+  it('reports document.write failures from the injected activation bridge', () => {
+    const script = extractActivationBridgeScript(buildSrcdoc('<main>Hero</main>'));
+    const parentMessages: unknown[] = [];
+    const win: Record<string, unknown> = {
+      addEventListener(_t: string, listener: (ev: { data: unknown }) => void) {
+        (win as { __listener: typeof listener }).__listener = listener;
+      },
+    };
+    win.parent = { postMessage: (message: unknown) => parentMessages.push(message) };
+    const sandbox: Record<string, unknown> = {
+      document: {
+        open: () => {},
+        write: () => {
+          throw new Error('write failed');
+        },
+        close: () => {},
+      },
+      window: win,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(script, sandbox);
+
+    const listener = (win as { __listener: (ev: { data: unknown }) => void }).__listener;
+    listener({ data: { type: 'od:srcdoc-transport-activate', html: '<p>hi</p>' } });
+
+    expect(parentMessages).toEqual([{
+      type: 'od:preview-error',
+      stage: 'srcdoc-transport-activate',
+      message: 'write failed',
+    }]);
   });
 });
 

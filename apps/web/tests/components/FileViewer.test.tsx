@@ -2,6 +2,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import vm from 'node:vm';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -138,6 +139,16 @@ function slideMessages(calls: readonly (readonly unknown[])[]) {
       return data.type === 'od:slide'
         && (data.action === 'next' || data.action === 'prev' || data.action === 'first' || data.action === 'last');
     });
+}
+
+function extractLazySrcdocTransportScript(shellHtml: string): string {
+  const match = shellHtml.match(
+    /<script\s+data-od-lazy-srcdoc-transport>([\s\S]*?)<\/script>/,
+  );
+  if (!match || match[1] == null) {
+    throw new Error('lazy transport shell script not found');
+  }
+  return match[1];
 }
 
 function clickAgentTool(testId: string) {
@@ -942,6 +953,84 @@ describe('FileViewer SVG artifacts', () => {
       expect(requestPreviewSnapshotMock).toHaveBeenCalledWith(srcdocFrame);
       expect(exportAsImageMock).toHaveBeenCalledWith('data:image/png;base64,AAAA', 'deck');
     });
+  });
+
+  it('falls back to URL-load when srcdoc transport activation reports a write failure', async () => {
+    const file = baseFile({
+      name: 'deck.html',
+      path: 'deck.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'deck',
+        title: 'Deck',
+        entry: 'deck.html',
+        renderer: 'deck-html',
+        exports: ['html'],
+      },
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        isDeck
+        liveHtml={'<html><body><section class="slide">one</section><section class="slide">two</section></body></html>'}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next slide' }));
+
+    const srcdocFrame = await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      return frame;
+    });
+
+    const shellScript = extractLazySrcdocTransportScript(srcdocFrame.srcdoc);
+    const shellWindow: Record<string, unknown> = {
+      addEventListener(_t: string, listener: (ev: { data: unknown }) => void) {
+        (shellWindow as { __listener: typeof listener }).__listener = listener;
+      },
+    };
+    shellWindow.parent = {
+      postMessage: (message: unknown) => {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: srcdocFrame.contentWindow,
+          data: message,
+        }));
+      },
+    };
+    const sandbox: Record<string, unknown> = {
+      document: {
+        open: () => {},
+        write: () => {
+          throw new Error('write failed');
+        },
+        close: () => {},
+      },
+      window: shellWindow,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(shellScript, sandbox);
+    const activate = (shellWindow as { __listener: (ev: { data: unknown }) => void }).__listener;
+    activate({ data: { type: 'od:srcdoc-transport-activate', html: '<main>broken</main>' } });
+
+    await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('url-load');
+      expect(frame.getAttribute('src')).toContain('/api/projects/project-1/raw/deck.html');
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      'open-design preview fallback: srcdoc iframe failed; loading raw URL instead',
+      expect.objectContaining({
+        stage: 'srcdoc-transport-activate',
+        detail: 'write failed',
+      }),
+    );
   });
 
   it('drops a queued Export Image snapshot when srcdoc wrapping fails', async () => {
