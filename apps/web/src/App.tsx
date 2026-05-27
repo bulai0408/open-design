@@ -297,10 +297,14 @@ export function App() {
     const locallyDeletedProjectIds = locallyDeletedProjectIdsRef.current;
     const fetchedIds = new Set(list.map((project) => project.id));
     if (request.generation < latestAppliedProjectListGenerationRef.current) {
-      const hydratableProjects = list.filter(
+      const visibleList =
+        locallyDeletedProjectIds.size > 0
+          ? list.filter((project) => !locallyDeletedProjectIds.has(project.id))
+          : list;
+      if (visibleList.length === 0) return false;
+      const hydratableProjects = visibleList.filter(
         (project) =>
-          pendingLocalProjectIds.has(project.id) &&
-          !locallyDeletedProjectIds.has(project.id),
+          pendingLocalProjectIds.has(project.id),
       );
       if (hydratableProjects.length === 0) return false;
       const hydratableById = new Map(
@@ -311,16 +315,19 @@ export function App() {
       }
       setProjects((current) => {
         let changed = false;
+        const currentIds = new Set<string>();
         const next = current.map((project) => {
+          currentIds.add(project.id);
           const hydrated = hydratableById.get(project.id);
           if (!hydrated) return project;
           changed = true;
           hydratableById.delete(project.id);
           return hydrated;
         });
-        if (hydratableById.size > 0) {
+        for (const project of visibleList) {
+          if (currentIds.has(project.id)) continue;
           changed = true;
-          next.unshift(...hydratableById.values());
+          next.push(project);
         }
         return changed ? next : current;
       });

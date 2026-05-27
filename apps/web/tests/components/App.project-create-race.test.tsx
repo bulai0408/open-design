@@ -235,6 +235,16 @@ const freshProject: Project = {
   metadata: { kind: 'prototype' },
 };
 
+const existingProject: Project = {
+  id: 'project-existing',
+  name: 'Existing project',
+  skillId: null,
+  designSystemId: null,
+  createdAt: 1778243000000,
+  updatedAt: 1778243000000,
+  metadata: { kind: 'prototype' },
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => {
@@ -489,5 +499,45 @@ describe('App project creation routing', () => {
 
     expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
     expect(window.location.pathname).toBe('/projects/project-new');
+  });
+
+  it('keeps non-conflicting projects from an older list that hydrates a host import', async () => {
+    const bootstrapProjects = deferred<Project[]>();
+    const importListProjects = deferred<Project[]>();
+    mockedListProjects
+      .mockReturnValueOnce(bootstrapProjects.promise)
+      .mockReturnValueOnce(importListProjects.promise)
+      .mockResolvedValue([]);
+    mockedGetProject.mockResolvedValue(null);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Host import folder' }));
+
+    await act(async () => {
+      importListProjects.resolve([]);
+      await importListProjects.promise;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('project-view')).toBeTruthy();
+    });
+    expect(screen.getByTestId('project-title').textContent).toBe('');
+    expect(window.location.pathname).toBe('/projects/project-new');
+
+    await act(async () => {
+      bootstrapProjects.resolve([freshProject, existingProject]);
+      await bootstrapProjects.promise;
+    });
+
+    expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
+
+    expect(screen.getByTestId('entry-project-project-new').textContent).toContain(
+      'Fresh project',
+    );
+    expect(screen.getByTestId('entry-project-project-existing').textContent).toContain(
+      'Existing project',
+    );
   });
 });
