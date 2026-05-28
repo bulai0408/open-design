@@ -2,7 +2,6 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import vm from 'node:vm';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -139,20 +138,6 @@ function slideMessages(calls: readonly (readonly unknown[])[]) {
       return data.type === 'od:slide'
         && (data.action === 'next' || data.action === 'prev' || data.action === 'first' || data.action === 'last');
     });
-}
-
-function extractLazySrcdocTransportScript(shellHtml: string): string {
-  const match = shellHtml.match(
-    /<script\s+data-od-lazy-srcdoc-transport>([\s\S]*?)<\/script>/,
-  );
-  if (!match || match[1] == null) {
-    throw new Error('lazy transport shell script not found');
-  }
-  return match[1];
-}
-
-function iframeSrcdoc(frame: HTMLIFrameElement): string {
-  return frame.getAttribute('srcdoc') ?? frame.srcdoc;
 }
 
 function clickAgentTool(testId: string) {
@@ -989,44 +974,24 @@ describe('FileViewer SVG artifacts', () => {
         liveHtml={'<html><body><section class="slide">one</section><section class="slide">two</section></body></html>'}
       />,
     );
-    const srcdocShellFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
-    const shellScript = extractLazySrcdocTransportScript(iframeSrcdoc(srcdocShellFrame));
     canActivateSrcDocTransportMock.mockReturnValue(true);
 
     fireEvent.click(screen.getByRole('button', { name: 'Next slide' }));
 
-    await waitFor(() => {
+    const srcdocFrame = await waitFor(() => {
       const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
       expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      return frame;
     });
 
-    const shellWindow: Record<string, unknown> = {
-      addEventListener(_t: string, listener: (ev: { data: unknown }) => void) {
-        (shellWindow as { __listener: typeof listener }).__listener = listener;
+    window.dispatchEvent(new MessageEvent('message', {
+      source: srcdocFrame.contentWindow,
+      data: {
+        type: 'od:preview-error',
+        stage: 'srcdoc-transport-activate',
+        message: 'write failed',
       },
-    };
-    shellWindow.parent = {
-      postMessage: (message: unknown) => {
-        window.dispatchEvent(new MessageEvent('message', {
-          source: srcdocShellFrame.contentWindow,
-          data: message,
-        }));
-      },
-    };
-    const sandbox: Record<string, unknown> = {
-      document: {
-        open: () => {},
-        write: () => {
-          throw new Error('write failed');
-        },
-        close: () => {},
-      },
-      window: shellWindow,
-    };
-    vm.createContext(sandbox);
-    vm.runInContext(shellScript, sandbox);
-    const activate = (shellWindow as { __listener: (ev: { data: unknown }) => void }).__listener;
-    activate({ data: { type: 'od:srcdoc-transport-activate', html: '<main>broken</main>' } });
+    }));
 
     await waitFor(() => {
       const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
