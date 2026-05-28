@@ -497,6 +497,77 @@ describe('CLI startup boundaries', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it('uses the token-gated media endpoint without falling back when policy denies generation', async () => {
+    const seen: Array<{ url: string | undefined; authorization: string | undefined }> = [];
+    const server = http.createServer((req, res) => {
+      seen.push({
+        url: req.url,
+        authorization: req.headers.authorization,
+      });
+      req.resume();
+      if (req.url === '/api/tools/media/generate') {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: {
+            code: 'MEDIA_EXECUTION_DISABLED',
+            message: 'media generation is disabled for this run',
+          },
+        }));
+        return;
+      }
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unexpected fallback' }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    const daemonUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          cliEntry,
+          'media',
+          'generate',
+          '--project',
+          'project-1',
+          '--surface',
+          'image',
+          '--model',
+          'gpt-image-2',
+          '--prompt',
+          'test',
+          '--daemon-url',
+          daemonUrl,
+        ],
+        {
+          cwd: daemonRoot,
+          env: {
+            ...process.env,
+            OD_TOOL_TOKEN: 'run-token',
+          },
+        },
+      );
+      throw new Error('media command unexpectedly succeeded');
+    } catch (error: unknown) {
+      const failed = error as { code?: number; stderr?: string };
+      expect(failed.code).toBe(4);
+      expect(failed.stderr ?? '').toContain('MEDIA_EXECUTION_DISABLED');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+
+    expect(seen).toEqual([
+      {
+        url: '/api/tools/media/generate',
+        authorization: 'Bearer run-token',
+      },
+    ]);
+  });
 });
 
 async function listen(server: http.Server): Promise<string> {

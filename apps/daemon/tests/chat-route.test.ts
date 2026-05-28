@@ -214,6 +214,51 @@ process.exit(0);
     );
   });
 
+  it('closes the # Instructions block with an explicit "do not echo" guard so models do not parrot the prompt back', async () => {
+    // claude-opus-4-7 (and a few other instruction-tuned models) start
+    // their reply by echoing the # Instructions block verbatim, which
+    // shows up to users as the system prompt leading the visible
+    // answer. server.ts:9934 closes every Instructions block with a
+    // trailing guard line; this test pins the literal so a future
+    // refactor cannot silently drop it.
+    await withFakeAgent(
+      'opencode',
+      `
+let prompt = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  prompt += chunk;
+});
+process.stdin.on('end', () => {
+  const checks = [
+    prompt.includes('Do not quote, restate, or echo the # Instructions block above')
+      ? 'has-echo-guard'
+      : 'missing-echo-guard',
+  ];
+  console.log(JSON.stringify({ type: 'step_start' }));
+  console.log(JSON.stringify({ type: 'text', part: { text: checks.join('\\n') } }));
+  console.log(JSON.stringify({ type: 'step_finish', part: { tokens: { input: 1, output: 1 } } }));
+  process.exit(0);
+});
+`,
+      async () => {
+        const response = await fetch(`${baseUrl}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: 'opencode',
+            message: 'hello',
+          }),
+        });
+        const body = await response.text();
+
+        expect(response.ok).toBe(true);
+        expect(body).toContain('has-echo-guard');
+        expect(body).not.toContain('missing-echo-guard');
+      },
+    );
+  });
+
   it('injects @-mention skillIds into the composed system prompt', async () => {
     await withFakeAgent(
       'opencode',
@@ -476,6 +521,65 @@ process.stdin.on('end', () => {
         expect(body).not.toContain('unexpected-deck-framework');
       },
     );
+  });
+
+  it('honors mediaExecution on legacy chat requests', async () => {
+    const conversationId = `conv-${randomUUID()}`;
+
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: `missing-agent-${randomUUID()}`,
+        conversationId,
+        message: 'plan an image without using OD media',
+        skillId: 'imagegen',
+        mediaExecution: {
+          mode: 'disabled',
+          allowedSurfaces: ['image'],
+        },
+      }),
+    });
+    const body = await response.text();
+
+    expect(response.ok).toBe(true);
+    expect(body).toContain('unknown agent');
+
+    const runsResponse = await fetch(
+      `${baseUrl}/api/runs?conversationId=${encodeURIComponent(conversationId)}`,
+    );
+    const runsBody = await runsResponse.json() as {
+      runs: Array<{ mediaExecution?: { mode?: string; allowedSurfaces?: string[] } }>;
+    };
+    expect(runsBody.runs).toHaveLength(1);
+    expect(runsBody.runs[0]?.mediaExecution).toMatchObject({
+      mode: 'disabled',
+      allowedSurfaces: ['image'],
+    });
+  });
+
+  it('rejects invalid mediaExecution on legacy chat requests', async () => {
+    const conversationId = `conv-${randomUUID()}`;
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: 'opencode',
+        conversationId,
+        message: 'generate an image',
+        mediaExecution: { mode: 'provider-router' },
+      }),
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(body).toContain('mediaExecution.mode');
+
+    const runsResponse = await fetch(
+      `${baseUrl}/api/runs?conversationId=${encodeURIComponent(conversationId)}`,
+    );
+    const runsBody = await runsResponse.json() as { runs: unknown[] };
+    expect(runsBody.runs).toEqual([]);
   });
 
   it('propagates ad-hoc skill critique policy into the chat resolver', async () => {
@@ -1150,7 +1254,8 @@ setInterval(() => {}, 1000);
 
           expect(eventsBody).toContain('event: error');
           expect(eventsBody).toContain('Agent stalled without emitting any new output');
-          expect(eventsBody).toContain('Phase details: spawned agent binary');
+          expect(eventsBody).toContain('Phase details: spawned agent opencode;');
+          expect(eventsBody).not.toContain('spawned agent binary');
           expect(eventsBody).toMatch(/stdout arrived: (yes|no)/);
           expect(statusBody.status).toBe('failed');
         },
@@ -1508,6 +1613,43 @@ describe('chat prompt helpers', () => {
     expect(clientIdx).toBeGreaterThan(-1);
     expect(overrideIdx).toBeGreaterThan(clientIdx);
     expect(prompt.match(/## Codex built-in imagegen override/g)).toHaveLength(1);
+  });
+
+  it('omits the Codex final imagegen override when run media policy blocks execution', () => {
+    const metadata = {
+      kind: 'image',
+      imageModel: 'gpt-image-2',
+      imageAspect: '1:1',
+    };
+    const mediaExecution = {
+      mode: 'disabled',
+      allowedSurfaces: ['image'],
+    };
+    const generatedImagesDir = resolveCodexGeneratedImagesDir(
+      'codex',
+      metadata,
+      { CODEX_HOME: '/tmp/custom-codex-home' },
+      '/home/tester',
+      mediaExecution,
+    );
+    const otherwiseGrantedDir = resolve('/tmp/custom-codex-home/generated_images');
+    const override = resolveGrantedCodexImagegenOverride({
+      agentId: 'codex',
+      metadata,
+      codexGeneratedImagesDir: otherwiseGrantedDir,
+      extraAllowedDirs: [otherwiseGrantedDir],
+      mediaExecution,
+    });
+    const prompt = composeLiveInstructionPrompt({
+      daemonSystemPrompt: 'daemon media policy prompt',
+      runtimeToolPrompt: 'runtime tools',
+      clientSystemPrompt: 'client instructions',
+      finalPromptOverride: override,
+    });
+
+    expect(generatedImagesDir).toBeNull();
+    expect(override).toBeNull();
+    expect(prompt).not.toContain('## Codex built-in imagegen override');
   });
 
   it('defaults enabled research without an explicit query to the current message', () => {

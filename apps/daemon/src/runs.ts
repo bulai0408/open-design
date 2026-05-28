@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { randomUUID } from 'node:crypto';
+import { normalizeMediaExecutionPolicyForRun } from './media-policy.js';
 
 export const TERMINAL_RUN_STATUSES = new Set(['succeeded', 'failed', 'canceled']);
 const RFC3339_TIMESTAMP_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/;
@@ -110,6 +111,7 @@ export function createChatRunService({
           : null,
       pluginId:
         typeof meta.pluginId === 'string' && meta.pluginId ? meta.pluginId : null,
+      mediaExecution: normalizeMediaExecutionPolicyForRun(meta.mediaExecution),
       status: 'queued',
       createdAt: now,
       updatedAt: now,
@@ -167,6 +169,7 @@ export function createChatRunService({
     signal: run.signal,
     error: run.error ?? null,
     errorCode: run.errorCode ?? null,
+    mediaExecution: run.mediaExecution ?? normalizeMediaExecutionPolicyForRun(null),
   });
 
   const finish = (run, status, code: number | null = null, signal: string | null = null) => {
