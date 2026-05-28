@@ -1,3 +1,5 @@
+import { formatRetryDelayMs } from '../runtime/retry-delay';
+
 export interface ChatErrorPayload {
   message: string;
   details?: string | null;
@@ -21,7 +23,7 @@ export function ChatErrorNotice({
       <div className="chat-error-notice__message">{payload.message}</div>
       {payload.retryDelayMs ? (
         <div className="chat-error-notice__hint">
-          Retry after about {formatRetryDelay(payload.retryDelayMs)}.
+          Retry after about {formatRetryDelayMs(payload.retryDelayMs)}.
         </div>
       ) : null}
       {payload.details ? (
@@ -42,10 +44,4 @@ export function normalizeChatError(error: ChatErrorNoticeValue): ChatErrorPayloa
     category: error.category ?? null,
     retryDelayMs: error.retryDelayMs ?? null,
   };
-}
-
-function formatRetryDelay(ms: number): string {
-  const seconds = ms >= 1000 ? Math.max(1, Math.round(ms / 1000)) : ms;
-  if (seconds < 60) return `${seconds}s`;
-  return `${Math.max(1, Math.round(seconds / 60))}m`;
 }

@@ -502,6 +502,96 @@ describe('streamViaDaemon', () => {
     expect(handlers.onDone).not.toHaveBeenCalled();
   });
 
+  it('formats sub-second retryDelayMs values as milliseconds in daemon failure hints', async () => {
+    const handlers = createDaemonHandlers();
+    const stderr = [
+      'Error: request failed',
+      '  cause: {',
+      '    code: 429,',
+      "    message: 'You have exhausted your capacity on this model.'",
+      '  },',
+      '  retryDelayMs: 500',
+      '}',
+    ].join('\n');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ runId: 'run-1' }))
+        .mockResolvedValueOnce(
+          sseResponse(
+            [
+              'event: stderr',
+              `data: ${JSON.stringify({ chunk: stderr })}`,
+              '',
+              'event: end',
+              'data: {"code":1,"status":"failed"}',
+              '',
+              '',
+            ].join('\n'),
+          ),
+        ),
+    );
+
+    await streamViaDaemon({
+      agentId: 'gemini',
+      history: [{ id: '1', role: 'user', content: 'hello' }],
+      systemPrompt: '',
+      signal: new AbortController().signal,
+      handlers,
+    });
+
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      retryDelayMs?: number;
+    };
+    expect(error.retryDelayMs).toBe(500);
+    expect(error.message).toContain('Try again in about 1s');
+    expect(error.message).not.toContain('500s');
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
+  it('normalizes retry-after seconds before exposing retryDelayMs metadata', async () => {
+    const handlers = createDaemonHandlers();
+    const stderr = [
+      'Error: request failed',
+      '  status: 429',
+      '  Retry-After: 10',
+      '  message: quota exceeded',
+    ].join('\n');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ runId: 'run-1' }))
+        .mockResolvedValueOnce(
+          sseResponse(
+            [
+              'event: stderr',
+              `data: ${JSON.stringify({ chunk: stderr })}`,
+              '',
+              'event: end',
+              'data: {"code":1,"status":"failed"}',
+              '',
+              '',
+            ].join('\n'),
+          ),
+        ),
+    );
+
+    await streamViaDaemon({
+      agentId: 'gemini',
+      history: [{ id: '1', role: 'user', content: 'hello' }],
+      systemPrompt: '',
+      signal: new AbortController().signal,
+      handlers,
+    });
+
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      retryDelayMs?: number;
+    };
+    expect(error.retryDelayMs).toBe(10000);
+    expect(error.message).toContain('Try again in about 10s');
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
   it('does not classify unrelated stack line 429 as a quota failure', async () => {
     const handlers = createDaemonHandlers();
     const stderr = [

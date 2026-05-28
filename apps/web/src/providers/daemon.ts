@@ -44,6 +44,7 @@ function detectClientType(): 'desktop' | 'web' | 'unknown' {
 }
 import { parseSseFrame } from './sse';
 import { trackRunProgress, trackRunStart, trackRunTerminal } from '../observability/stuck-run';
+import { formatRetryDelayMs } from '../runtime/retry-delay';
 
 const MAX_TRANSCRIPT_MESSAGE_CHARS = 12_000;
 const LARGE_TOOL_RESULT_CHARS = 8_000;
@@ -283,7 +284,7 @@ function buildDaemonAgentExitError({
   const retryDelayMs = extractRetryDelayMs(details);
   const label = agentLabel(agentId, details);
   const retryHint = retryDelayMs
-    ? ` Try again in about ${formatRetryDelay(retryDelayMs)}, switch models, or check the provider quota.`
+    ? ` Try again in about ${formatRetryDelayMs(retryDelayMs)}, switch models, or check the provider quota.`
     : ' Try again later, switch models, or check the provider quota.';
 
   if (
@@ -435,14 +436,8 @@ function extractRetryDelayMs(stderr: string): number | undefined {
     /\bretry[_-]?after\b["'\s:=]+(\d{1,})/i.exec(stderr);
   if (!match) return undefined;
   const value = Number(match[1]);
-  return Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-function formatRetryDelay(msOrSeconds: number): string {
-  const seconds = msOrSeconds >= 1000 ? Math.max(1, Math.round(msOrSeconds / 1000)) : msOrSeconds;
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.max(1, Math.round(seconds / 60));
-  return `${minutes}m`;
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  return /retryDelayMs/i.test(match[0]) ? value : value * 1000;
 }
 
 function extractMissingBinary(stderr: string): string | null {
