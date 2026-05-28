@@ -7,6 +7,7 @@
 // "Coming soon" affordance on this entry was the user-visible
 // blocker for the feature; this spec is the regression boundary.
 
+import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
@@ -14,15 +15,15 @@ const STORAGE_KEY = 'open-design:config';
 
 const DESIGN_SYSTEMS = [
   {
-    id: 'nexu-soft-tech',
-    title: 'Nexu Soft Tech',
+    id: 'paper',
+    title: 'Paper',
     category: 'Product',
     summary: 'Warm utility system for product interfaces.',
     swatches: ['#F7F4EE', '#D6CBBF', '#1F2937', '#D97757'],
   },
   {
-    id: 'editorial-noir',
-    title: 'Editorial Noir',
+    id: 'editorial',
+    title: 'Editorial',
     category: 'Editorial',
     summary: 'High-contrast editorial system with expressive type.',
     swatches: ['#111111', '#F6EFE6', '#C44536', '#F2C14E'],
@@ -135,14 +136,14 @@ test('chat composer switches the project design system mid-chat', async ({ page 
   await page
     .getByTestId('composer-ds-picker-search')
     .fill('editorial');
-  await page.getByTestId('composer-ds-picker-item-editorial-noir').click();
+  await page.getByTestId('composer-ds-picker-item-editorial').click();
 
   // The composer closes the popover on a successful switch, so the
   // picker disappears and the project mirrors the new DS.
   await expect(page.getByTestId('composer-ds-picker')).toHaveCount(0);
 
   const after = await fetchCurrentProject(page);
-  expect(after.designSystemId).toBe('editorial-noir');
+  expect(after.designSystemId).toBe('editorial');
 
   // The regression boundary: send a chat turn and assert the outbound
   // run carries the *switched* design system. If the composer kept
@@ -161,7 +162,7 @@ test('chat composer switches the project design system mid-chat', async ({ page 
   ]);
 
   expect(runRequestBodies.length).toBeGreaterThan(0);
-  expect(runRequestBodies[0]?.designSystemId).toBe('editorial-noir');
+  expect(runRequestBodies[0]?.designSystemId).toBe('editorial');
 });
 
 async function openImportTab(page: Page) {
@@ -174,10 +175,24 @@ async function openImportTab(page: Page) {
 }
 
 async function createProject(page: Page, projectName: string): Promise<void> {
-  await expect(page.getByTestId('new-project-panel')).toBeVisible();
-  await page.getByTestId('new-project-tab-prototype').click();
-  await page.getByTestId('new-project-name').fill(projectName);
-  await page.getByTestId('create-project').click();
+  const response = await page.request.post('/api/projects', {
+    data: {
+      id: randomUUID(),
+      name: projectName,
+      skillId: null,
+      designSystemId: null,
+      metadata: {
+        kind: 'prototype',
+        nameSource: 'user',
+      },
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+  const body = (await response.json()) as {
+    project: { id: string };
+    conversationId: string;
+  };
+  await page.goto(`/projects/${body.project.id}/conversations/${body.conversationId}`);
 }
 
 async function expectWorkspaceReady(page: Page): Promise<void> {
