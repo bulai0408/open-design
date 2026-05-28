@@ -541,6 +541,71 @@ exit 0
   }
 });
 
+test('codex detection promotes a resolved wrapper candidate without losing live model probes', async () => {
+  const fsTest = process.platform === 'win32' ? false : true;
+  if (!fsTest) return;
+  const stalePathDir = mkdtempSync(join(tmpdir(), 'od-agents-codex-stale-path-'));
+  const home = mkdtempSync(join(tmpdir(), 'od-agents-codex-promoted-wrapper-'));
+  try {
+    await withEnvSnapshot(['PATH', 'OD_AGENT_HOME'], async () => {
+      const staleCodex = join(stalePathDir, 'codex');
+      const wrapperPkgDir = join(home, '.local', 'lib', 'node_modules', '@openai', 'codex');
+      const wrapperRealPath = join(wrapperPkgDir, 'bin', 'codex.js');
+      const wrapperLinkDir = join(home, '.local', 'bin');
+      const wrapperLinkPath = join(wrapperLinkDir, 'codex');
+      const nativePkgDir = join(wrapperPkgDir, 'node_modules', '@openai', `codex-${process.platform}-${process.arch}`);
+      const nativePathDir = join(nativePkgDir, 'vendor', codexNativeTargetTriple(), 'path');
+      const nativeBin = join(nativePkgDir, 'vendor', codexNativeTargetTriple(), 'codex', 'codex');
+      mkdirSync(join(wrapperPkgDir, 'bin'), { recursive: true });
+      mkdirSync(wrapperLinkDir, { recursive: true });
+      mkdirSync(join(nativePkgDir, 'vendor', codexNativeTargetTriple(), 'codex'), { recursive: true });
+      mkdirSync(nativePathDir, { recursive: true });
+      writeFileSync(
+        staleCodex,
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then exit 127; fi\nexit 127\n',
+      );
+      writeFileSync(
+        wrapperRealPath,
+        '#!/bin/sh\n# @openai/codex wrapper\nexit 127\n',
+      );
+      writeFileSync(
+        nativeBin,
+        `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "codex 2.0.0"; exit 0; fi
+if [ "$1" = "debug" ] && [ "$2" = "models" ]; then
+  printf '%s\\n' '{"models":[{"slug":"gpt-live-promoted","display_name":"GPT Live Promoted"}]}'
+  exit 0
+fi
+exit 0
+`,
+      );
+      chmodSync(staleCodex, 0o755);
+      chmodSync(wrapperRealPath, 0o755);
+      chmodSync(nativeBin, 0o755);
+      symlinkSync(wrapperRealPath, wrapperLinkPath);
+      process.env.PATH = stalePathDir;
+      process.env.OD_AGENT_HOME = home;
+
+      const agents = await detectAgents();
+      const detected = agents.find((agent) => agent.id === 'codex');
+
+      assert.ok(detected);
+      assert.equal(detected.available, true);
+      assert.equal(detected.path, wrapperLinkPath);
+      assert.equal(detected.version, 'codex 2.0.0');
+      assert.equal(detected.modelsSource, 'live');
+      assert.ok(detected.models.some((model) => model.id === 'gpt-live-promoted'));
+
+      const launch = resolveAgentLaunch(codex);
+      assert.equal(launch.selectedPath, wrapperLinkPath);
+      assert.equal(realpathSync(launch.launchPath ?? ''), realpathSync(nativeBin));
+    });
+  } finally {
+    rmSync(stalePathDir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('codex picker includes gpt-5.1 model family', () => {
   const pickerModels = new Set(codex.fallbackModels.map((model) => model.id));
 
