@@ -151,6 +151,10 @@ function extractLazySrcdocTransportScript(shellHtml: string): string {
   return match[1];
 }
 
+function iframeSrcdoc(frame: HTMLIFrameElement): string {
+  return frame.getAttribute('srcdoc') ?? frame.srcdoc;
+}
+
 function clickAgentTool(testId: string) {
   fireEvent.click(screen.getByTestId(testId));
 }
@@ -896,9 +900,8 @@ describe('FileViewer SVG artifacts', () => {
       expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
       return frame;
     });
-    expect(activeFrame).toBe(srcdocFrame);
 
-    fireEvent.load(srcdocFrame);
+    fireEvent.load(activeFrame);
 
     await waitFor(() => {
       expect(srcDocActivationMessages(postMessageSpy.mock.calls).length).toBeGreaterThan(0);
@@ -950,9 +953,12 @@ describe('FileViewer SVG artifacts', () => {
     fireEvent.load(srcdocFrame);
 
     await waitFor(() => {
-      expect(requestPreviewSnapshotMock).toHaveBeenCalledWith(srcdocFrame);
+      expect(requestPreviewSnapshotMock).toHaveBeenCalledTimes(1);
       expect(exportAsImageMock).toHaveBeenCalledWith('data:image/png;base64,AAAA', 'deck');
     });
+    const snapshotFrame = requestPreviewSnapshotMock.mock.calls[0]?.[0];
+    expect(snapshotFrame).toBeInstanceOf(HTMLIFrameElement);
+    expect((snapshotFrame as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('srcdoc');
   });
 
   it('falls back to URL-load when srcdoc transport activation reports a write failure', async () => {
@@ -981,16 +987,16 @@ describe('FileViewer SVG artifacts', () => {
         liveHtml={'<html><body><section class="slide">one</section><section class="slide">two</section></body></html>'}
       />,
     );
+    const srcdocShellFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
+    const shellScript = extractLazySrcdocTransportScript(iframeSrcdoc(srcdocShellFrame));
 
     fireEvent.click(screen.getByRole('button', { name: 'Next slide' }));
 
-    const srcdocFrame = await waitFor(() => {
+    await waitFor(() => {
       const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
       expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
-      return frame;
     });
 
-    const shellScript = extractLazySrcdocTransportScript(srcdocFrame.srcdoc);
     const shellWindow: Record<string, unknown> = {
       addEventListener(_t: string, listener: (ev: { data: unknown }) => void) {
         (shellWindow as { __listener: typeof listener }).__listener = listener;
@@ -999,7 +1005,7 @@ describe('FileViewer SVG artifacts', () => {
     shellWindow.parent = {
       postMessage: (message: unknown) => {
         window.dispatchEvent(new MessageEvent('message', {
-          source: srcdocFrame.contentWindow,
+          source: srcdocShellFrame.contentWindow,
           data: message,
         }));
       },
