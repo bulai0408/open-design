@@ -2573,7 +2573,6 @@ describe('FileViewer tweaks toolbar', () => {
         activeCommentId={null}
         collapsed={false}
         onCollapsedChange={() => {}}
-        onClose={() => {}}
         onToggleSelect={() => {}}
         onClearSelection={() => {}}
         onReply={() => {}}
