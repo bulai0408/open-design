@@ -48,6 +48,8 @@ import type {
   IntegrationsSkillsTabClickProps,
   IntegrationsUseEverywhereTabClickProps,
   ChatPanelClickProps,
+  RunFailedToastClickProps,
+  RunFailedToastSurfaceViewProps,
   ChatPanelResourcesPopoverClickProps,
   FileManagerClickProps,
   ArtifactToolbarClickProps,
@@ -158,6 +160,20 @@ export function trackAssistantFeedbackReasonPanelSurfaceView(
   props: AssistantFeedbackReasonPanelSurfaceViewProps,
 ): void {
   send(track, 'surface_view', props);
+}
+
+export function trackRunFailedToastSurfaceView(
+  track: Track,
+  props: RunFailedToastSurfaceViewProps,
+): void {
+  send(track, 'surface_view', props);
+}
+
+export function trackRunFailedToastGoAmrClick(
+  track: Track,
+  props: RunFailedToastClickProps,
+): void {
+  send(track, 'ui_click', props);
 }
 
 // ---- ui_click (home) -----------------------------------------------------

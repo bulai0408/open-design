@@ -157,6 +157,10 @@ export type TrackingCliProviderId =
   | 'kilo'
   | 'other';
 
+export type TrackingFeedbackProviderId =
+  | TrackingCliProviderId
+  | TrackingByokProviderId;
+
 export type TrackingArtifactKind =
   | 'html'
   | 'markdown'
@@ -1201,6 +1205,14 @@ export interface ChatPanelClickProps {
     | 'resources_popover_trigger';
 }
 
+// Hosted-AMR nudge shown under a non-AMR agent's model/auth/quota failure.
+// `go_amr` is the link that opens https://open-design.ai/amr.
+export interface RunFailedToastClickProps {
+  page_name: 'chat_panel';
+  area: 'chat_panel';
+  element: 'go_amr';
+}
+
 export interface ChatPanelResourcesPopoverClickProps {
   page_name: 'chat_panel';
   area: 'resources_popover';
@@ -1524,6 +1536,7 @@ export type UiClickProps =
   | IntegrationsSkillsTabClickProps
   | IntegrationsUseEverywhereTabClickProps
   | ChatPanelClickProps
+  | RunFailedToastClickProps
   | ChatPanelResourcesPopoverClickProps
   | FileManagerClickProps
   | ArtifactToolbarClickProps
@@ -1573,6 +1586,21 @@ export interface DesignSystemsTemplatesModalSurfaceViewProps {
   templates_type?: string;
 }
 
+// Impression of the hosted-AMR nudge under a failed run's error toast. Fires
+// once per render of the toast for a non-AMR agent whose failure is a
+// model/auth/quota error (`error_code` carries the specific class).
+export interface RunFailedToastSurfaceViewProps {
+  page_name: 'chat_panel';
+  area: 'chat_panel';
+  element: 'run_failed_toast';
+  error_code: string;
+  project_id: string;
+  project_kind: TrackingProjectKind | null;
+  conversation_id: string | null;
+  assistant_message_id: string;
+  run_id: string | null;
+}
+
 export interface AssistantFeedbackReasonPanelSurfaceViewProps {
   page_name: 'chat_panel';
   area: 'chat_panel';
@@ -1604,6 +1632,7 @@ export interface UpdatePromptSurfaceViewProps {
 }
 
 export type SurfaceViewProps =
+  | RunFailedToastSurfaceViewProps
   | HelpPopoverSurfaceViewProps
   | NewProjectModalSurfaceViewProps
   | PluginReplacementModalSurfaceViewProps
@@ -1824,6 +1853,8 @@ export interface FeedbackSubmitResultProps {
   conversation_id: string | null;
   assistant_message_id: string;
   run_id: string;
+  model_id: string | null;
+  agent_provider_id: TrackingFeedbackProviderId | null;
   rating: 'positive' | 'negative';
   reason?: string;
   reason_count: number;
@@ -2069,6 +2100,27 @@ export function agentIdToTracking(agentId: string | null | undefined): TrackingC
       return 'kilo';
     default:
       return 'other';
+  }
+}
+
+export function feedbackAgentProviderIdToTracking(
+  agentId: string | null | undefined,
+): TrackingFeedbackProviderId | null {
+  switch (agentId) {
+    case 'anthropic-api':
+      return byokProtocolToTracking('anthropic');
+    case 'openai-api':
+      return byokProtocolToTracking('openai');
+    case 'azure-openai-api':
+      return byokProtocolToTracking('azure');
+    case 'google-gemini-api':
+      return byokProtocolToTracking('google');
+    case 'ollama-cloud-api':
+      return byokProtocolToTracking('ollama');
+    case 'senseaudio-api':
+      return byokProtocolToTracking('senseaudio');
+    default:
+      return agentId ? agentIdToTracking(agentId) : null;
   }
 }
 

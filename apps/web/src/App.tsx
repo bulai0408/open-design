@@ -32,6 +32,7 @@ import {
   switchApiProtocolConfig,
   updateCurrentApiProtocolConfig,
   type SettingsSection,
+  type SettingsHighlight,
 } from './components/SettingsDialog';
 import { PrivacyConsentModal } from './components/PrivacyConsentModal';
 import {
@@ -193,6 +194,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsWelcome, setSettingsWelcome] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('execution');
+  const [settingsHighlight, setSettingsHighlight] = useState<SettingsHighlight>(null);
   const [integrationInitialTab, setIntegrationInitialTab] = useState<IntegrationTab>('mcp');
   const [daemonLive, setDaemonLive] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -1160,7 +1162,10 @@ export function App() {
     };
   }, [route, activeProject, projects, daemonLive]);
 
-  const openSettings = useCallback((section: SettingsSection = 'execution') => {
+  const openSettings = useCallback((
+    section: SettingsSection = 'execution',
+    opts?: { highlight?: SettingsHighlight },
+  ) => {
     if (section === 'composio' || section === 'mcpClient' || section === 'integrations') {
       setIntegrationInitialTab(
         section === 'composio'
@@ -1174,8 +1179,16 @@ export function App() {
     }
     setSettingsWelcome(false);
     setSettingsInitialSection(section);
+    setSettingsHighlight(opts?.highlight ?? null);
     setSettingsOpen(true);
   }, []);
+
+  // Entry point from the failed-run AMR nudge: open Settings on the execution
+  // section and flag the AMR agent card for a one-shot scroll-into-view +
+  // highlight (and a sign-in coachmark when not yet authorized).
+  const openAmrSettings = useCallback(() => {
+    openSettings('execution', { highlight: 'amr' });
+  }, [openSettings]);
 
   const openPetSettings = useCallback(() => {
     setSettingsWelcome(false);
@@ -1379,6 +1392,7 @@ export function App() {
         onAgentModelChange={handleAgentModelChange}
         onRefreshAgents={refreshAgents}
         onOpenSettings={openSettings}
+        onOpenAmrSettings={openAmrSettings}
         onOpenMcpSettings={openMcpSettings}
         onAdoptPetInline={handleAdoptPet}
         onTogglePet={handleTogglePet}
@@ -1495,10 +1509,12 @@ export function App() {
         <SettingsDialog
           initial={config}
           agents={agents}
+          agentsLoading={agentsLoading}
           daemonLive={daemonLive}
           appVersionInfo={appVersionInfo}
           welcome={settingsWelcome}
           initialSection={settingsInitialSection}
+          initialHighlight={settingsHighlight}
           composioConfigLoading={composioConfigLoading}
           onPersist={handleConfigPersist}
           onPersistComposioKey={handleConfigPersistComposioKey}
@@ -1516,6 +1532,7 @@ export function App() {
               setConfig(next);
             }
             setSettingsOpen(false);
+            setSettingsHighlight(null);
           }}
           onRefreshAgents={refreshAgents}
           onSkillsRefresh={refreshSkills}

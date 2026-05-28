@@ -20,6 +20,7 @@ import {
   trackFeedbackSubmitResult,
 } from "../analytics/events";
 import {
+  feedbackAgentProviderIdToTracking,
   normalizeCustomReason,
   type TrackingFeedbackReasonCode,
   type TrackingFeedbackRatingWithNone,
@@ -297,6 +298,10 @@ interface Props {
   // interactivity on this so older forms render as a locked "answered"
   // capsule instead of being re-submittable.
   isLast?: boolean;
+  // Assistant message id whose run-failure error is rendered as ChatPane's
+  // top-level error card; that message's per-message error pill is suppressed
+  // to avoid duplication. Other messages keep their error pill.
+  errorCardOwnerId?: string | null;
   // The user message that immediately follows this assistant turn (if
   // any). Used to detect that a form was already answered so we can
   // render its locked state with the user's picks visible.
@@ -332,6 +337,7 @@ export function AssistantMessage({
   activePluginActionPaths = new Set(),
   hiddenPluginActionPaths = new Set(),
   isLast,
+  errorCardOwnerId = null,
   nextUserContent,
   onSubmitForm,
   onContinueRemainingTasks,
@@ -350,7 +356,9 @@ export function AssistantMessage({
   // above the composer, so we strip any TodoWrite tool-groups out of the
   // per-message flow to avoid the same task list rendering twice.
   const blocks = stripTodoToolGroups(
-    suppressAskUserQuestionFallbackText(buildBlocks(events)),
+    suppressDuplicateQuestionForms(
+      suppressAskUserQuestionFallbackText(buildBlocks(events)),
+    ),
   );
   const fileOps = useMemo(() => deriveFileOps(events), [events]);
   const produced = message.producedFiles ?? [];
@@ -568,8 +576,15 @@ export function AssistantMessage({
               />
             );
           }
-          if (b.kind === "status")
+          if (b.kind === "status") {
+            // Suppress this message's gray error pill ONLY when ChatPane is
+            // rendering the top-level error card for it (the last failed run).
+            // Other failed turns — older history, or once a follow-up makes
+            // this no longer the last assistant message — keep their pill so
+            // the error detail still survives reload / history review.
+            if (b.label === "error" && message.id === errorCardOwnerId) return null;
             return <StatusPill key={i} label={b.label} detail={b.detail} />;
+          }
           return null;
         })}
         {!streaming && displayedProduced.length > 0 && projectId ? (
@@ -630,6 +645,8 @@ export function AssistantMessage({
                 conversationId={conversationId}
                 runId={message.runId ?? null}
                 assistantMessageId={message.id}
+                modelId={assistantFeedbackModelId(message)}
+                agentProviderId={feedbackAgentProviderIdToTracking(message.agentId)}
                 producedFileCount={displayedProduced.length}
                 hasDesignSystemContext={hasDesignSystemContext}
                 footerProps={{
@@ -753,6 +770,16 @@ function assistantModelDetail(message: ChatMessage): string | null {
   return detail;
 }
 
+function assistantFeedbackModelId(message: ChatMessage): string | null {
+  const detail = assistantModelDetail(message);
+  if (detail) return detail;
+  const displayName = message.agentName?.trim();
+  if (!displayName) return null;
+  const parts = displayName.split(" · ");
+  const model = parts.length > 1 ? parts[parts.length - 1]?.trim() : "";
+  return model || null;
+}
+
 function appendRoleModel(label: string, model: string | null): string {
   if (!model || label.includes(" · ")) return label;
   return `${label} · ${model}`;
@@ -829,6 +856,8 @@ function AssistantFeedback({
   conversationId,
   runId,
   assistantMessageId,
+  modelId,
+  agentProviderId,
   producedFileCount,
 }: {
   feedback: ChatMessage["feedback"];
@@ -840,6 +869,8 @@ function AssistantFeedback({
   conversationId: string | null;
   runId: string | null;
   assistantMessageId: string;
+  modelId: string | null;
+  agentProviderId: ReturnType<typeof feedbackAgentProviderIdToTracking>;
   producedFileCount: number;
 }) {
   const t = useT();
@@ -1010,6 +1041,8 @@ function AssistantFeedback({
         conversation_id: conversationId,
         assistant_message_id: assistantMessageId,
         run_id: runId ?? "",
+        model_id: modelId,
+        agent_provider_id: agentProviderId,
         rating: reasonRating,
         ...(reasonJoined ? { reason: reasonJoined } : {}),
         reason_count: reasonCodes.length,
@@ -1821,9 +1854,50 @@ function StatusPill({
   return (
     <div className="status-pill">
       <span className="status-label">{label}</span>
-      {detail ? <span className="status-detail">{detail}</span> : null}
+      {detail ? <span className="status-detail">{renderStatusDetail(detail)}</span> : null}
     </div>
   );
+}
+
+function renderStatusDetail(detail: string): ReactNode {
+  const segments: ReactNode[] = [];
+  const urlRe = /(https?:\/\/[^\s)<>]+)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+
+  while ((match = urlRe.exec(detail))) {
+    if (match.index > lastIndex) {
+      segments.push(detail.slice(lastIndex, match.index));
+    }
+    const [href, suffix] = splitStatusDetailUrlPunctuation(match[1]!);
+    segments.push(
+      <a
+        key={`url-${key++}`}
+        className="md-link md-link-bare"
+        href={href}
+        target="_blank"
+        rel="noreferrer noopener"
+      >
+        {href}
+      </a>,
+    );
+    if (suffix) segments.push(suffix);
+    lastIndex = urlRe.lastIndex;
+  }
+
+  if (lastIndex < detail.length) {
+    segments.push(detail.slice(lastIndex));
+  }
+
+  return <>{segments}</>;
+}
+
+function splitStatusDetailUrlPunctuation(url: string): [string, string] {
+  const match = /([.,!?;:，。！？；：、'"」』】》〉）]+)$/.exec(url);
+  if (!match?.[1]) return [url, ''];
+  const trimmed = url.slice(0, -match[1].length);
+  return trimmed ? [trimmed, match[1]] : [url, ''];
 }
 
 interface ToolItem {
@@ -2093,6 +2167,31 @@ function stripTodoToolGroups(blocks: Block[]): Block[] {
   return blocks.filter((block) => {
     if (block.kind !== "tool-group") return true;
     return !block.items.every((it) => isTodoWriteToolName(it.use.name));
+  });
+}
+
+// The prompt asks for one discovery form and then a stop, but LLMs can still
+// emit a tailored discovery form followed by the default Quick brief in the
+// same assistant turn. Keep the first form for each id and drop later repeats.
+function suppressDuplicateQuestionForms(blocks: Block[]): Block[] {
+  const seenFormIds = new Set<string>();
+  return blocks.map((block) => {
+    if (block.kind !== "text") return block;
+    const segments = splitOnQuestionForms(block.text);
+    let changed = false;
+    const nextText = segments
+      .map((segment) => {
+        if (segment.kind === "text") return segment.text;
+        const formKey = segment.form.id.trim().toLowerCase();
+        if (seenFormIds.has(formKey)) {
+          changed = true;
+          return "";
+        }
+        seenFormIds.add(formKey);
+        return segment.raw;
+      })
+      .join("");
+    return changed ? { ...block, text: nextText } : block;
   });
 }
 
