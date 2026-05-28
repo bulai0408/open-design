@@ -19,6 +19,8 @@ import type { AppConfig, ChatAttachment, ChatCommentAttachment, ChatMessage, Cha
 import { dayKey, dayLabel, exactDateTime, messageTime, relativeTimeLong } from '../utils/chatTime';
 import { commentTargetDisplayName, commentsToAttachments, simplePositionLabel } from '../comments';
 import { AssistantMessage } from './AssistantMessage';
+import { AmrGuidance } from './AmrGuidance';
+import { AMR_RECHARGE_URL, resolveRunFailureUi } from '../runtime/amr-guidance';
 import {
   ChatComposer,
   type ChatComposerHandle,
@@ -278,6 +280,8 @@ interface Props {
   // Composer settings/CLI button forwards to here. The dialog lives in App
   // (it owns the AppConfig lifecycle) so we just pass the open trigger.
   onOpenSettings?: (section?: SettingsSection) => void;
+  onOpenAmrSettings?: () => void;
+  onSwitchToAmrAndRetry?: (failedAssistant: ChatMessage) => void;
   // Same dialog, but landing on the External MCP tab. Forwarded to the
   // composer's `/mcp` slash and MCP picker button.
   onOpenMcpSettings?: () => void;
@@ -372,6 +376,8 @@ export function ChatPane({
   onDeleteConversation,
   onRenameConversation,
   onOpenSettings,
+  onOpenAmrSettings,
+  onSwitchToAmrAndRetry,
   onOpenMcpSettings,
   connectRepoNeeded,
   githubConnected,
@@ -423,6 +429,57 @@ export function ChatPane({
     (m) => m.role === 'assistant' && isActiveRunStatus(m.runStatus),
   );
   const retryAssistant = retryableAssistantMessage(messages, lastAssistantId, streaming);
+  // The failed run's error event lives on the (persisted) assistant message, so
+  // the error card + AMR card survive a reload — unlike the ephemeral global
+  // `error` state. Drive both off this event.
+  const failedRunErrorEvent = (() => {
+    const evs = retryAssistant?.events ?? [];
+    for (let i = evs.length - 1; i >= 0; i--) {
+      const ev = evs[i];
+      if (ev?.kind === 'status' && ev.label === 'error') return ev;
+    }
+    return null;
+  })();
+  // Per-case failure UI (button + copy + whether to promote AMR). Only
+  // meaningful for a failed run (retryAssistant present).
+  const runFailureUi = retryAssistant
+    ? resolveRunFailureUi(failedRunErrorEvent?.code, retryAssistant.agentId)
+    : null;
+  // Prefer a case-specific message (AMR auth / balance) over the raw upstream
+  // string; fall back to the live global error (also covers conversation-load
+  // / audio errors) then the persisted run error so a reload still shows it.
+  const persistedRunError: ChatErrorNoticeValue | null = failedRunErrorEvent
+    ? {
+        message: failedRunErrorEvent.detail ?? 'The agent failed.',
+        details: failedRunErrorEvent.diagnostic,
+        category: failedRunErrorEvent.category,
+        retryDelayMs: failedRunErrorEvent.retryDelayMs,
+      }
+    : null;
+  const rawError = error ?? persistedRunError;
+  const displayError = runFailureUi?.messageKey ? t(runFailureUi.messageKey) : rawError;
+  const displayErrorNotice: ChatErrorNoticeValue | null =
+    typeof displayError === 'string' && rawError && typeof rawError !== 'string'
+      ? { ...rawError, message: displayError }
+      : displayError;
+  // The failed run whose error this top-level card represents. AssistantMessage
+  // suppresses only THIS message's per-message error pill (to avoid the
+  // duplicate); other failed turns — older history, or once a follow-up makes
+  // this no longer the last assistant — keep their pill so the error survives.
+  const errorCardOwnerId =
+    retryAssistant && failedRunErrorEvent ? retryAssistant.id : null;
+  // AMR promotion card payload (only the non-AMR model/auth/quota case).
+  const amrSwitchPayload =
+    runFailureUi?.showSwitchCard && retryAssistant && failedRunErrorEvent?.code
+      ? {
+          errorCode: failedRunErrorEvent.code,
+          projectId: projectId ?? '',
+          projectKind: projectKindForTracking,
+          conversationId: activeConversationId,
+          assistantMessageId: retryAssistant.id,
+          runId: retryAssistant.runId ?? null,
+        }
+      : null;
   const composerDraftStorageKey = projectId && activeConversationId
     ? `od:chat-composer:draft:${projectId}:${activeConversationId}`
     : undefined;
@@ -614,7 +671,12 @@ export function ChatPane({
       snapshot(target);
       const distance =
         target.scrollHeight - target.scrollTop - target.clientHeight;
-      setScrolledFromBottom(distance > 120);
+      // Functional updater bails out when the value is unchanged so a flood
+      // of scroll events (e.g. programmatic scrollTop + ResizeObserver
+      // follow-up during streaming) does not schedule a re-render per tick
+      // and trip React's "Maximum update depth exceeded" guard.
+      const next = distance > 120;
+      setScrolledFromBottom((prev) => (prev === next ? prev : next));
       pinnedToBottomRef.current = distance < 80;
     }
     el.addEventListener('scroll', onScroll);
@@ -1100,6 +1162,7 @@ export function ChatPane({
                         activePluginActionPaths={activePluginActionPaths}
                         hiddenPluginActionPaths={hiddenPluginActionPaths}
                         isLast={m.id === lastAssistantId}
+                        errorCardOwnerId={errorCardOwnerId}
                         nextUserContent={nextUserContentByAssistantId.get(m.id)}
                         suppressDirectionForms={hasActiveDesignSystem}
                         hasDesignSystemContext={hasActiveDesignSystem || !!activeDesignSystem}
@@ -1123,10 +1186,47 @@ export function ChatPane({
                   </Fragment>
                 );
               })}
-              {error ? (
+              {displayErrorNotice ? (
                 <div className="msg error">
-                  <ChatErrorNotice error={error} />
-                  {retryAssistant && onRetry ? (
+                  <ChatErrorNotice error={displayErrorNotice} className="chat-error-text" />
+                  {retryAssistant && onRetry && runFailureUi ? (
+                    <div className="chat-error-actions">
+                      {runFailureUi.primaryAction === 'authorize' ? (
+                        <button
+                          type="button"
+                          className="chat-error-action"
+                          onClick={() => {
+                            if (onSwitchToAmrAndRetry) {
+                              onSwitchToAmrAndRetry(retryAssistant);
+                            } else {
+                              onOpenAmrSettings?.();
+                            }
+                          }}
+                        >
+                          {t('chat.amrError.authorizeCta')}
+                        </button>
+                      ) : runFailureUi.primaryAction === 'recharge' ? (
+                        <button
+                          type="button"
+                          className="chat-error-action"
+                          onClick={() =>
+                            window.open(AMR_RECHARGE_URL, '_blank', 'noopener,noreferrer')
+                          }
+                        >
+                          {t('chat.amrError.rechargeCta')}
+                        </button>
+                      ) : null}
+                      {runFailureUi.primaryAction === 'retry' || runFailureUi.secondaryRetry ? (
+                        <button
+                          type="button"
+                          className="ghost chat-error-retry"
+                          onClick={() => onRetry(retryAssistant)}
+                        >
+                          {t('promptTemplates.retry')}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : retryAssistant && onRetry ? (
                     <button
                       type="button"
                       className="ghost chat-error-retry"
@@ -1136,6 +1236,18 @@ export function ChatPane({
                     </button>
                   ) : null}
                 </div>
+              ) : null}
+              {amrSwitchPayload ? (
+                <AmrGuidance
+                  {...amrSwitchPayload}
+                  onActivate={() => {
+                    if (retryAssistant && onSwitchToAmrAndRetry) {
+                      onSwitchToAmrAndRetry(retryAssistant);
+                    } else {
+                      onOpenAmrSettings?.();
+                    }
+                  }}
+                />
               ) : null}
             </div>
             {/* Always mounted so the CSS transition can play in both

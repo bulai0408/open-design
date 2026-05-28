@@ -1201,6 +1201,14 @@ export interface ChatPanelClickProps {
     | 'resources_popover_trigger';
 }
 
+// Hosted-AMR nudge shown under a non-AMR agent's model/auth/quota failure.
+// `go_amr` is the link that opens https://open-design.ai/amr.
+export interface RunFailedToastClickProps {
+  page_name: 'chat_panel';
+  area: 'chat_panel';
+  element: 'go_amr';
+}
+
 export interface ChatPanelResourcesPopoverClickProps {
   page_name: 'chat_panel';
   area: 'resources_popover';
@@ -1524,6 +1532,7 @@ export type UiClickProps =
   | IntegrationsSkillsTabClickProps
   | IntegrationsUseEverywhereTabClickProps
   | ChatPanelClickProps
+  | RunFailedToastClickProps
   | ChatPanelResourcesPopoverClickProps
   | FileManagerClickProps
   | ArtifactToolbarClickProps
@@ -1573,6 +1582,21 @@ export interface DesignSystemsTemplatesModalSurfaceViewProps {
   templates_type?: string;
 }
 
+// Impression of the hosted-AMR nudge under a failed run's error toast. Fires
+// once per render of the toast for a non-AMR agent whose failure is a
+// model/auth/quota error (`error_code` carries the specific class).
+export interface RunFailedToastSurfaceViewProps {
+  page_name: 'chat_panel';
+  area: 'chat_panel';
+  element: 'run_failed_toast';
+  error_code: string;
+  project_id: string;
+  project_kind: TrackingProjectKind | null;
+  conversation_id: string | null;
+  assistant_message_id: string;
+  run_id: string | null;
+}
+
 export interface AssistantFeedbackReasonPanelSurfaceViewProps {
   page_name: 'chat_panel';
   area: 'chat_panel';
@@ -1604,6 +1628,7 @@ export interface UpdatePromptSurfaceViewProps {
 }
 
 export type SurfaceViewProps =
+  | RunFailedToastSurfaceViewProps
   | HelpPopoverSurfaceViewProps
   | NewProjectModalSurfaceViewProps
   | PluginReplacementModalSurfaceViewProps

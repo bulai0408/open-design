@@ -8,6 +8,7 @@ import type {
 } from './comments';
 import type { ResearchOptions } from './research';
 import type { RunContextSelection } from './context.js';
+import type { MediaExecutionPolicy } from './media.js';
 
 export type ChatRole = 'user' | 'assistant';
 export type ChatCommentSelectionKind = PreviewCommentSelectionKind | 'visual';
@@ -38,6 +39,12 @@ export interface ChatRequest {
   locale?: string;
   research?: ResearchOptions;
   context?: RunContextSelection;
+  /**
+   * Run-scoped media execution policy. Omitted means current Open Design
+   * behavior: media generation is enabled and OD may execute its configured
+   * local providers.
+   */
+  mediaExecution?: MediaExecutionPolicy;
   /**
    * Optional analytics context for the v2 run_created / run_finished
    * events. The daemon never trusts these for behavior — they only
@@ -184,6 +191,8 @@ export interface ChatRunStatusResponse {
   signal?: string | null;
   error?: string | null;
   errorCode?: string | null;
+  /** Present on daemon run status responses that know the effective run policy. */
+  mediaExecution?: MediaExecutionPolicy;
 }
 
 export interface ChatRunListResponse {
@@ -223,10 +232,15 @@ export interface ChatCommentAttachment {
 }
 
 export type PersistedAgentEvent =
+  // `code` carries the structured API error code for `label: 'error'`
+  // status events (e.g. AGENT_AUTH_REQUIRED, RATE_LIMITED). Clients use it to
+  // decide error-specific affordances such as the hosted-AMR nudge. The
+  // diagnostic fields preserve daemon process failure details for disclosure.
   | {
       kind: 'status';
       label: string;
       detail?: string;
+      code?: string;
       diagnostic?: string;
       category?: string;
       retryDelayMs?: number;

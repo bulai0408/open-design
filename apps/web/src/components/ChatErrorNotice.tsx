@@ -1,4 +1,5 @@
 import { formatRetryDelayMs } from '../runtime/retry-delay';
+import { renderLinkedStatusDetail } from './status-detail-links';
 
 export interface ChatErrorPayload {
   message: string;
@@ -20,7 +21,7 @@ export function ChatErrorNotice({
   const classes = ['chat-error-notice', className].filter(Boolean).join(' ');
   return (
     <div className={classes} role="alert">
-      <div className="chat-error-notice__message">{payload.message}</div>
+      <div className="chat-error-notice__message">{renderLinkedStatusDetail(payload.message)}</div>
       {payload.retryDelayMs ? (
         <div className="chat-error-notice__hint">
           Retry after about {formatRetryDelayMs(payload.retryDelayMs)}.
