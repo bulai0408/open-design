@@ -673,6 +673,13 @@ export interface Dict {
   'settings.mcpCopied': string;
   'settings.mcpCopy': string;
   'settings.mcpCursorApproval': string;
+  'settings.mcpCodexOneClickInstall': string;
+  'settings.mcpCodexOneClickUninstall': string;
+  'settings.mcpCodexOneClickUnavailable': string;
+  'settings.mcpCodexInstallSuccess': string;
+  'settings.mcpCodexUninstallSuccess': string;
+  'settings.mcpCodexBusy': string;
+  'settings.mcpCodexInstallError': string;
   'settings.mcpRestartNote': string;
   'settings.mcpRestartDetail': string;
   'settings.mcpCapabilitiesTitle': string;

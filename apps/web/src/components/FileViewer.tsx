@@ -1996,7 +1996,7 @@ export function CommentSidePanel({
           <div className="comment-side-empty">
             {t('chat.comments.emptySaved')}
           </div>
-        ) : sorted.map((comment) => {
+        ) : sorted.map((comment, index) => {
           const selected = visibleSelectedIds.has(comment.id);
           const active = comment.id === activeCommentId;
           return (
@@ -2009,7 +2009,7 @@ export function CommentSidePanel({
             >
               <div className="comment-side-item-head">
                 <span className="comment-side-author">
-                  <strong>{commentDisplayLabel(comment, t)}</strong>
+                  <strong>{`${index + 1}. ${commentDisplayLabel(comment, t)}`}</strong>
                 </span>
                 <span className="comment-side-time">{formatCommentTime(comment.createdAt, t)}</span>
                 <button
@@ -2834,6 +2834,12 @@ function CommentPreviewOverlays({
     .filter((item): item is { comment: PreviewComment; index: number; snapshot: PreviewCommentSnapshot } =>
       Boolean(item.snapshot),
     );
+  const activeSavedIndex = activeTarget
+    ? visibleComments.findIndex(({ snapshot }) => snapshot.elementId === activeTarget.elementId)
+    : -1;
+  const activePinNumber = activeSavedIndex >= 0
+    ? activeSavedIndex + 1
+    : visibleComments.length + 1;
   const targetOverlay = activeTarget ?? hoveredTarget;
   return (
     <div className="comment-overlay-layer" aria-hidden={false}>
@@ -2861,10 +2867,10 @@ function CommentPreviewOverlays({
                 event.stopPropagation();
                 onOpenComment(comment, snapshot);
               }}
-              title={`${label}: ${comment.note}`}
+              title={`${index + 1}. ${label}: ${comment.note}`}
               aria-label={`Open comment for ${label}`}
             >
-              C
+              {index + 1}
             </button>
           </div>
         );
@@ -2884,7 +2890,7 @@ function CommentPreviewOverlays({
           data-testid="comment-active-pin"
           aria-hidden="true"
         >
-          C
+          {activePinNumber}
         </div>
       ) : null}
       {boardTool === 'pod' && strokePoints.length > 1 ? (
@@ -6181,7 +6187,25 @@ function HtmlViewer({
           return next;
         });
       }}
-      onClearSelection={() => setSelectedSideCommentIds(new Set())}
+      onClearSelection={() => {
+        if (selectedSideCommentIds.size === 0) return;
+        if (!onRemovePreviewComment) {
+          setSelectedSideCommentIds(new Set());
+          return;
+        }
+        const selectedIds = new Set(selectedSideCommentIds);
+        const targets = visibleSideComments
+          .filter((comment) => selectedIds.has(comment.id))
+          .map((comment) => comment.id);
+        if (targets.length === 0) {
+          setSelectedSideCommentIds(new Set());
+          return;
+        }
+        void (async () => {
+          await Promise.allSettled(targets.map((id) => onRemovePreviewComment(id)));
+          setSelectedSideCommentIds(new Set());
+        })();
+      }}
       onReply={(comment) => {
         // Reply == edit on a flat-thread model: prefill the
         // popover with the existing note so the user sees and

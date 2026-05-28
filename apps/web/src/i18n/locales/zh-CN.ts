@@ -424,6 +424,13 @@ export const zhCN: Dict = {
   'settings.mcpCopied': '已复制',
   'settings.mcpCopy': '复制',
   'settings.mcpCursorApproval': 'Cursor 会在写入配置前弹出确认对话框。',
+  'settings.mcpCodexOneClickInstall': '配置到 Codex',
+  'settings.mcpCodexOneClickUninstall': '取消配置',
+  'settings.mcpCodexOneClickUnavailable': '未在 PATH 中找到 codex CLI——请先安装 Codex 或手动复制片段。',
+  'settings.mcpCodexInstallSuccess': '已配置。请重启 Codex 以加载新 server。',
+  'settings.mcpCodexUninstallSuccess': '已从 Codex 取消配置。',
+  'settings.mcpCodexBusy': '处理中…',
+  'settings.mcpCodexInstallError': '操作失败：{error}',
   'settings.mcpRestartNote': '重启客户端以加载新 server。',
   'settings.mcpRestartDetail':
     '大多数编辑器仅在启动时加载 MCP server。在 Cursor / VS Code / Antigravity / Windsurf 中，你可以在命令面板中运行 `Developer: Reload Window`，无需完全重启。Zed 和 Claude Code 需要退出并重新打开。',

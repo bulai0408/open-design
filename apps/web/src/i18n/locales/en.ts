@@ -424,6 +424,13 @@ export const en: Dict = {
   'settings.mcpCopied': 'Copied',
   'settings.mcpCopy': 'Copy',
   'settings.mcpCursorApproval': 'Cursor pops an approval dialog before writing the config.',
+  'settings.mcpCodexOneClickInstall': 'Install in Codex',
+  'settings.mcpCodexOneClickUninstall': 'Remove from Codex',
+  'settings.mcpCodexOneClickUnavailable': 'Codex CLI not found on PATH — install Codex or paste the snippet manually.',
+  'settings.mcpCodexInstallSuccess': 'Installed. Restart Codex to load the new server.',
+  'settings.mcpCodexUninstallSuccess': 'Removed from Codex.',
+  'settings.mcpCodexBusy': 'Working…',
+  'settings.mcpCodexInstallError': 'Operation failed: {error}',
   'settings.mcpRestartNote': 'Restart your client to pick up the new server.',
   'settings.mcpRestartDetail':
     'Most editors only load MCP servers at startup. In Cursor / VS Code / Antigravity / Windsurf you can run `Developer: Reload Window` from the command palette instead of a full restart. Zed and Claude Code need a quit and reopen.',
