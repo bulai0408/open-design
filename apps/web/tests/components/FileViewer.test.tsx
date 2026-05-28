@@ -1033,6 +1033,160 @@ describe('FileViewer SVG artifacts', () => {
     );
   });
 
+  it('clears Draw when a srcdoc preview error falls back to URL-load', async () => {
+    const file = baseFile({
+      name: 'page.html',
+      path: 'page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('draw-overlay-toggle'));
+    const srcdocFrame = await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      return frame;
+    });
+    expect(screen.getByTestId('draw-overlay-toggle').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByPlaceholderText('Add a note for this annotation')).toBeTruthy();
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: srcdocFrame.contentWindow,
+      data: { type: 'od:preview-error', stage: 'srcdoc', message: 'boot failed' },
+    }));
+
+    await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('url-load');
+      expect(screen.getByTestId('draw-overlay-toggle').getAttribute('aria-pressed')).toBe('false');
+    });
+    expect(screen.queryByPlaceholderText('Add a note for this annotation')).toBeNull();
+  });
+
+  it('clears Draw when srcdoc wrapping falls back to URL-load', async () => {
+    const file = baseFile({
+      name: 'page.html',
+      path: 'page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    function Host() {
+      const [html, setHtml] = useState('<html><body><main data-od-id="hero">Hero</main></body></html>');
+      return (
+        <>
+          <button
+            type="button"
+            data-testid="bump-source"
+            onClick={() => setHtml('<html><body><main data-od-id="hero">Updated</main></body></html>')}
+          >
+            bump source
+          </button>
+          <FileViewer
+            projectId="project-1"
+            projectKind="prototype"
+            file={file}
+            liveHtml={html}
+          />
+        </>
+      );
+    }
+
+    render(<Host />);
+
+    fireEvent.click(screen.getByTestId('draw-overlay-toggle'));
+    await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      expect(screen.getByTestId('draw-overlay-toggle').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    buildSrcdocMock.mockImplementation(() => {
+      throw new Error('wrap failed');
+    });
+    fireEvent.click(screen.getByTestId('bump-source'));
+
+    await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('url-load');
+      expect(screen.getByTestId('draw-overlay-toggle').getAttribute('aria-pressed')).toBe('false');
+    });
+    expect(screen.queryByPlaceholderText('Add a note for this annotation')).toBeNull();
+  });
+
+  it('clears Edit when a srcdoc preview error falls back to URL-load', async () => {
+    const file = baseFile({
+      name: 'page.html',
+      path: 'page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
+    const srcdocFrame = await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      return frame;
+    });
+    expect(screen.getByTestId('manual-edit-mode-toggle').getAttribute('aria-pressed')).toBe('true');
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: srcdocFrame.contentWindow,
+      data: { type: 'od:preview-error', stage: 'srcdoc', message: 'boot failed' },
+    }));
+
+    await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('url-load');
+      expect(screen.getByTestId('manual-edit-mode-toggle').getAttribute('aria-pressed')).toBe('false');
+    });
+  });
+
   it('drops a queued Export Image snapshot when srcdoc wrapping fails', async () => {
     const file = baseFile({
       name: 'deck.html',

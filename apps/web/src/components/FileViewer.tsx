@@ -4463,16 +4463,24 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     ? previewSrcUrl
     : basePreviewSrcUrl;
 
+  const clearSrcDocOnlyPreviewModes = useCallback(() => {
+    setInspectMode(false);
+    setActiveInspectTarget(null);
+    setManualEditMode(false);
+    setDrawOverlayOpen(false);
+  }, [setManualEditMode]);
+
   const fallbackToUrlLoadPreview = useCallback((stage: string, detail?: unknown) => {
     pendingDeckBridgeActionRef.current = null;
     pendingPreviewSnapshotRef.current = null;
     setDeckBridgeRequested(false);
+    clearSrcDocOnlyPreviewModes();
     if (previewSource !== null) setSrcDocPreviewFailedSource(previewSource);
     console.warn(
       'open-design preview fallback: srcdoc iframe failed; loading raw URL instead',
       { stage, detail },
     );
-  }, [previewSource]);
+  }, [clearSrcDocOnlyPreviewModes, previewSource]);
 
   useEffect(() => {
     setDeckBridgeRequested(false);
@@ -4576,6 +4584,7 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
       pendingDeckBridgeActionRef.current = null;
       pendingPreviewSnapshotRef.current = null;
       setDeckBridgeRequested(false);
+      clearSrcDocOnlyPreviewModes();
       setSrcDocWrapFailure(previewSource);
       return SRC_DOC_PREVIEW_WRAP_FAILURE_PLACEHOLDER;
     }
@@ -4588,6 +4597,7 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     file.name,
     previewStateKey,
     manualEditMode,
+    clearSrcDocOnlyPreviewModes,
   ]);
   const lazySrcDocTransport = useMemo(() => buildLazySrcdocTransport(), []);
   const [srcDocTransportResetKey, setSrcDocTransportResetKey] = useState(0);
