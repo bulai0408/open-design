@@ -1161,6 +1161,60 @@ describe('FileViewer SVG artifacts', () => {
     });
   });
 
+  it('clears Comment mode when a srcdoc preview error falls back to URL-load', async () => {
+    const file = baseFile({
+      name: 'page.html',
+      path: 'page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+      />,
+    );
+
+    clickAgentTool('board-mode-toggle');
+    const srcdocFrame = await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      return frame;
+    });
+    expect(screen.getByTestId('board-mode-toggle').getAttribute('aria-pressed')).toBe('true');
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: srcdocFrame.contentWindow,
+      data: { type: 'od:preview-error', stage: 'srcdoc', message: 'boot failed' },
+    }));
+
+    await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('url-load');
+      expect(screen.getByTestId('board-mode-toggle').getAttribute('aria-pressed')).toBe('false');
+    });
+    expect(screen.queryByTestId('comment-popover-input')).toBeNull();
+
+    clickAgentTool('board-mode-toggle');
+    await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      expect(screen.getByTestId('board-mode-toggle').getAttribute('aria-pressed')).toBe('true');
+    });
+  });
+
   it('drops a queued Export Image snapshot when srcdoc wrapping fails', async () => {
     const file = baseFile({
       name: 'deck.html',

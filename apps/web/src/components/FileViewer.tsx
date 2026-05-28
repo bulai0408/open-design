@@ -4464,6 +4464,7 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     : basePreviewSrcUrl;
 
   const clearSrcDocOnlyPreviewModes = useCallback(() => {
+    setBoardMode(false);
     setInspectMode(false);
     setActiveInspectTarget(null);
     setManualEditMode(false);
