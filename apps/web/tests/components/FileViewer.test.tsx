@@ -892,6 +892,7 @@ describe('FileViewer SVG artifacts', () => {
     expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
     const srcdocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
     const postMessageSpy = vi.spyOn(srcdocFrame.contentWindow!, 'postMessage');
+    canActivateSrcDocTransportMock.mockReturnValue(true);
 
     fireEvent.click(screen.getByRole('button', { name: 'Next slide' }));
 
@@ -941,6 +942,7 @@ describe('FileViewer SVG artifacts', () => {
     );
 
     expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
+    canActivateSrcDocTransportMock.mockReturnValue(true);
 
     fireEvent.click(screen.getByRole('button', { name: /share/i }));
     fireEvent.click(await screen.findByTestId('share-menu-export-image'));
@@ -989,6 +991,7 @@ describe('FileViewer SVG artifacts', () => {
     );
     const srcdocShellFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
     const shellScript = extractLazySrcdocTransportScript(iframeSrcdoc(srcdocShellFrame));
+    canActivateSrcDocTransportMock.mockReturnValue(true);
 
     fireEvent.click(screen.getByRole('button', { name: 'Next slide' }));
 
