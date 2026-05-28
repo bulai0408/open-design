@@ -39,6 +39,10 @@ function mockResponse(): MockResponse {
   return res;
 }
 
+interface DiagnosticsManifestFile {
+  name: string;
+}
+
 describe('diagnostics export handler — non-sidecar launch', () => {
   // Reviewer-requested regression spec: `runDaemonCliStartup()` calls
   // `startDaemonRuntime()` without a runtime context, so plain `od` users
@@ -58,9 +62,18 @@ describe('diagnostics export handler — non-sidecar launch', () => {
     expect(res.capturedPayload).toBeInstanceOf(Buffer);
     const zip = await JSZip.loadAsync(res.capturedPayload!);
     const manifestRaw = await zip.file('summary/manifest.json')!.async('string');
-    const manifest = JSON.parse(manifestRaw) as { warnings: string[]; files: unknown[] };
+    const manifest = JSON.parse(manifestRaw) as {
+      warnings: string[];
+      files: DiagnosticsManifestFile[];
+    };
     expect(manifest.warnings).toContain(STANDALONE_LAUNCH_WARNING);
-    expect(manifest.files).toEqual([]);
+    // Standalone launches intentionally omit sidecar-managed daemon/web/desktop
+    // log files, but real developer machines may still contribute matching
+    // macOS crash reports from /Library/Logs/DiagnosticReports. Keep the test
+    // focused on the contract that no sidecar log files are bundled.
+    expect(
+      manifest.files.filter((file) => file.name.startsWith('logs/')),
+    ).toEqual([]);
   });
 });
 
