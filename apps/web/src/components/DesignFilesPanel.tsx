@@ -1211,7 +1211,7 @@ export function DesignFilesPanel({
               })}
             </nav>
           ) : null}
-          {files.length === 0 && liveArtifacts.length === 0 ? (
+          {files.length === 0 && liveArtifacts.length === 0 && dirsAtCurrentDir.length === 0 ? (
             <div className="df-empty" data-testid="design-files-empty">
               <div className="df-empty-pill">
                 <span className="df-empty-title">

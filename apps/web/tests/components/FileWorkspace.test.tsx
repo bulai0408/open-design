@@ -455,7 +455,7 @@ describe('DesignFilesPanel plugin folders', () => {
 });
 
 describe('FileWorkspace folder creation', () => {
-  it('keeps a newly created empty folder visible in Design Files after refresh', async () => {
+  it('keeps the first newly created empty folder visible in an empty project', async () => {
     mockedCreateProjectFolder.mockResolvedValueOnce({
       folder: {
         name: 'assets',
@@ -475,7 +475,7 @@ describe('FileWorkspace folder creation', () => {
       <FileWorkspace
         projectId="project-1"
         projectKind="prototype"
-        files={[workspaceFile('readme.md')]}
+        files={[]}
         liveArtifacts={[]}
         onRefreshFiles={onRefreshFiles}
         isDeck={false}
