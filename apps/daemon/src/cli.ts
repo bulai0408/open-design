@@ -11,6 +11,10 @@ import { parseDesignSystemRenameArgs } from './design-system-rename-args.js';
 import { runLiveArtifactsToolCli } from './tools-live-artifacts-cli.js';
 import { splitResearchSubcommand } from './research/cli-args.js';
 import { resolveDaemonUrl } from './daemon-url.js';
+import {
+  PLUGIN_UNINSTALL_NOT_FOUND_CODE,
+  PluginUninstallOutcomeSchema,
+} from '@open-design/contracts';
 import { requestJsonIpc } from '@open-design/sidecar';
 import { SIDECAR_ENV, SIDECAR_MESSAGES } from '@open-design/sidecar-proto';
 import {
@@ -3290,15 +3294,35 @@ async function runPluginUninstall(rest) {
   }
   const url = `${(await pluginDaemonUrl(flags)).replace(/\/$/, '')}/api/plugins/${encodeURIComponent(id)}/uninstall`;
   const resp = await fetch(url, { method: 'POST' });
-  if (!resp.ok) {
-    console.error(`POST /api/plugins/${id}/uninstall failed: ${resp.status} ${await resp.text()}`);
+  const text = await resp.text();
+  let body = null;
+  if (text.trim().length > 0) {
+    try { body = JSON.parse(text); } catch { body = null; }
+  }
+  const parsed = PluginUninstallOutcomeSchema.safeParse(body);
+  if (parsed.success) {
+    const data = parsed.data;
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    const isNotFoundNoop = !data.ok
+      && resp.status === 404
+      && data.code === PLUGIN_UNINSTALL_NOT_FOUND_CODE
+      && data.notFound === true;
+    if ((resp.ok && data.ok) || isNotFoundNoop) {
+      console.log(`[uninstall] ${data.ok ? 'ok' : 'no-op'}${warnings.length > 0 ? ` (warning: ${warnings.join('; ')})` : ''}`);
+      return;
+    }
+    const message = data.ok ? 'invalid uninstall response' : data.message;
+    console.error(`POST /api/plugins/${id}/uninstall failed: ${resp.status} ${message}`);
     process.exit(1);
   }
-  const data = await resp.json();
-  const warnings = Array.isArray(data?.warnings)
-    ? data.warnings
-    : (data?.warning ? [data.warning] : []);
-  console.log(`[uninstall] ${data?.ok ? 'ok' : 'no-op'}${warnings.length > 0 ? ` (warning: ${warnings.join('; ')})` : ''}`);
+
+  if (resp.ok) {
+    console.error(`POST /api/plugins/${id}/uninstall failed: ${resp.status} invalid response`);
+    process.exit(1);
+  }
+
+  console.error(`POST /api/plugins/${id}/uninstall failed: ${resp.status} ${text}`);
+  process.exit(1);
 }
 
 async function runPluginApply(rest) {
