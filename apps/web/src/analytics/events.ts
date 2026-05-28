@@ -36,6 +36,8 @@ import type {
   PluginsTemplatesDropdownClickProps,
   PluginsAvailableTabClickProps,
   PluginsSourcesTabClickProps,
+  PluginDetailClickProps,
+  PluginLoopClickProps,
   DesignSystemsTopClickProps,
   DesignSystemsTemplateCardClickProps,
   DesignSystemsTemplatesModalClickProps,
@@ -50,6 +52,7 @@ import type {
   FileManagerClickProps,
   ArtifactToolbarClickProps,
   TweaksPopoverClickProps,
+  CommentPopoverClickProps,
   ArtifactHeaderClickProps,
   PresentPopoverClickProps,
   ShareOptionPopoverClickProps,
@@ -325,6 +328,20 @@ export function trackPluginsSourcesTabClick(
   send(track, 'ui_click', props);
 }
 
+export function trackPluginDetailClick(
+  track: Track,
+  props: PluginDetailClickProps,
+): void {
+  send(track, 'ui_click', props);
+}
+
+export function trackPluginLoopClick(
+  track: Track,
+  props: PluginLoopClickProps,
+): void {
+  send(track, 'ui_click', props);
+}
+
 export function trackDesignSystemsTopClick(
   track: Track,
   props: DesignSystemsTopClickProps,
@@ -423,6 +440,13 @@ export function trackArtifactToolbarClick(
 export function trackTweaksPopoverClick(
   track: Track,
   props: TweaksPopoverClickProps,
+): void {
+  send(track, 'ui_click', props);
+}
+
+export function trackCommentPopoverClick(
+  track: Track,
+  props: CommentPopoverClickProps,
 ): void {
   send(track, 'ui_click', props);
 }

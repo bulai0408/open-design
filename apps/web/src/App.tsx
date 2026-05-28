@@ -16,7 +16,7 @@ import { EntryView } from './components/EntryView';
 import type { IntegrationTab } from './components/IntegrationsView';
 import { MarketplaceView } from './components/MarketplaceView';
 import { PluginDetailView } from './components/PluginDetailView';
-import type { CreateInput } from './components/NewProjectPanel';
+import type { CreateInput, ImportClaudeDesignOutcome } from './components/NewProjectPanel';
 import { MemoryToast } from './components/MemoryToast';
 import { PetOverlay, type PetTaskCenter } from './components/pet/PetOverlay';
 import { buildPetTaskCenter } from './components/pet/taskCenter';
@@ -607,6 +607,11 @@ export function App() {
     setDesignSystems(list);
   }, []);
 
+  const refreshSkills = useCallback(async () => {
+    const list = await fetchSkills();
+    setSkills(list);
+  }, []);
+
   const refreshTemplates = useCallback(async () => {
     const list = await listTemplates();
     setTemplates(list);
@@ -982,18 +987,27 @@ export function App() {
     [],
   );
 
-  const handleImportClaudeDesign = useCallback(async (file: File) => {
-    const result = await importClaudeDesignZip(file);
-    if (!result) return;
-    setProjects((curr) => [
-      result.project,
-      ...curr.filter((p) => p.id !== result.project.id),
-    ]);
-    navigate({
-      kind: 'project',
-      projectId: result.project.id,
-      fileName: result.entryFile,
-    });
+  const handleImportClaudeDesign = useCallback(async (
+    file: File,
+  ): Promise<ImportClaudeDesignOutcome> => {
+    try {
+      const result = await importClaudeDesignZip(file);
+      setProjects((curr) => [
+        result.project,
+        ...curr.filter((p) => p.id !== result.project.id),
+      ]);
+      navigate({
+        kind: 'project',
+        projectId: result.project.id,
+        fileName: result.entryFile,
+      });
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        message: err instanceof Error ? err.message : 'The ZIP could not be imported.',
+      };
+    }
   }, []);
 
   const handleImportFolder = useCallback(async (baseDir: string) => {
@@ -1504,6 +1518,7 @@ export function App() {
             setSettingsOpen(false);
           }}
           onRefreshAgents={refreshAgents}
+          onSkillsRefresh={refreshSkills}
           daemonMediaProviders={daemonMediaProviders}
           daemonMediaProvidersFetchState={daemonMediaProvidersFetchState}
           mediaProvidersNotice={mediaProvidersNotice}
