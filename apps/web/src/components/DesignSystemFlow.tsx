@@ -161,8 +161,10 @@ function chatErrorFromError(err: Error): ChatErrorNoticeValue {
 }
 
 function errorStatusMetadata(err: Error | undefined) {
-  if (!err || !isDaemonAgentExitError(err)) return {};
+  const code = (err as (Error & { code?: string }) | undefined)?.code;
+  if (!err || !isDaemonAgentExitError(err)) return code ? { code } : {};
   return {
+    ...(code ? { code } : {}),
     diagnostic: err.details,
     category: err.category,
     retryDelayMs: err.retryDelayMs,

@@ -2359,6 +2359,108 @@ describe('DesignSystemDetailView', () => {
     });
   });
 
+  it('preserves structured daemon error codes in design-system workspace chat', async () => {
+    const system: DesignSystemDetail = {
+      id: 'user:amr-design-system',
+      title: 'AMR Design System',
+      category: 'Custom',
+      summary: 'AMR product workspace.',
+      swatches: [],
+      surface: 'web',
+      body: '# AMR Design System\n',
+      source: 'user',
+      status: 'draft',
+      isEditable: true,
+      projectId: 'ds-amr-design-system',
+    };
+    const project: Project = {
+      id: 'ds-amr-design-system',
+      name: 'AMR Design System',
+      skillId: null,
+      designSystemId: system.id,
+      createdAt: 1,
+      updatedAt: 1,
+      metadata: {
+        kind: 'other',
+        importedFrom: 'design-system',
+        entryFile: 'DESIGN.md',
+        sourceFileName: system.id,
+      },
+    };
+    const conversation = {
+      id: 'conv-design-system-code',
+      projectId: project.id,
+      title: 'Design system',
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const error = Object.assign(
+      new Error('AMR sign-in is required. Sign in to AMR Cloud again, then retry this run.'),
+      {
+        code: 'AMR_AUTH_REQUIRED',
+        details: {
+          kind: 'amr_account',
+          action: 'relogin',
+        },
+      },
+    );
+
+    mocks.fetchDesignSystem.mockResolvedValue(system);
+    mocks.ensureDesignSystemWorkspace
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValue(null);
+    mocks.getProject.mockResolvedValue(project);
+    mocks.fetchProjectFiles.mockResolvedValue([
+      { name: 'DESIGN.md', size: 42, mtime: 1, kind: 'text', mime: 'text/markdown' },
+    ]);
+    mocks.createConversation.mockResolvedValue(conversation);
+    mocks.streamViaDaemon.mockImplementation(async (options: {
+      handlers: { onError: (err: Error) => void };
+    }) => {
+      options.handlers.onError(error);
+    });
+
+    render(
+      <DesignSystemDetailView
+        id={system.id}
+        selectedId={system.id}
+        config={{
+          mode: 'daemon',
+          apiKey: '',
+          baseUrl: '',
+          model: '',
+          agentId: 'agent-1',
+          agentModels: {},
+          skillId: null,
+          designSystemId: null,
+        }}
+        agents={[{ id: 'agent-1', name: 'OpenCode', bin: 'opencode', available: true, models: [] }]}
+        onBack={() => {}}
+        onSetDefault={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(mocks.ensureDesignSystemWorkspace).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId('design-system-chat-send'));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.getByText('AMR sign-in is required. Sign in to AMR Cloud again, then retry this run.')).toBeTruthy();
+
+    await waitFor(() => {
+      const savedAssistant = mocks.saveMessage.mock.calls
+        .map((call) => call[2] as { role?: string; runStatus?: string; events?: unknown[] })
+        .find((message) => message.role === 'assistant' && message.runStatus === 'failed');
+      expect(savedAssistant?.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'status',
+          label: 'error',
+          detail: error.message,
+          code: 'AMR_AUTH_REQUIRED',
+        }),
+      ]));
+    });
+  });
+
   it('starts a new design-system conversation by opening the workspace first', async () => {
     const system: DesignSystemDetail = {
       id: 'installed:acme-design-system',

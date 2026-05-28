@@ -46,6 +46,7 @@ vi.mock('../../src/providers/anthropic', () => ({
 
 vi.mock('../../src/providers/daemon', () => ({
   fetchChatRunStatus: (...args: unknown[]) => fetchChatRunStatus(...args),
+  isDaemonAgentExitError: vi.fn().mockReturnValue(false),
   listActiveChatRuns: (...args: unknown[]) => listActiveChatRuns(...args),
   reattachDaemonRun: (...args: unknown[]) => reattachDaemonRun(...args),
   streamViaDaemon: (...args: unknown[]) => streamViaDaemon(...args),
