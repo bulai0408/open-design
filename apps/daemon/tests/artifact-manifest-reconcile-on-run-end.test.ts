@@ -141,11 +141,15 @@ describe('run-end artifact manifest reconciliation (#2893)', () => {
     const pastTime = new Date('2020-01-01T00:00:00Z');
     fs.utimesSync(oldPath, pastTime, pastTime);
 
-    // Run starts here — record the timestamp before the run writes files
-    const runStartTimeMs = Date.now();
+    // Run starts here. Use a fixed timestamp so filesystem mtime precision
+    // cannot make a just-written file appear to predate the run on CI.
+    const runStartTimeMs = Date.parse('2024-01-01T00:00:00Z');
 
     // File written during the run
     await writeProjectFile(projectsRoot, PROJECT_ID, 'new-output.html', '<p>new</p>');
+    const newPath = path.join(projectsRoot, PROJECT_ID, 'new-output.html');
+    const newTime = new Date(runStartTimeMs + 1000);
+    fs.utimesSync(newPath, newTime, newTime);
 
     // Simulate the close-handler reconciliation with mtime filter
     const dir = path.join(projectsRoot, PROJECT_ID);
