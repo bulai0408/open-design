@@ -276,7 +276,7 @@ test('codex model picker includes current OpenAI choices in priority order', asy
 
   const dir = mkdtempSync(join(tmpdir(), 'od-agents-codex-models-'));
   try {
-    await withEnvSnapshot(['PATH', 'OD_AGENT_HOME'], async () => {
+    await withEnvSnapshot(['PATH', 'OD_AGENT_HOME', 'CODEX_BIN'], async () => {
       const codexBin = join(dir, 'codex');
       writeFileSync(
         codexBin,
@@ -285,6 +285,7 @@ test('codex model picker includes current OpenAI choices in priority order', asy
       chmodSync(codexBin, 0o755);
       process.env.OD_AGENT_HOME = dir;
       process.env.PATH = dir;
+      delete process.env.CODEX_BIN;
 
       const agents = await detectAgents();
       const detected = agents.find((agent) => agent.id === 'codex');
@@ -331,7 +332,7 @@ test('codex parses live model catalog from debug models JSON', () => {
 test('codex detection surfaces live debug models separately from fallback models', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'od-agents-codex-live-models-'));
   try {
-    await withEnvSnapshot(['PATH', 'OD_AGENT_HOME'], async () => {
+    await withEnvSnapshot(['PATH', 'OD_AGENT_HOME', 'CODEX_BIN'], async () => {
       const codexBin = join(dir, 'codex');
       writeFileSync(
         codexBin,
@@ -347,6 +348,7 @@ exit 2
       chmodSync(codexBin, 0o755);
       process.env.OD_AGENT_HOME = dir;
       process.env.PATH = dir;
+      delete process.env.CODEX_BIN;
 
       const agents = await detectAgents();
       const detected = agents.find((agent) => agent.id === 'codex');
