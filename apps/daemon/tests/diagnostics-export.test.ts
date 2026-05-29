@@ -39,6 +39,10 @@ function mockResponse(): MockResponse {
   return res;
 }
 
+interface DiagnosticsManifestFile {
+  name: string;
+}
+
 describe('diagnostics export handler — non-sidecar launch', () => {
   // Reviewer-requested regression spec: `runDaemonCliStartup()` calls
   // `startDaemonRuntime()` without a runtime context, so plain `od` users
@@ -58,9 +62,18 @@ describe('diagnostics export handler — non-sidecar launch', () => {
     expect(res.capturedPayload).toBeInstanceOf(Buffer);
     const zip = await JSZip.loadAsync(res.capturedPayload!);
     const manifestRaw = await zip.file('summary/manifest.json')!.async('string');
-    const manifest = JSON.parse(manifestRaw) as { warnings: string[]; files: unknown[] };
+    const manifest = JSON.parse(manifestRaw) as {
+      warnings: string[];
+      files: DiagnosticsManifestFile[];
+    };
     expect(manifest.warnings).toContain(STANDALONE_LAUNCH_WARNING);
-    expect(manifest.files).toEqual([]);
+    // Standalone launches intentionally omit sidecar-managed daemon/web/desktop
+    // log files, but real developer machines may still contribute matching
+    // macOS crash reports from /Library/Logs/DiagnosticReports. Keep the test
+    // focused on the contract that no sidecar log files are bundled.
+    expect(
+      manifest.files.filter((file) => file.name.startsWith('logs/')),
+    ).toEqual([]);
   });
 });
 
@@ -114,4 +127,46 @@ describe('diagnostics export handler — packaged (runtime) layout', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('reports missing packaged log files under logical log paths without duplicating runtime segments', async () => {
+    const root = join(tmpdir(), `od-diag-missing-${randomUUID()}`);
+    const namespaceRoot = join(root, 'namespaces', 'release-beta');
+    const daemonLogPath = join(namespaceRoot, 'logs', APP_KEYS.DAEMON, 'latest.log');
+    try {
+      await mkdir(dirname(daemonLogPath), { recursive: true });
+      await writeFile(daemonLogPath, 'daemon ok\n', 'utf8');
+
+      const runtime: SidecarRuntimeContext<SidecarStamp> = {
+        app: APP_KEYS.DAEMON,
+        base: join(namespaceRoot, 'runtime'),
+        ipc: '/tmp/od-diag-missing.sock',
+        mode: SIDECAR_MODES.RUNTIME,
+        namespace: 'release-beta',
+        source: SIDECAR_SOURCES.PACKAGED,
+      };
+
+      const handler = createDiagnosticsExportHandler({ runtime, projectRoot: '/tmp/test-project' });
+      const res = mockResponse();
+      await handler({} as never, res as never, () => undefined);
+
+      expect(res.capturedStatus).toBe(200);
+      const zip = await JSZip.loadAsync(res.capturedPayload!);
+      const manifest = JSON.parse(await zip.file('summary/manifest.json')!.async('string')) as {
+        files: Array<{ name: string; bytes?: number; error?: string }>;
+      };
+      const fileNames = manifest.files.map((file) => file.name);
+      expect(fileNames).toContain('logs/daemon/latest.log');
+      expect(fileNames).toContain('logs/web/latest.log');
+      expect(fileNames).toContain('logs/desktop/latest.log');
+      expect(fileNames.some((name) => name.includes('runtime/release-beta/logs'))).toBe(false);
+
+      const webLog = manifest.files.find((file) => file.name === 'logs/web/latest.log');
+      const desktopLog = manifest.files.find((file) => file.name === 'logs/desktop/latest.log');
+      expect(webLog?.error).toBeTruthy();
+      expect(desktopLog?.error).toBeTruthy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
 });

@@ -20,6 +20,7 @@ import {
 import {
   composeSystemPrompt,
   renderCodexImagegenOverride,
+  resolveCodexImagegenModelId,
   resolveExclusiveSurface,
   shouldRenderCodexImagegenOverride,
 } from './prompts/system.js';
@@ -40,6 +41,23 @@ import {
   sanitizeCustomModel,
   spawnEnvForAgent,
 } from './agents.js';
+import {
+  getRememberedLiveModels,
+  preferFreshLiveModels,
+  rememberLiveModels,
+  resolveModelForAgent,
+} from './runtimes/models.js';
+import {
+  cancelVelaLogin,
+  forgetVelaLogin,
+  mergeVelaEnv,
+  readVelaLoginStatus,
+  spawnVelaLogin,
+} from './integrations/vela.js';
+import {
+  amrAccountFailureDetails,
+  classifyAmrAccountFailure,
+} from './integrations/vela-errors.js';
 import { migrateLegacyDataDirSync } from './legacy-data-migrator.js';
 import {
   consumedImportNonces,
@@ -71,6 +89,7 @@ import { installFromTarget, uninstallById, sanitizeRepoName } from './library-in
 import { buildWindowsFolderDialogCommand, parseFolderDialogStdout } from './native-folder-dialog.js';
 import { listCodexPets, readCodexPetSpritesheet } from './codex-pets.js';
 import { syncCommunityPets } from './community-pets-sync.js';
+import { parseMediaExecutionPolicyInput } from './media-policy.js';
 import {
   createUserDesignSystem,
   deleteUserDesignSystem,
@@ -159,6 +178,7 @@ import {
 } from './memory-connectors.js';
 import { attachAcpSession } from './acp.js';
 import { attachPiRpcSession } from './pi-rpc.js';
+import { stageAmrImagePaths } from './amr-image-staging.js';
 import {
   applyAutomationProposal,
   createAutomationProposal,
@@ -192,7 +212,11 @@ import {
 import { narrowProjectCritiqueOverride } from './critique/spawn-inputs.js';
 import { createCopilotStreamHandler } from './copilot-stream.js';
 import { createJsonEventStreamHandler } from './json-event-stream.js';
-import { classifyAgentAuthFailure, cursorAuthGuidance } from './runtimes/auth.js';
+import {
+  classifyAgentAuthFailure,
+  classifyAgentServiceFailure,
+  cursorAuthGuidance,
+} from './runtimes/auth.js';
 import { createQoderStreamHandler } from './qoder-stream.js';
 import { subscribe as subscribeFileEvents } from './project-watchers.js';
 import { renderDesignSystemPreview } from './design-system-preview.js';
@@ -218,6 +242,8 @@ import { observePendingInstallerApplyAttempts } from './update-apply-observation
 import {
   agentIdToTracking,
   deriveConfigureGlobals,
+  modelIdForTracking,
+  projectKindToTracking,
   type ObservabilityEventRequest,
 } from '@open-design/contracts/analytics';
 import {
@@ -320,6 +346,7 @@ import {
   resolveProjectDir,
   resolveProjectFilePath,
   writeProjectFile,
+  reconcileHtmlArtifactManifest,
 } from './projects.js';
 import { validateArtifactManifestInput } from './artifact-manifest.js';
 import { ArtifactPublicationBlockedError } from './artifact-publication-guard.js';
@@ -519,7 +546,9 @@ export function resolveCodexGeneratedImagesDir(
   metadata,
   env = process.env,
   homeDir = os.homedir(),
+  mediaExecution: any = undefined,
 ) {
+  if (!shouldAllowCodexImagegenForMediaPolicy(metadata, mediaExecution)) return null;
   if (!shouldRenderCodexImagegenOverride(agentId, metadata)) return null;
   const rawCodexHome =
     typeof env?.CODEX_HOME === 'string' && env.CODEX_HOME.trim().length > 0
@@ -734,12 +763,17 @@ export function resolveGrantedCodexImagegenOverride({
   metadata,
   codexGeneratedImagesDir,
   extraAllowedDirs = [],
+  mediaExecution,
 }: {
   agentId?: string | null;
   metadata?: unknown;
   codexGeneratedImagesDir?: string | null;
   extraAllowedDirs?: string[];
+  mediaExecution?: unknown;
 }): string | null {
+  if (!shouldAllowCodexImagegenForMediaPolicy(metadata, mediaExecution)) {
+    return null;
+  }
   if (
     typeof codexGeneratedImagesDir !== 'string' ||
     codexGeneratedImagesDir.length === 0 ||
@@ -749,6 +783,28 @@ export function resolveGrantedCodexImagegenOverride({
     return null;
   }
   return renderCodexImagegenOverride(agentId, metadata);
+}
+
+function shouldAllowCodexImagegenForMediaPolicy(metadata, mediaExecution) {
+  const mode = mediaExecution?.mode ?? 'enabled';
+  if (mode !== 'enabled') return false;
+  if (
+    Array.isArray(mediaExecution?.allowedSurfaces) &&
+    mediaExecution.allowedSurfaces.length > 0 &&
+    !mediaExecution.allowedSurfaces.includes('image')
+  ) {
+    return false;
+  }
+  const model = resolveCodexImagegenModelId(metadata);
+  if (
+    model &&
+    Array.isArray(mediaExecution?.allowedModels) &&
+    mediaExecution.allowedModels.length > 0 &&
+    !mediaExecution.allowedModels.includes(model)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function normalizeCommentAttachments(input) {
@@ -1517,6 +1573,10 @@ export function createAgentRuntimeEnv(
     OD_DAEMON_URL: daemonUrl,
     OD_NODE_BIN: nodeBin,
   };
+  const sidecarIpcPath = baseEnv[SIDECAR_ENV.IPC_PATH];
+  if (typeof sidecarIpcPath === 'string' && sidecarIpcPath.length > 0) {
+    env[SIDECAR_ENV.IPC_PATH] = sidecarIpcPath;
+  }
 
   // Ensure the node binary directory is on PATH so agent sub-processes —
   // in particular npm .cmd shims on Windows that run `"node" script.js` —
@@ -1843,6 +1903,66 @@ async function readProjectPluginManifest(folder) {
 
 export const __forTestReadProjectPluginManifest = readProjectPluginManifest;
 
+function resolveRunProjectKindForAnalytics({
+  hintProjectKind,
+  projectMetadata,
+}) {
+  if (typeof hintProjectKind === 'string') return hintProjectKind;
+  if (projectMetadata?.importedFrom === 'design-system') return 'design_system';
+  return projectKindToTracking(projectMetadata?.kind);
+}
+
+export function __forTestResolveRunProjectKindForAnalytics(args) {
+  return resolveRunProjectKindForAnalytics(args);
+}
+
+// Scans run.events newest→oldest to extract usage token counts and the
+// agent-reported model name. The scan must not short-circuit on usage
+// before reaching the model signal: usage is a terminal event while
+// status:initializing/model is emitted at the very start of the run, so
+// in reverse iteration usage is seen first. The loop continues until both
+// usage tokens are found AND (the caller already has a model from reqBody
+// OR the agent-reported model has been found).
+function scanRunEventsForFinishedProps(events, reqBodyModel) {
+  let inputTokens;
+  let outputTokens;
+  let agentReportedModel = null;
+  const needAgentModel = !(typeof reqBodyModel === 'string' && reqBodyModel.trim());
+  let haveUsageTokens = false;
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const ev = events[i];
+    const data = ev?.data;
+    if (ev?.event === 'agent' && data?.type === 'usage' && data.usage && !haveUsageTokens) {
+      const u = data.usage;
+      if (typeof u.input_tokens === 'number') inputTokens = u.input_tokens;
+      if (typeof u.output_tokens === 'number') outputTokens = u.output_tokens;
+      if (inputTokens !== undefined || outputTokens !== undefined) haveUsageTokens = true;
+    }
+    if (
+      !agentReportedModel &&
+      ev?.event === 'agent' &&
+      data?.type === 'status' &&
+      (data.label === 'model' || data.label === 'initializing')
+    ) {
+      const candidate =
+        typeof data.model === 'string'
+          ? data.model
+          : typeof data.detail === 'string'
+            ? data.detail
+            : null;
+      if (candidate && candidate.trim()) {
+        agentReportedModel = candidate.trim();
+      }
+    }
+    if (haveUsageTokens && (!needAgentModel || agentReportedModel)) break;
+  }
+  return { inputTokens, outputTokens, agentReportedModel };
+}
+
+export function __forTestScanRunEventsForFinishedProps(events, reqBodyModel) {
+  return scanRunEventsForFinishedProps(events, reqBodyModel);
+}
+
 function githubRepoNameFromPluginName(name) {
   const slug = String(name)
     .toLowerCase()
@@ -1972,6 +2092,14 @@ function shouldSkipPluginContextEntry(name) {
   return PLUGIN_CONTEXT_SKIP_DIRS.has(name) || PLUGIN_CONTEXT_SKIP_FILES.has(name);
 }
 
+export function selectPromptImagePaths(
+  agentId,
+  safeImages,
+  amrStagedImages,
+) {
+  return agentId === 'amr' ? amrStagedImages : safeImages;
+}
+
 async function ensureGhReady() {
   const version = await execGhBuffered(['--version'], { timeout: 10_000 });
   if (!version.ok) {
@@ -2012,6 +2140,33 @@ function reconcileAssistantMessageOnRunEnd(db, runs, run) {
     .catch((err) => {
       console.warn('[runs] message reconciliation failed', err);
     });
+}
+
+
+function isPluginAuthoringRun(db, run) {
+  if (run?.pluginId === 'od-plugin-authoring') return true;
+  if (
+    typeof run?.appliedPluginSnapshotId === 'string'
+    && run.appliedPluginSnapshotId.length > 0
+  ) {
+    const snapshot = getSnapshot(db, run.appliedPluginSnapshotId);
+    return snapshot?.pluginId === 'od-plugin-authoring';
+  }
+  return false;
+}
+
+async function hasGeneratedPluginArtifacts(projectRoot) {
+  if (!projectRoot || typeof projectRoot !== 'string') return false;
+  const required = [
+    path.join(projectRoot, 'generated-plugin', 'open-design.json'),
+    path.join(projectRoot, 'generated-plugin', 'SKILL.md'),
+  ];
+  try {
+    await Promise.all(required.map((file) => fs.promises.access(file, fs.constants.F_OK)));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function detectSkillPluginCandidateOnRunSuccess(db, runs, run, input, projectRoot) {
@@ -2837,6 +2992,11 @@ function authorizeToolRequest(req, res, operation) {
   return validation.grant;
 }
 
+function optionalToolGrantFromRequest(req) {
+  const validation = toolTokenRegistry.validate(bearerTokenFromRequest(req));
+  return validation.ok ? validation.grant : null;
+}
+
 function requestProjectOverride(projectId, tokenProjectId) {
   return typeof projectId === 'string' && projectId.length > 0 && projectId !== tokenProjectId;
 }
@@ -2888,6 +3048,25 @@ function openNativeFolderDialog() {
  */
 function createSseErrorPayload(code, message, init = {}) {
   return { message, error: createCompatApiError(code, message, init) };
+}
+
+function createAmrModelUnavailablePayload(model, init = {}) {
+  const modelText = typeof model === 'string' && model.trim()
+    ? `"${model.trim()}"`
+    : 'the selected model';
+  return createSseErrorPayload(
+    'AMR_MODEL_UNAVAILABLE',
+    `AMR model ${modelText} is not available from Vela. Refresh the AMR model list, choose a supported model, and retry this run.`,
+    {
+      retryable: false,
+      details: {
+        kind: 'amr_model',
+        action: 'choose_model',
+        ...(typeof model === 'string' && model.trim() ? { model: model.trim() } : {}),
+        ...init,
+      },
+    },
+  );
 }
 
 const UPLOAD_DIR = path.join(os.tmpdir(), 'od-uploads');
@@ -4828,7 +5007,11 @@ export async function startServer({
 
   const analyticsService = createAnalyticsService({ dataDir: RUNTIME_DATA_DIR });
   const design = {
-    runs: createChatRunService({ createSseResponse, createSseErrorPayload }),
+    runs: createChatRunService({
+      createSseResponse,
+      createSseErrorPayload,
+      runsLogDir: path.join(RUNTIME_DATA_DIR, 'runs'),
+    }),
     analytics: analyticsService,
     getAppVersion: () => cachedAppVersion?.version ?? '0.0.0',
     readAnalyticsContext,
@@ -5209,6 +5392,7 @@ export async function startServer({
     desktopAuthSecret: getDesktopAuthSecret,
     isDesktopAuthGateActive,
     pruneExpiredImportNonces,
+    optionalToolGrantFromRequest,
     requestProjectOverride,
     requestRunOverride,
     verifyDesktopImportToken,
@@ -5382,9 +5566,11 @@ export async function startServer({
 
   registerMediaRoutes(app, {
     db,
+    design,
     http: httpDeps,
     paths: pathDeps,
     ids: idDeps,
+    auth: authDeps,
     media: mediaDeps,
     appConfig: appConfigDeps,
     orbit: orbitDeps,
@@ -5697,11 +5883,61 @@ export async function startServer({
     res.json({ ok: true });
   });
 
-  app.get('/api/agents', async (_req, res) => {
+  // AMR (vela) login integration — see `apps/daemon/src/integrations/vela.ts`.
+  // The vela CLI owns the device-authorization UX (URL + code + browser open);
+  // these routes only surface enough state for Open Design's Settings card to
+  // show login status and trigger a login from a button.
+  app.get('/api/integrations/vela/status', async (_req, res) => {
     try {
-      const config = await readAppConfig(RUNTIME_DATA_DIR);
-      const list = await detectAgents(config.agentCliEnv ?? {});
-      res.json({ agents: list });
+      const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
+      const configuredEnv = agentCliEnvForAgent(appConfig.agentCliEnv, 'amr');
+      res.json(readVelaLoginStatus(mergeVelaEnv(process.env, configuredEnv)));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.post('/api/integrations/vela/login', async (_req, res) => {
+    try {
+      const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
+      const configuredEnv = agentCliEnvForAgent(appConfig.agentCliEnv, 'amr');
+      const spawned = await spawnVelaLogin({ configuredEnv });
+      res.status(202).json(spawned);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // "already running" is a 409 (resolvable by waiting/polling); everything
+      // else (missing vela binary, spawn failure) is a 500.
+      const status = /already running/i.test(message) ? 409 : 500;
+      res.status(status).json({ error: message });
+    }
+  });
+
+  app.post('/api/integrations/vela/login/cancel', (_req, res) => {
+    try {
+      res.json(cancelVelaLogin());
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.post('/api/integrations/vela/logout', async (_req, res) => {
+    try {
+      const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
+      const configuredEnv = agentCliEnvForAgent(appConfig.agentCliEnv, 'amr');
+      forgetVelaLogin(mergeVelaEnv(process.env, configuredEnv));
+      delete process.env.VELA_RUNTIME_KEY;
+      delete process.env.VELA_LINK_URL;
+      const agentCliEnv = { ...(appConfig.agentCliEnv ?? {}) };
+      const amrEnv = { ...(agentCliEnv.amr ?? {}) };
+      delete amrEnv.VELA_RUNTIME_KEY;
+      delete amrEnv.VELA_LINK_URL;
+      if (Object.keys(amrEnv).length > 0) {
+        agentCliEnv.amr = amrEnv;
+      } else {
+        delete agentCliEnv.amr;
+      }
+      await writeAppConfig(RUNTIME_DATA_DIR, { agentCliEnv });
+      res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -9654,6 +9890,7 @@ export async function startServer({
     locale,
     connectedExternalMcp,
     appliedPluginSnapshotId,
+    mediaExecution,
   }) => {
     const project =
       typeof projectId === 'string' && projectId
@@ -10101,6 +10338,7 @@ export async function startServer({
       critiqueBrand: critiqueShouldRun ? critiqueBrand : undefined,
       critiqueSkill: critiqueShouldRun ? critiqueSkill : undefined,
       locale: typeof locale === 'string' ? locale : undefined,
+      mediaExecution,
       streamFormat,
       connectedExternalMcp: Array.isArray(connectedExternalMcp)
         ? connectedExternalMcp
@@ -10302,6 +10540,10 @@ export async function startServer({
         resolved.startsWith(UPLOAD_DIR + path.sep) && fs.existsSync(resolved)
       );
     });
+    const amrStagedImages =
+      def.id === 'amr'
+        ? await stageAmrImagePaths(cwd ?? PROJECT_ROOT, safeImages, UPLOAD_DIR)
+        : safeImages;
 
     // Project-scoped attachments: project-relative paths inside cwd. Each
     // is run through the same path-traversal guard the file CRUD endpoints
@@ -10456,6 +10698,7 @@ export async function startServer({
         streamFormat: def?.streamFormat ?? 'plain',
         locale,
         connectedExternalMcp,
+        mediaExecution: run?.mediaExecution,
         // Plan §3.M2 / §3.V1 — forward the run's snapshot id so the
         // prompt composer can splice in `## Active stage` blocks.
         // Default ON; set OD_BUNDLED_ATOM_PROMPTS=0 to opt out.
@@ -10515,6 +10758,9 @@ export async function startServer({
     let codexGeneratedImagesDir = resolveCodexGeneratedImagesDir(
       agentId,
       projectRecord?.metadata,
+      process.env,
+      os.homedir(),
+      run?.mediaExecution,
     );
     if (codexGeneratedImagesDir) {
       codexGeneratedImagesDir = validateCodexGeneratedImagesDir(
@@ -10536,6 +10782,7 @@ export async function startServer({
       metadata: projectRecord?.metadata,
       codexGeneratedImagesDir,
       extraAllowedDirs,
+      mediaExecution: run?.mediaExecution,
     });
     const researchCommandContract = resolveResearchCommandContract(
       research,
@@ -10564,6 +10811,11 @@ export async function startServer({
     // instructions and request) — see server.ts:9920 composer notes.
     const ECHO_GUARD =
       '\n\n(Do not quote, restate, or echo the # Instructions block above in your reply. Begin your response with the answer to the # User request below.)';
+    const promptImagePaths = selectPromptImagePaths(
+      def.id,
+      safeImages,
+      amrStagedImages,
+    );
     const composed = [
       instructionPrompt
         ? `# Instructions (read first)\n\n${instructionPrompt}${cwdHint}${linkedDirsHint}${ECHO_GUARD}\n\n---\n`
@@ -10573,8 +10825,8 @@ export async function startServer({
             ? `# Instructions${linkedDirsHint}${ECHO_GUARD}\n\n---\n`
             : '',
       `# User request\n\n${userRequestPrompt}${attachmentHint}${commentHint}`,
-      safeImages.length
-        ? `\n\n${safeImages.map((p) => `@${p}`).join(' ')}`
+      promptImagePaths.length
+        ? `\n\n${promptImagePaths.map((p) => `@${p}`).join(' ')}`
         : '',
     ].join('');
     // Per-agent model + reasoning the user picked in the model menu.
@@ -10582,17 +10834,23 @@ export async function startServer({
     // (live or fallback). Otherwise allow it through if it passes a
     // permissive sanitizer — that's the path for user-typed custom model
     // ids the CLI's listing didn't surface yet.
-    const safeModel =
+    let safeModel = resolveModelForAgent(
+      def,
       typeof model === 'string'
         ? isKnownModel(def, model)
           ? model
           : sanitizeCustomModel(model)
-        : null;
+        : null,
+    );
     const safeReasoning =
       typeof reasoning === 'string' && Array.isArray(def.reasoningOptions)
         ? (def.reasoningOptions.find((r) => r.id === reasoning)?.id ?? null)
         : null;
     const agentOptions = { model: safeModel, reasoning: safeReasoning };
+    const send = (event, data) => {
+      persistRunEventToAssistantMessage(db, run, event, data);
+      design.runs.emit(run, event, data);
+    };
     const mcpServers = buildLiveArtifactsMcpServersForAgent(def, {
       enabled: Boolean(toolTokenGrant?.token),
       command: process.execPath,
@@ -10743,6 +11001,107 @@ export async function startServer({
     const agentLaunch = resolveAgentLaunch(def, configuredAgentEnv);
     const resolvedBin = agentLaunch.selectedPath;
 
+    // Hoisted above the AMR catalog preflight: the empty-catalog branch
+    // below calls `sendAmrAccountFailure(...)` to surface AMR_AUTH_REQUIRED
+    // for signed-out users, and a `const` declared later in the same outer
+    // function scope would hit a TDZ ReferenceError before initialization.
+    const sendAmrAccountFailure = (failure) => {
+      send('error', createSseErrorPayload(
+        failure.code,
+        failure.message,
+        {
+          retryable: true,
+          details: amrAccountFailureDetails(failure),
+        },
+      ));
+    };
+
+    if (def.id === 'amr' && resolvedBin && agentLaunch.launchPath) {
+      const launchPath = agentLaunch.launchPath ?? resolvedBin;
+      const modelProbeEnv = launchPath
+        ? applyAgentLaunchEnv(
+            spawnEnvForAgent(
+              def.id,
+              {
+                ...createAgentRuntimeEnv(process.env, daemonUrl, toolTokenGrant),
+                ...(def.env || {}),
+              },
+              configuredAgentEnv,
+            ),
+            agentLaunch,
+          )
+        : null;
+      let liveModels = [];
+      try {
+        liveModels =
+          launchPath && typeof def.fetchModels === 'function'
+            ? ((await def.fetchModels(launchPath, modelProbeEnv)) ?? [])
+            : [];
+      } catch {
+        liveModels = [];
+      }
+      const rememberedLiveModels = getRememberedLiveModels(def.id);
+      if (liveModels.length > 0) {
+        rememberLiveModels(def.id, liveModels);
+      }
+      liveModels = preferFreshLiveModels(liveModels, rememberedLiveModels);
+      const liveModelIds = new Set(
+        liveModels.map((candidate) => candidate?.id).filter(Boolean),
+      );
+      if (liveModelIds.size === 0) {
+        // An empty AMR catalog usually means the user is signed out — `vela
+        // models` returns 401 and the catch above leaves `liveModels` empty.
+        // Surface AMR_AUTH_REQUIRED first so the chat shows the relogin
+        // affordance; otherwise the user sees a misleading "choose a model"
+        // when the real fix is to sign in.
+        if (def.id === 'amr') {
+          const loginStatus = readVelaLoginStatus(
+            modelProbeEnv ?? process.env,
+            configuredAgentEnv,
+          );
+          if (!loginStatus.loggedIn) {
+            sendAmrAccountFailure({
+              code: 'AMR_AUTH_REQUIRED',
+              message:
+                'AMR sign-in is required. Sign in to AMR Cloud again, then retry this run.',
+              action: 'relogin',
+            });
+            return design.runs.finish(run, 'failed', 1, null);
+          }
+        }
+        send('error', createAmrModelUnavailablePayload(safeModel, {
+          reason: 'model_catalog_unavailable',
+        }));
+        return design.runs.finish(run, 'failed', 1, null);
+      }
+      // `safeModel` was pre-resolved via the agent-wide cached model order,
+      // so a request that came in as 'default' (or empty) is already a
+      // concrete id by this point — `safeModel === 'default'` is rarely true.
+      // If the user actually asked for the agent default and the cached id no
+      // longer appears in the FRESH catalog (e.g. the AMR Link catalog rolled
+      // since `/api/agents` last responded), fall back to `liveModels[0]` from
+      // the fresh probe instead of rejecting their run as `AMR_MODEL_UNAVAILABLE`.
+      const userAskedForDefault =
+        typeof model !== 'string' ||
+        !model.trim() ||
+        model.trim().toLowerCase() === 'default';
+      if (
+        !safeModel ||
+        safeModel === 'default' ||
+        (userAskedForDefault && !liveModelIds.has(safeModel))
+      ) {
+        safeModel = liveModels[0]?.id ?? null;
+        agentOptions.model = safeModel;
+      }
+      if (!safeModel || !liveModelIds.has(safeModel)) {
+        send('error', createAmrModelUnavailablePayload(
+          typeof model === 'string' && model.trim() ? model : safeModel,
+          { availableModels: [...liveModelIds] },
+        ));
+        return design.runs.finish(run, 'failed', 1, null);
+      }
+    }
+
     const args = def.buildArgs(
       composed,
       safeImages,
@@ -10806,10 +11165,12 @@ export async function startServer({
       return design.runs.finish(run, 'failed', 1, null);
     }
 
-    const send = (event, data) => {
-      persistRunEventToAssistantMessage(db, run, event, data);
-      design.runs.emit(run, event, data);
-    };
+    // `runStartTimeMs` is consumed by the run-end artifact-manifest
+    // reconciler (#2893 / #3110) to skip artifacts whose mtime predates
+    // this run. The original main-side hunk also re-declared `const send`
+    // here; on this branch `send` was hoisted into the AMR preflight
+    // earlier, so we keep only the new `runStartTimeMs` declaration.
+    const runStartTimeMs = Date.now();
     const inactivityTimeoutMs = resolveChatRunInactivityTimeoutMs();
     const artifactQuietPeriodMs = resolveChatRunArtifactQuietPeriodMs();
     const inactivityKillGraceMs = 3_000;
@@ -10961,6 +11322,27 @@ export async function startServer({
       ));
       return design.runs.finish(run, 'failed', 1, null);
     }
+    const agentSpawnEnv = spawnEnvForAgent(
+      def.id,
+      {
+        ...createAgentRuntimeEnv(process.env, daemonUrl, toolTokenGrant),
+        ...(def.env || {}),
+      },
+      configuredAgentEnv,
+    );
+    if (def.id === 'amr') {
+      const loginStatus = readVelaLoginStatus(agentSpawnEnv, configuredAgentEnv);
+      if (!loginStatus.loggedIn) {
+        revokeToolToken('child_exit');
+        unregisterChatAgentEventSink();
+        sendAmrAccountFailure({
+          code: 'AMR_AUTH_REQUIRED',
+          message: 'AMR sign-in is required. Sign in to AMR Cloud again, then retry this run.',
+          action: 'relogin',
+        });
+        return design.runs.finish(run, 'failed', 1, null);
+      }
+    }
     const odMediaEnv = {
       OD_BIN,
       OD_NODE_BIN,
@@ -11007,14 +11389,7 @@ export async function startServer({
           ? 'pipe'
           : 'ignore';
       const env = applyAgentLaunchEnv({
-        ...spawnEnvForAgent(
-          def.id,
-          {
-            ...createAgentRuntimeEnv(process.env, daemonUrl, toolTokenGrant),
-            ...(def.env || {}),
-          },
-          configuredAgentEnv,
-        ),
+        ...agentSpawnEnv,
         ...odMediaEnv,
         // OpenCode external-MCP injection (issue #2142). Layered AFTER
         // spawnEnvForAgent / odMediaEnv / configuredAgentEnv so the
@@ -11321,21 +11696,31 @@ export async function startServer({
         if (agentStreamError) return;
         agentStreamError = String(ev.message || 'Agent stream error');
         clearInactivityWatchdog();
-        const authFailure = classifyAgentAuthFailure(
-          agentId,
-          [
-            agentStreamError,
-            typeof ev.raw === 'string' ? ev.raw : '',
-            agentStdoutTail,
-            agentStderrTail,
-          ].join('\n'),
-        );
+        const failureText = [
+          agentStreamError,
+          typeof ev.raw === 'string' ? ev.raw : '',
+          agentStdoutTail,
+          agentStderrTail,
+        ].join('\n');
+        const authFailure = classifyAgentAuthFailure(agentId, failureText);
         if (authFailure?.status === 'missing') {
           send('error', createSseErrorPayload(
             'AGENT_AUTH_REQUIRED',
             authFailure.message ?? cursorAuthGuidance(),
             { retryable: true },
           ));
+          return;
+        }
+        // Recover the specific model-service failure class (auth / quota /
+        // upstream) for agents without a tailored probe (Claude Code, codex,
+        // …), so the chat shows an accurate reason instead of the generic
+        // execution-failed bucket.
+        const serviceCode = classifyAgentServiceFailure(failureText);
+        if (serviceCode) {
+          send('error', createSseErrorPayload(serviceCode, agentStreamError, {
+            details: ev.raw ? { raw: ev.raw } : undefined,
+            retryable: true,
+          }));
           return;
         }
         send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', agentStreamError, {
@@ -11459,7 +11844,7 @@ export async function startServer({
             send(channel, payload);
           }
         },
-        imagePaths: def.supportsImagePaths ? safeImages : [],
+        imagePaths: def.supportsImagePaths ? amrStagedImages : [],
         uploadRoot: UPLOAD_DIR,
       });
     } else if (def.streamFormat === 'acp-json-rpc') {
@@ -11469,9 +11854,26 @@ export async function startServer({
         prompt: composed,
         cwd: effectiveCwd,
         model: safeModel,
+        imagePaths: def.supportsImagePaths ? amrStagedImages : [],
         mcpServers,
+        ...(def.id === 'amr' ? { modelUnavailableErrorCode: 'AMR_MODEL_UNAVAILABLE' } : {}),
         send: (event, data) => {
           noteAgentActivity();
+          if (def.id === 'amr' && event === 'error') {
+            const failure = classifyAmrAccountFailure(
+              [
+                typeof data?.message === 'string' ? data.message : '',
+                typeof data?.error?.message === 'string' ? data.error.message : '',
+                typeof data?.error?.code === 'string' ? data.error.code : '',
+                agentStdoutTail,
+                agentStderrTail,
+              ].join('\n'),
+            );
+            if (failure) {
+              sendAmrAccountFailure(failure);
+              return;
+            }
+          }
           send(event, data);
         },
         ...(acpStageTimeoutMs !== undefined ? { stageTimeoutMs: acpStageTimeoutMs } : {}),
@@ -11511,7 +11913,7 @@ export async function startServer({
       send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', err.message));
       design.runs.finish(run, 'failed', 1, null);
     });
-    child.on('close', (code, signal) => {
+    child.on('close', async (code, signal) => {
       clearInactivityWatchdog();
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();
@@ -11525,6 +11927,15 @@ export async function startServer({
         code !== 0 &&
         !run.cancelRequested
       ) {
+        if (def.id === 'amr') {
+          const amrFailure = classifyAmrAccountFailure(
+            `${agentStderrTail}\n${agentStdoutTail}`,
+          );
+          if (amrFailure) {
+            sendAmrAccountFailure(amrFailure);
+            return design.runs.finish(run, 'failed', code ?? 1, signal ?? null);
+          }
+        }
         const authFailure = classifyAgentAuthFailure(
           agentId,
           `${agentStderrTail}\n${agentStdoutTail}`,
@@ -11556,6 +11967,19 @@ export async function startServer({
         send('error', createSseErrorPayload(
           'AGENT_EXECUTION_FAILED',
           'Agent completed without producing any output. The model or provider may have returned an empty response — check the agent logs for upstream errors.',
+          { retryable: true },
+        ));
+        return design.runs.finish(run, 'failed', code, signal);
+      }
+      if (
+        code === 0 &&
+        !run.cancelRequested &&
+        isPluginAuthoringRun(db, run) &&
+        !(await hasGeneratedPluginArtifacts(cwd))
+      ) {
+        send('error', createSseErrorPayload(
+          'AGENT_EXECUTION_FAILED',
+          'Plugin authoring ended before generating the required generated-plugin artifacts.',
           { retryable: true },
         ));
         return design.runs.finish(run, 'failed', code, signal);
@@ -11592,13 +12016,60 @@ export async function startServer({
           stdoutTail: agentStdoutTail,
           env: spawnedAgentEnv,
         });
+        // A non-zero exit whose output reads as an auth / quota / upstream
+        // problem (typical of Claude Code, codex, …) gets the specific code
+        // rather than the generic execution-failed bucket; the human-readable
+        // message still prefers the richer CLI diagnostic when we have one.
+        const serviceCode = classifyAgentServiceFailure(
+          `${agentStderrTail}\n${agentStdoutTail}`,
+        );
         if (diagnostic) {
           send('error', createSseErrorPayload(
-            'AGENT_EXECUTION_FAILED',
+            serviceCode ?? 'AGENT_EXECUTION_FAILED',
             diagnostic.message,
             { retryable: diagnostic.retryable, details: { detail: diagnostic.detail } },
           ));
+        } else if (serviceCode) {
+          const detail = (agentStderrTail || agentStdoutTail || '').trim();
+          send('error', createSseErrorPayload(
+            serviceCode,
+            detail || 'The model service returned an error.',
+            { retryable: true },
+          ));
         }
+      }
+      // Reconcile any HTML artifacts that were written during this run
+      // without a manifest sidecar (e.g. agent used write_file instead of
+      // create_artifact, or the run terminated between HTML write and
+      // sidecar write). Only files modified after the run started are
+      // touched — pre-existing HTML in imported-folder projects must not
+      // receive spurious manifests. Best-effort; must not block finalisation.
+      // See issue #2893.
+      if (run.projectId) {
+        (async () => {
+          try {
+            const project = getProject(db, run.projectId);
+            const files = await listFiles(PROJECTS_DIR, run.projectId, {
+              metadata: project?.metadata,
+            });
+            const dir = resolveProjectDir(PROJECTS_DIR, run.projectId, project?.metadata);
+            for (const f of files) {
+              const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
+              if (ext !== '.html' && ext !== '.htm') continue;
+              try {
+                const filePath = path.join(dir, f.name);
+                const st = await fs.promises.stat(filePath);
+                if (st.mtimeMs < runStartTimeMs) continue;
+                await reconcileHtmlArtifactManifest(
+                  PROJECTS_DIR,
+                  run.projectId,
+                  f.name,
+                  project?.metadata,
+                );
+              } catch { /* per-file best-effort */ }
+            }
+          } catch { /* project-level best-effort */ }
+        })();
       }
       design.runs.finish(run, status, code, signal);
     });
@@ -11844,6 +12315,10 @@ export async function startServer({
     if (daemonShuttingDown) {
       return sendApiError(res, 503, 'UPSTREAM_UNAVAILABLE', 'daemon is shutting down');
     }
+    const mediaExecution = parseMediaExecutionPolicyInput(req.body?.mediaExecution);
+    if (!mediaExecution.ok) {
+      return sendApiError(res, 400, 'BAD_REQUEST', mediaExecution.message);
+    }
     // Plan §3.A1 / spec §11.5: resolve any pluginId / appliedPluginSnapshotId
     // before the run is created. The resolver returns null when the body
     // does not mention a plugin (legacy runs unchanged), an error envelope
@@ -11903,7 +12378,7 @@ export async function startServer({
         resolvedSnapshot = resolved;
       }
     }
-    const meta = { ...(req.body || {}) };
+    const meta = { ...(req.body || {}), mediaExecution: mediaExecution.policy };
     if (resolvedSnapshot?.ok) {
       meta.appliedPluginSnapshotId = resolvedSnapshot.snapshotId;
       if (!meta.pluginId) meta.pluginId = resolvedSnapshot.snapshot.pluginId;
@@ -11913,6 +12388,75 @@ export async function startServer({
           resolvedSnapshot.snapshot.inputs,
         ).trim();
         if (renderedQuery.length > 0) meta.message = renderedQuery;
+      }
+    }
+    // MCP / SDK callers POST /api/runs with just a projectId — no
+    // conversationId, no pre-created assistantMessageId — because they
+    // don't know about OD's chat-row lifecycle. The web flow
+    // (POST /api/chat) on the other hand creates both client-side and
+    // passes them in. Without binding the run to a conversation and
+    // pre-pinning an assistant message row, the OD studio page for
+    // the project shows an empty chat panel — the user has no way to
+    // see what the outer agent asked or what the inner agent replied,
+    // even though the run finished and produced files.
+    //
+    // Fall back here: pick the project's default conversation (the
+    // one create_project seeded), write a user message with the
+    // prompt as content, and synthesize an assistantMessageId so the
+    // pin helper below will insert the empty assistant row. From that
+    // point on, the existing appendMessageAgentEvent path accumulates
+    // every text_delta into the assistant row's content — same as web
+    // chat.
+    if (
+      typeof meta.projectId === 'string' &&
+      meta.projectId &&
+      (typeof meta.conversationId !== 'string' || !meta.conversationId)
+    ) {
+      try {
+        const convs = listConversations(db, meta.projectId);
+        const defaultConv = Array.isArray(convs) && convs.length > 0 ? convs[0] : null;
+        if (defaultConv && typeof defaultConv.id === 'string' && defaultConv.id) {
+          meta.conversationId = defaultConv.id;
+          if (typeof meta.assistantMessageId !== 'string' || !meta.assistantMessageId) {
+            meta.assistantMessageId = randomUUID();
+          }
+          const promptForUserMessage =
+            typeof meta.message === 'string' && meta.message.trim().length > 0
+              ? meta.message
+              : null;
+          if (promptForUserMessage) {
+            upsertMessage(db, defaultConv.id, {
+              id: randomUUID(),
+              role: 'user',
+              content: promptForUserMessage,
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('[runs] mcp conversation fallback failed', err);
+      }
+    }
+    // MCP / SDK callers may omit agentId. Resolve it from the saved
+    // app-config agent (the user's configured default) or the first
+    // available CLI so the run does not immediately fail with
+    // "unknown agent: undefined" inside startChatRun.
+    if (typeof meta.agentId !== 'string' || !meta.agentId) {
+      try {
+        const appCfg = await readAppConfig(RUNTIME_DATA_DIR);
+        const cfgAgent = typeof appCfg.agentId === 'string' && appCfg.agentId
+          ? appCfg.agentId
+          : null;
+        if (cfgAgent) {
+          meta.agentId = cfgAgent;
+        } else {
+          const agents = await detectAgents(appCfg.agentCliEnv ?? {}).catch(() => []);
+          const firstAvailable = agents.find((a) => a.available)?.id ?? null;
+          if (firstAvailable) meta.agentId = firstAvailable;
+        }
+      } catch (err) {
+        console.warn('[runs] agent id fallback failed', err);
       }
     }
     const run = design.runs.create(meta);
@@ -11945,6 +12489,12 @@ export async function startServer({
     /** @type {import('@open-design/contracts').ChatRunCreateResponse} */
     const body = {
       runId: run.id,
+      // Surface the bound conversation/message so MCP / SDK callers
+      // who did not provide them get back the daemon-resolved values
+      // (used for building studio deep links and threading chat
+      // history). Always nullable so the contract stays additive.
+      conversationId: run.conversationId ?? null,
+      assistantMessageId: run.assistantMessageId ?? null,
       ...(resolvedSnapshot?.ok
         ? {
             appliedPluginSnapshotId: resolvedSnapshot.snapshotId,
@@ -12054,13 +12604,19 @@ export async function startServer({
       const hintProjectKind = typeof analyticsHints.projectKind === 'string'
         ? analyticsHints.projectKind
         : null;
+      const requestProjectId = typeof reqBody.projectId === 'string' ? reqBody.projectId : null;
+      const runProject = requestProjectId ? getProject(db, requestProjectId) : null;
+      const runProjectKind = resolveRunProjectKindForAnalytics({
+        hintProjectKind,
+        projectMetadata: runProject?.metadata,
+      });
       const dsRunContext =
         analyticsHints.designSystemRunContext
           && typeof analyticsHints.designSystemRunContext === 'object'
           ? (analyticsHints.designSystemRunContext as Record<string, unknown>)
           : {};
       const isDesignSystemRun =
-        hintProjectKind === 'design_system'
+        runProjectKind === 'design_system'
         || hintEntryFrom === 'design_system_create'
         || hintEntryFrom === 'onboarding_design_system'
         || hintEntryFrom === 'regenerate_from_review';
@@ -12070,18 +12626,19 @@ export async function startServer({
       // companion_surfaces / connectors / use_speaker_notes /
       // include_animations / reference_template / aspect /
       // project_source) — most aren't on the wire yet, but
-      // entry_from / projectKind / DS run context land here when the
-      // client populates `analyticsHints`. Other dimensions stay
-      // omitted until follow-up PRs thread them through.
+      // project_kind falls back to the stored project metadata so ordinary
+      // project runs are classified even when callers do not send
+      // `analyticsHints`. Other dimensions stay omitted until follow-up PRs
+      // thread them through.
       const baseProps: Record<string, unknown> = {
         page_name: isDesignSystemRun ? 'design_system_project' : 'chat_panel',
         area: isDesignSystemRun ? 'design_system_generation' : 'chat_composer',
         ...configureGlobals,
-        project_id: typeof reqBody.projectId === 'string' ? reqBody.projectId : null,
+        project_id: requestProjectId,
         conversation_id:
           typeof reqBody.conversationId === 'string' ? reqBody.conversationId : null,
         run_id: run.id,
-        project_kind: hintProjectKind,
+        project_kind: runProjectKind,
         ...(hintEntryFrom ? { entry_from: hintEntryFrom } : {}),
         design_system_id:
           typeof reqBody.designSystemId === 'string'
@@ -12132,11 +12689,17 @@ export async function startServer({
           ? (reqBody.attachments as unknown[]).length > 0
           : false,
         user_query_tokens: userQueryTokens,
-        model_id: typeof reqBody.model === 'string' ? reqBody.model : null,
-        agent_provider_id:
-          typeof reqBody.agentId === 'string'
-            ? agentIdToTracking(reqBody.agentId)
-            : null,
+        // `modelIdForTracking` buckets null/empty into `'default'` so the
+        // PostHog `model_id` column always has an analysable value. The
+        // user-picked model only lands here on `run_created` (the agent
+        // hasn't initialised yet); `run_finished` below upgrades this to
+        // the agent-reported model when available.
+        model_id: modelIdForTracking(
+          typeof reqBody.model === 'string' ? reqBody.model : null,
+        ),
+        agent_provider_id: agentIdToTracking(
+          typeof reqBody.agentId === 'string' ? reqBody.agentId : null,
+        ),
         skill_id: typeof reqBody.skillId === 'string' ? reqBody.skillId : null,
         mcp_id: null,
         token_count_source: userQueryTokens > 0 ? 'estimated' : 'unknown',
@@ -12162,26 +12725,22 @@ export async function startServer({
         // child close without error event, etc.).
         const result = runResultFromStatus(status.status);
         const errorCode = deriveRunErrorCode(status);
-        let inputTokens: number | undefined;
-        let outputTokens: number | undefined;
-        for (let i = run.events.length - 1; i >= 0; i -= 1) {
-          const ev = run.events[i];
-          const data = ev?.data as
-            | { type?: string; usage?: Record<string, unknown> | null }
-            | null
-            | undefined;
-          if (ev?.event === 'agent' && data?.type === 'usage' && data.usage) {
-            const u = data.usage;
-            if (typeof u.input_tokens === 'number') inputTokens = u.input_tokens;
-            if (typeof u.output_tokens === 'number') outputTokens = u.output_tokens;
-            if (inputTokens !== undefined || outputTokens !== undefined) break;
-          }
-        }
+        // ACP reports { type:'status', label:'model', model:<id> } after
+        // session/new; stream adapters report { type:'status',
+        // label:'initializing', model:<id> } at run start. The scan must
+        // not short-circuit on usage before reaching the model signal —
+        // see `scanRunEventsForFinishedProps` for the invariant.
+        const { inputTokens, outputTokens, agentReportedModel } =
+          scanRunEventsForFinishedProps(run.events, reqBody.model);
         const haveUsage = inputTokens !== undefined || outputTokens !== undefined;
         const totalTokens =
           inputTokens !== undefined && outputTokens !== undefined
             ? inputTokens + outputTokens
             : undefined;
+        const finishedModelId =
+          typeof reqBody.model === 'string' && reqBody.model.trim()
+            ? modelIdForTracking(reqBody.model)
+            : modelIdForTracking(agentReportedModel);
         design.analytics.capture({
           eventName: 'run_finished',
           context: analyticsContext,
@@ -12193,6 +12752,10 @@ export async function startServer({
             // `design_system_generation` to match the run_created shape.
             area: isDesignSystemRun ? 'design_system_generation' : 'chat_panel',
             result,
+            // `model_id` upgrades the request-side value with the
+            // agent-reported model on terminal state; see
+            // `finishedModelId` derivation above.
+            model_id: finishedModelId,
             // Incremental count of `.html` paths the run produced or
             // modified, deduped per file. Replaces the hard-coded `0`
             // that masked the "did this run actually generate an
@@ -12310,9 +12873,14 @@ export async function startServer({
     if (daemonShuttingDown) {
       return sendApiError(res, 503, 'UPSTREAM_UNAVAILABLE', 'daemon is shutting down');
     }
-    const run = design.runs.create();
+    const mediaExecution = parseMediaExecutionPolicyInput(req.body?.mediaExecution);
+    if (!mediaExecution.ok) {
+      return sendApiError(res, 400, 'BAD_REQUEST', mediaExecution.message);
+    }
+    const meta = { ...(req.body || {}), mediaExecution: mediaExecution.policy };
+    const run = design.runs.create(meta);
     design.runs.stream(run, req, res);
-    design.runs.start(run, () => startChatRun(req.body || {}, run));
+    design.runs.start(run, () => startChatRun(meta, run));
   });
 
   // Each routine fire resolves an agent, prepares project/conversation state,
@@ -12642,7 +13210,8 @@ export async function startServer({
     };
     let server;
     try {
-      server = app.listen(port, host, () => {
+      server = app.listen(port, host);
+      server.once('listening', () => {
         // Widen the between-request idle window so kept-alive sockets
         // belonging to chat/SSE clients survive the gaps between bursts.
         //
@@ -12665,10 +13234,8 @@ export async function startServer({
         //
         // `headersTimeout` must exceed `keepAliveTimeout` per the Node
         // docs; otherwise a slow-loris client can stall request parsing.
-        if (server) {
-          server.keepAliveTimeout = 120_000;
-          server.headersTimeout = 125_000;
-        }
+        server.keepAliveTimeout = 120_000;
+        server.headersTimeout = 125_000;
         const address = server.address();
         // `address()` can in theory return `string | AddressInfo | null`. For
         // a TCP listener it's always `AddressInfo` with a `.port` — the guard
