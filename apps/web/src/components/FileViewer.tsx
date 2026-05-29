@@ -102,6 +102,11 @@ import {
 } from '../comments';
 import { applyPodMemberRemoval } from '../lib/pod-members';
 import { AnnotationHoverPopover, BoardComposerPopover } from './BoardComposerPopover';
+import {
+  OD_PREVIEW_KEEP_ALIVE,
+  PooledIframe,
+  previewIframeKeepAliveKey,
+} from './IframeKeepAlivePool';
 import type {
   ChatCommentAttachment,
   PreviewComment,
@@ -4534,9 +4539,11 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     previewNavigationRestoreRef.current = null;
     previewNavigationCaptureRequestRef.current = null;
   }, [basePreviewSrcUrl]);
+  const useUrlLoadPreviewCurrentRef = useRef(useUrlLoadPreview);
+  useUrlLoadPreviewCurrentRef.current = useUrlLoadPreview;
   const alignActivePreviewIframeRef = useCallback(() => {
-    iframeRef.current = useUrlLoadPreview ? urlPreviewIframeRef.current : srcDocPreviewIframeRef.current;
-  }, [useUrlLoadPreview]);
+    iframeRef.current = useUrlLoadPreviewCurrentRef.current ? urlPreviewIframeRef.current : srcDocPreviewIframeRef.current;
+  }, []);
   const setUrlPreviewIframeRef = useCallback((frame: HTMLIFrameElement | null) => {
     urlPreviewIframeRef.current = frame;
     alignActivePreviewIframeRef();
@@ -4547,7 +4554,7 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
   }, [alignActivePreviewIframeRef]);
   useEffect(() => {
     alignActivePreviewIframeRef();
-  }, [alignActivePreviewIframeRef]);
+  }, [alignActivePreviewIframeRef, useUrlLoadPreview]);
   useEffect(() => {
     const navigation = previewNavigationRef.current;
     if (!navigation) return;
@@ -4609,6 +4616,7 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
   const srcDocShellReady = srcDocShellReadyKey === srcDocShellInstanceKey;
   const wasUrlLoadPreviewRef = useRef(useUrlLoadPreview);
   const [hasLazySrcDocTransport, setHasLazySrcDocTransport] = useState(useUrlLoadPreview);
+  const urlPreviewKeepAliveKey = previewIframeKeepAliveKey(projectId, file.name);
   useEffect(() => {
     if (useUrlLoadPreview) setHasLazySrcDocTransport(true);
   }, [useUrlLoadPreview]);
@@ -7128,36 +7136,70 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
                   sendDisabledReason={t('chat.annotationSendDisabledReason')}
                 >
                   <div className="artifact-preview-transport-stack">
-                    <iframe
-                      ref={setUrlPreviewIframeRef}
-                      data-testid={useUrlLoadPreview ? 'artifact-preview-frame' : 'artifact-preview-frame-url-load'}
-                      data-od-render-mode="url-load"
-                      data-od-active={useUrlLoadPreview ? 'true' : 'false'}
-                      aria-hidden={useUrlLoadPreview ? undefined : true}
-                      tabIndex={useUrlLoadPreview ? 0 : -1}
-                      title={file.name}
-                      sandbox="allow-scripts allow-downloads"
-                      src={urlTransportSrc}
-                      onLoad={() => {
-                        const frame = urlPreviewIframeRef.current;
-                        if (useUrlLoadPreview) iframeRef.current = frame;
-                        dcViewportRestoreAtRef.current = Date.now();
-                        frame?.contentWindow?.postMessage({
-                          type: '__dc_set_viewport',
-                          ...dcViewportRef.current,
-                        }, '*');
-                        syncBridgeModes(frame);
-                        if (useUrlLoadPreview) {
-                          restorePreviewScrollPosition();
-                          const navigation = previewNavigationRef.current;
-                          if (navigation) {
-                            previewNavigationRestoreRef.current = navigation;
-                            const post = restorePreviewNavigationState(navigation);
-                            post?.('url');
+                    {OD_PREVIEW_KEEP_ALIVE ? (
+                      <PooledIframe
+                        ref={setUrlPreviewIframeRef}
+                        cacheKey={urlPreviewKeepAliveKey}
+                        data-testid={useUrlLoadPreview ? 'artifact-preview-frame' : 'artifact-preview-frame-url-load'}
+                        data-od-render-mode="url-load"
+                        data-od-active={useUrlLoadPreview ? 'true' : 'false'}
+                        aria-hidden={useUrlLoadPreview ? undefined : true}
+                        tabIndex={useUrlLoadPreview ? 0 : -1}
+                        title={file.name}
+                        sandbox="allow-scripts allow-downloads"
+                        src={urlTransportSrc}
+                        onLoad={() => {
+                          const frame = urlPreviewIframeRef.current;
+                          if (useUrlLoadPreview) iframeRef.current = frame;
+                          dcViewportRestoreAtRef.current = Date.now();
+                          frame?.contentWindow?.postMessage({
+                            type: '__dc_set_viewport',
+                            ...dcViewportRef.current,
+                          }, '*');
+                          syncBridgeModes(frame);
+                          if (useUrlLoadPreview) {
+                            restorePreviewScrollPosition();
+                            const navigation = previewNavigationRef.current;
+                            if (navigation) {
+                              previewNavigationRestoreRef.current = navigation;
+                              const post = restorePreviewNavigationState(navigation);
+                              post?.('url');
+                            }
                           }
-                        }
-                      }}
-                    />
+                        }}
+                      />
+                    ) : (
+                      <iframe
+                        ref={setUrlPreviewIframeRef}
+                        data-testid={useUrlLoadPreview ? 'artifact-preview-frame' : 'artifact-preview-frame-url-load'}
+                        data-od-render-mode="url-load"
+                        data-od-active={useUrlLoadPreview ? 'true' : 'false'}
+                        aria-hidden={useUrlLoadPreview ? undefined : true}
+                        tabIndex={useUrlLoadPreview ? 0 : -1}
+                        title={file.name}
+                        sandbox="allow-scripts allow-downloads"
+                        src={urlTransportSrc}
+                        onLoad={() => {
+                          const frame = urlPreviewIframeRef.current;
+                          if (useUrlLoadPreview) iframeRef.current = frame;
+                          dcViewportRestoreAtRef.current = Date.now();
+                          frame?.contentWindow?.postMessage({
+                            type: '__dc_set_viewport',
+                            ...dcViewportRef.current,
+                          }, '*');
+                          syncBridgeModes(frame);
+                          if (useUrlLoadPreview) {
+                            restorePreviewScrollPosition();
+                            const navigation = previewNavigationRef.current;
+                            if (navigation) {
+                              previewNavigationRestoreRef.current = navigation;
+                              const post = restorePreviewNavigationState(navigation);
+                              post?.('url');
+                            }
+                          }
+                        }}
+                      />
+                    )}
                     <iframe
                       key={srcDocTransportResetKey}
                       ref={setSrcDocPreviewIframeRef}
