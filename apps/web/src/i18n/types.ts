@@ -118,6 +118,11 @@ export interface Dict {
   'settings.onboardingAmrCloudBenefitReady': string;
   'settings.onboardingAmrCloudBenefitModels': string;
   'settings.onboardingAmrCloudBenefitPricing': string;
+  'settings.onboardingAmrCloudUpcomingLabel': string;
+  'settings.onboardingAmrCloudUpcomingImageVideo': string;
+  'settings.onboardingAmrCloudUpcomingSkills': string;
+  'settings.onboardingAmrCloudUpcomingRouting': string;
+  'settings.onboardingAmrModelSourceLabel': string;
   'settings.onboardingAmrCloudAuthorizeAction': string;
   'settings.onboardingAmrCloudAuthorizedAction': string;
   'settings.onboardingStepConnect': string;
@@ -1695,6 +1700,8 @@ export interface Dict {
   'chat.amrError.balanceMessage': string;
   'chat.amrError.authorizeCta': string;
   'chat.amrError.rechargeCta': string;
+  'chat.antigravityError.launchTerminalCta': string;
+  'chat.antigravityError.launchSwitchModelCta': string;
   'chat.tabComments': string;
   'chat.commentsSoon': string;
   'chat.comments.attached': string;
@@ -1714,6 +1721,7 @@ export interface Dict {
   'chat.comments.sending': string;
   'chat.comments.edit': string;
   'chat.comments.select': string;
+  'chat.comments.selectAll': string;
   'chat.comments.deselect': string;
   'chat.comments.nSelected': string;
   'chat.comments.pin': string;
@@ -2019,6 +2027,10 @@ export interface Dict {
   'fileViewer.comment': string;
   'fileViewer.edit': string;
   'fileViewer.draw': string;
+  'fileViewer.mark': string;
+  'fileViewer.markTool': string;
+  'fileViewer.boxSelect': string;
+  'fileViewer.screenshot': string;
   'manualEdit.layers': string;
   'manualEdit.editableCount': string;
   'manualEdit.hiddenBadge': string;

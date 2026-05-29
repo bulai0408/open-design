@@ -32,6 +32,7 @@ import {
   commentPreviewCanvasSize,
   effectivePreviewScale,
   parseInspectOverridesFromSource,
+  previewOverlayTransform,
   serializeInspectOverrides,
   updateInspectOverride,
 } from '../../src/components/FileViewer';
@@ -200,6 +201,25 @@ describe('FileViewer preview scale', () => {
     );
 
     expect(effectivePreviewScale('tablet', 1, dockedCanvas, { canvasPadding: 0 })).toBeCloseTo(652 / 1180);
+  });
+
+  it('offsets tablet and mobile overlays to the centered viewport card', () => {
+    expect(previewOverlayTransform('desktop', 1.25, { width: 1200, height: 800 })).toEqual({
+      scale: 1.25,
+      offsetX: 0,
+      offsetY: 0,
+    });
+
+    expect(previewOverlayTransform('mobile', 1, { width: 1200, height: 1000 })).toEqual({
+      scale: 1,
+      offsetX: 405,
+      offsetY: 24,
+    });
+
+    const tablet = previewOverlayTransform('tablet', 1.25, { width: 1200, height: 800 });
+    expect(tablet.scale).toBeCloseTo(752 / 1180, 5);
+    expect(tablet.offsetX).toBeCloseTo(24 + (1152 - 820 * (752 / 1180)) / 2, 5);
+    expect(tablet.offsetY).toBe(24);
   });
 });
 
@@ -1698,14 +1718,16 @@ describe('FileViewer tweaks toolbar', () => {
       'chat.comments.emptySaved': 'No saved comments.',
       'chat.comments.targetText': 'Text',
       'chat.comments.targetLink': 'Link',
+      'chat.comments.selectAll': 'Select all',
       'common.close': 'Close',
+      'common.delete': 'Delete',
       'preview.showSidebar': 'Show Comments',
       'preview.hideSidebar': 'Hide Comments',
     };
     return labels[key] ?? key;
   };
 
-  function htmlPreviewFile(): ProjectFile {
+  function htmlPreviewFile(overrides: Partial<ProjectFile> = {}): ProjectFile {
     return baseFile({
       name: 'preview.html',
       path: 'preview.html',
@@ -1719,6 +1741,7 @@ describe('FileViewer tweaks toolbar', () => {
         renderer: 'html',
         exports: ['html'],
       },
+      ...overrides,
     });
   }
 
@@ -1736,26 +1759,63 @@ describe('FileViewer tweaks toolbar', () => {
     expect(screen.queryByRole('menuitem', { name: 'Pick element' })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: 'Region' })).toBeNull();
     expect(screen.getByTestId('draw-overlay-toggle')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Draw' })).toBeTruthy();
-    expect(screen.getByTestId('screenshot-capture-toggle')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Screenshot' })).toBeTruthy();
-    expect(screen.queryByPlaceholderText('Add a note for this annotation')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Mark' })).toBeTruthy();
+    expect(screen.queryByTestId('screenshot-capture-toggle')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Screenshot' })).toBeNull();
+    expect(screen.queryByPlaceholderText('Add a note for this mark')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Pods' })).toBeNull();
 
     fireEvent.click(screen.getByTestId('draw-overlay-toggle'));
-    expect(screen.getByPlaceholderText('Add a note for this annotation')).toBeTruthy();
+    expect(screen.getByPlaceholderText('Add a note for this mark')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Box select' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Pen' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Click' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Redo' })).toBeTruthy();
 
     clickAgentTool('draw-overlay-toggle');
-    expect(screen.queryByPlaceholderText('Add a note for this annotation')).toBeNull();
+    expect(screen.queryByPlaceholderText('Add a note for this mark')).toBeNull();
+  });
 
-    fireEvent.click(screen.getByTestId('screenshot-capture-toggle'));
-    expect(screen.queryByPlaceholderText('Add a note for this annotation')).toBeNull();
-    expect(screen.getByRole('status').textContent).toContain('Copying screenshot');
-    expect(screen.getByTestId('screenshot-capture-toggle').getAttribute('aria-pressed')).toBe('false');
-    expect(screen.getByTestId('draw-overlay-toggle').getAttribute('aria-pressed')).toBe('false');
+  it('keeps preview viewport selection scoped to each HTML file', async () => {
+    const firstFile = htmlPreviewFile({ name: 'first.html', path: 'first.html' });
+    const secondFile = htmlPreviewFile({ name: 'second.html', path: 'second.html' });
+    const { rerender } = render(
+      <FileViewer
+        projectId="viewport-scope-project"
+        projectKind="prototype"
+        file={firstFile}
+        liveHtml='<html><body><main>First</main></body></html>'
+      />,
+    );
+
+    const viewportButton = screen.getByRole('button', { name: 'Preview viewport' });
+    expect(viewportButton.textContent).toContain('Desktop');
+    fireEvent.click(viewportButton);
+    fireEvent.click(screen.getByRole('option', { name: /tablet/i }));
+    expect(screen.getByRole('button', { name: 'Preview viewport' }).textContent).toContain('Tablet');
+
+    rerender(
+      <FileViewer
+        projectId="viewport-scope-project"
+        projectKind="prototype"
+        file={secondFile}
+        liveHtml='<html><body><main>Second</main></body></html>'
+      />,
+    );
+
+    expect((await screen.findByRole('button', { name: 'Preview viewport' })).textContent).toContain('Desktop');
+
+    rerender(
+      <FileViewer
+        projectId="viewport-scope-project"
+        projectKind="prototype"
+        file={firstFile}
+        liveHtml='<html><body><main>First</main></body></html>'
+      />,
+    );
+
+    expect((await screen.findByRole('button', { name: 'Preview viewport' })).textContent).toContain('Tablet');
   });
 
   it('keeps the Draw bar open after queueing an annotation', () => {
@@ -1766,15 +1826,15 @@ describe('FileViewer tweaks toolbar', () => {
     );
 
     clickAgentTool('draw-overlay-toggle');
-    const note = screen.getByPlaceholderText('Add a note for this annotation');
+    const note = screen.getByPlaceholderText('Add a note for this mark');
     fireEvent.change(note, { target: { value: 'mark this' } });
     fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
 
-    expect(screen.getByPlaceholderText('Add a note for this annotation')).toBeTruthy();
+    expect(screen.getByPlaceholderText('Add a note for this mark')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Click' })).toBeNull();
 
     clickAgentTool('draw-overlay-toggle');
-    expect(screen.queryByPlaceholderText('Add a note for this annotation')).toBeNull();
+    expect(screen.queryByPlaceholderText('Add a note for this mark')).toBeNull();
   });
 
   it('uses a materialized srcDoc bridge while the Draw bar is open', async () => {
@@ -1804,8 +1864,11 @@ describe('FileViewer tweaks toolbar', () => {
     expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).srcdoc).toBe(frame.srcdoc);
   });
 
-  it('lets Draw direct send emit a queued annotation while a task is running', async () => {
-    const annotationSpy = vi.fn();
+  it('keeps Draw queue available while disabling direct send during a running task', async () => {
+    const annotationSpy = vi.fn((event: Event) => {
+      const detail = (event as CustomEvent<{ ack?: (result: { ok: boolean }) => void }>).detail;
+      detail.ack?.({ ok: true });
+    });
     window.addEventListener(ANNOTATION_EVENT, annotationSpy);
 
     render(
@@ -1816,21 +1879,26 @@ describe('FileViewer tweaks toolbar', () => {
     );
 
     clickAgentTool('draw-overlay-toggle');
-    fireEvent.change(screen.getByPlaceholderText('Add a note for this annotation'), {
+    fireEvent.change(screen.getByPlaceholderText('Add a note for this mark'), {
       target: { value: 'mark this' },
     });
 
+    // While a task is running the primary Send is disabled; Queue stays available
+    // so the annotation is staged for the next turn rather than sent mid-run.
+    const send = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
     const queue = screen.getByRole('button', { name: 'Queue' }) as HTMLButtonElement;
     expect(queue.disabled).toBe(false);
-    const send = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
-    expect(send.disabled).toBe(false);
 
     fireEvent.click(send);
+    expect(annotationSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(queue);
 
     await waitFor(() => expect(annotationSpy).toHaveBeenCalledTimes(1));
     expect(annotationSpy.mock.calls[0]?.[0]).toMatchObject({
       detail: {
-        action: 'send',
+        action: 'queue',
         note: 'mark this',
         filePath: 'preview.html',
       },
@@ -1871,6 +1939,22 @@ describe('FileViewer tweaks toolbar', () => {
     expect(screen.getByTestId('comment-side-panel')).toBeTruthy();
     expect(screen.queryByTestId('comment-saved-marker-pin-applying')).toBeNull();
     expect(screen.queryByText('Already sent to Claude')).toBeNull();
+  });
+
+  it('does not render the comments drawer over the preview while waiting for a configured dock portal', () => {
+    const { container } = render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={htmlPreviewFile()}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+        commentPortalId="project-comments-dock"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('comment-panel-toggle'));
+
+    expect(container.querySelector('.comment-preview-layer > .comment-side-panel')).toBeNull();
   });
 
   it('shows the open comment count beside the comments icon', () => {
@@ -1919,7 +2003,7 @@ describe('FileViewer tweaks toolbar', () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      screen.getByTestId('screenshot-capture-toggle').compareDocumentPosition(commentsButton) &
+      screen.getByTestId('manual-edit-mode-toggle').compareDocumentPosition(commentsButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
@@ -2157,6 +2241,55 @@ describe('FileViewer tweaks toolbar', () => {
     expect(document.querySelector('[data-comment-id="comment-older"]')?.className).not.toContain('active');
   });
 
+  it('orders and timestamps side comments by latest update time', () => {
+    const createdFirstUpdatedLast: PreviewComment = {
+      id: 'comment-updated-last',
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      filePath: 'preview.html',
+      elementId: 'hero-title',
+      selector: '[data-od-id="hero-title"]',
+      label: 'Hero title',
+      text: 'Hero',
+      htmlHint: '<h1 data-od-id="hero-title">Hero</h1>',
+      position: { x: 24, y: 32, width: 180, height: 36 },
+      note: 'Latest edit',
+      status: 'open',
+      createdAt: Date.now() - 20 * 60_000,
+      updatedAt: Date.now(),
+    };
+    const createdLastUpdatedFirst: PreviewComment = {
+      ...createdFirstUpdatedLast,
+      id: 'comment-created-last',
+      elementId: 'hero-subtitle',
+      selector: '[data-od-id="hero-subtitle"]',
+      label: 'Hero subtitle',
+      note: 'Older edit',
+      createdAt: Date.now() - 5 * 60_000,
+      updatedAt: Date.now() - 10 * 60_000,
+    };
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={htmlPreviewFile()}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+        previewComments={[createdLastUpdatedFirst, createdFirstUpdatedLast]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('comment-panel-toggle'));
+
+    const items = screen.getAllByTestId('comment-side-item');
+    const [firstItem, secondItem] = items;
+    expect(firstItem).toBeDefined();
+    expect(secondItem).toBeDefined();
+    expect(firstItem!.textContent).toContain('Latest edit');
+    expect(firstItem!.textContent).toContain('just now');
+    expect(secondItem!.textContent).toContain('Older edit');
+  });
+
   it('does not preload non-open element comments into the picker composer', async () => {
     const applyingElementComment: PreviewComment = {
       id: 'comment-element-applying',
@@ -2205,6 +2338,57 @@ describe('FileViewer tweaks toolbar', () => {
     expect(input.value).toBe('');
     expect(screen.queryByText('Remove')).toBeNull();
     expect(screen.queryByText('Do not resurrect this note')).toBeNull();
+  });
+
+  it('does not preload open element comments when starting a new annotation', async () => {
+    const openComment: PreviewComment = {
+      id: 'comment-element-open',
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      filePath: 'preview.html',
+      elementId: 'hero',
+      selector: '[data-od-id="hero"]',
+      label: 'Hero',
+      text: 'Hero',
+      htmlHint: '<main data-od-id="hero">Hero</main>',
+      position: { x: 8, y: 12, width: 120, height: 48 },
+      note: 'Existing note should stay in the thread',
+      status: 'open',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={htmlPreviewFile()}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+        previewComments={[openComment]}
+        onRemovePreviewComment={vi.fn()}
+      />,
+    );
+
+    const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+    clickAgentTool('board-mode-toggle');
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: frame.contentWindow,
+      data: {
+        type: 'od:comment-target',
+        elementId: 'hero',
+        selector: '[data-od-id="hero"]',
+        label: 'Hero',
+        text: 'Hero',
+        position: { x: 8, y: 12, width: 120, height: 48 },
+        htmlHint: '<main data-od-id="hero">Hero</main>',
+      },
+    }));
+
+    const input = await screen.findByTestId('comment-popover-input') as HTMLTextAreaElement;
+    expect(input.value).toBe('');
+    expect(screen.queryByText('Existing note should stay in the thread')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
   });
 
   it('keeps the comment composer focused on the note after picking an element', async () => {
@@ -2300,6 +2484,7 @@ describe('FileViewer tweaks toolbar', () => {
     }));
 
     const input = await screen.findByTestId('comment-popover-input');
+    expect(screen.getByTestId('comment-side-panel')).toBeTruthy();
     fireEvent.change(input, { target: { value: '加大字号' } });
     fireEvent.click(screen.getByTestId('comment-popover-save'));
 
@@ -2332,7 +2517,7 @@ describe('FileViewer tweaks toolbar', () => {
     expect(screen.getByTestId('comment-panel-toggle').getAttribute('aria-pressed')).toBe('true');
   });
 
-  it('shows element parameters on annotation hover and opens comments on click', async () => {
+  it('opens annotation parameters and comments on click only', async () => {
     render(
       <FileViewer
         projectId="project-1"
@@ -2365,11 +2550,10 @@ describe('FileViewer tweaks toolbar', () => {
       data: { ...target, type: 'od:comment-hover' },
     }));
 
-    const summary = await screen.findByTestId('annotation-hover-style-summary');
-    expect(summary.textContent).toContain('Color');
-    expect(summary.textContent).toContain('#1A1916');
-    expect(summary.textContent).toContain('13.5px');
+    expect(screen.queryByTestId('annotation-hover-style-summary')).toBeNull();
+    expect(screen.queryByTestId('annotation-hover-popover')).toBeNull();
     expect(screen.queryByTestId('inspect-panel')).toBeNull();
+    expect(await screen.findByTestId('comment-target-overlay')).toBeTruthy();
     expect(screen.queryByTestId('comment-popover-input')).toBeNull();
 
     window.dispatchEvent(new MessageEvent('message', {
@@ -2377,9 +2561,14 @@ describe('FileViewer tweaks toolbar', () => {
       data: { ...target, type: 'od:comment-target' },
     }));
 
+    const summary = await screen.findByTestId('comment-popover-style-summary');
+    expect(summary.textContent).toContain('Color');
+    expect(summary.textContent).toContain('#1A1916');
+    expect(summary.textContent).toContain('13.5px');
     expect(await screen.findByTestId('comment-popover-input')).toBeTruthy();
-    expect(screen.getByTestId('comment-panel-toggle').getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByTestId('board-mode-toggle').getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByTestId('comment-target-overlay')).toBeTruthy();
+    expect(screen.getByTestId('comment-panel-toggle').getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByTestId('board-mode-toggle').getAttribute('aria-pressed')).toBe('true');
     expect(screen.queryByTestId('inspect-panel')).toBeNull();
     await waitFor(() => {
       expect(screen.queryByTestId('annotation-hover-popover')).toBeNull();
@@ -2439,6 +2628,8 @@ describe('FileViewer tweaks toolbar', () => {
 
   it('moves focus between comment side panel toggles when collapsing and expanding without a pre-focused click target', async () => {
     const onCollapseChange = vi.fn();
+    const onSelectAll = vi.fn();
+    const onReply = vi.fn();
 
     function Harness() {
       const [collapsed, setCollapsed] = useState(false);
@@ -2470,8 +2661,9 @@ describe('FileViewer tweaks toolbar', () => {
             setCollapsed(next);
           }}
           onToggleSelect={() => {}}
+          onSelectAll={onSelectAll}
           onClearSelection={() => {}}
-          onReply={() => {}}
+          onReply={onReply}
           onSendSelected={() => {}}
           sending={false}
           t={t}
@@ -2483,6 +2675,10 @@ describe('FileViewer tweaks toolbar', () => {
 
     expect(screen.getByTestId('comment-side-panel')).toBeTruthy();
     expect(screen.getByText('不要github，换成微信')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Select all' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+    fireEvent.click(screen.getByText('不要github，换成微信').closest('[data-testid="comment-side-item"]')!);
+    expect(onReply).toHaveBeenCalledWith(expect.objectContaining({ id: 'comment-1' }));
 
     const hideComments = screen.getByRole('button', { name: /hide comments/i });
 
@@ -2513,6 +2709,7 @@ describe('FileViewer tweaks toolbar', () => {
           collapsed={collapsed}
           onCollapsedChange={setCollapsed}
           onToggleSelect={() => {}}
+          onSelectAll={() => {}}
           onClearSelection={() => {}}
           onReply={() => {}}
           onSendSelected={() => {}}
@@ -2574,6 +2771,7 @@ describe('FileViewer tweaks toolbar', () => {
         collapsed={false}
         onCollapsedChange={() => {}}
         onToggleSelect={() => {}}
+        onSelectAll={() => {}}
         onClearSelection={() => {}}
         onReply={() => {}}
         onSendSelected={() => {}}
@@ -2586,7 +2784,7 @@ describe('FileViewer tweaks toolbar', () => {
     expect(screen.queryByText('Link')).toBeNull();
   });
 
-  it('deletes selected comments when clear is clicked', async () => {
+  it('clears the comment selection without deleting when clear is clicked', async () => {
     const removed: string[] = [];
 
     function Harness() {
@@ -2649,10 +2847,10 @@ describe('FileViewer tweaks toolbar', () => {
     fireEvent.click(firstSelectButton);
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
 
-    await waitFor(() => {
-      expect(screen.queryByText('Second')).toBeNull();
-    });
-    expect(removed).toEqual(['comment-2']);
+    // Per #3081, Clear deselects rather than batch-deleting: the comments stay
+    // and removal stays wired to per-comment delete / send-selected instead.
+    expect(screen.queryByText('Second')).not.toBeNull();
+    expect(removed).toEqual([]);
   });
 });
 
@@ -3220,6 +3418,35 @@ describe('LiveArtifactViewer', () => {
     expect(rule).toContain('right: calc(env(safe-area-inset-right, 0px) + 20px);');
     expect(rule).toContain('display: inline-flex;');
     expect(rule).toContain('align-items: center;');
+  });
+
+  it('uses the shared zoom dropdown for live artifact previews', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (url === '/api/live-artifacts/la_1?projectId=proj_1') {
+        return new Response(JSON.stringify({ artifact: baseLiveArtifact() }), { status: 200 });
+      }
+      if (url === '/api/live-artifacts/la_1/refreshes?projectId=proj_1') {
+        return new Response(JSON.stringify({ refreshes: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <LiveArtifactViewer
+        projectId="proj_1"
+        liveArtifact={baseLiveArtifactWorkspaceEntry()}
+      />,
+    );
+
+    const zoomTrigger = await screen.findByRole('button', { name: '100%' });
+    expect(screen.queryByRole('button', { name: /zoom out/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /zoom in/i })).toBeNull();
+
+    fireEvent.click(zoomTrigger);
+    expect(screen.getByRole('menuitem', { name: '50%' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: '200%' })).toBeTruthy();
   });
 
   it('enters and exits in-tab presentation from the present menu', async () => {

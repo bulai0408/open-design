@@ -2989,6 +2989,29 @@ export function ProjectView({
     },
     [currentConversationActionDisabled, onModeChange, onAgentChange, onOpenAmrSettings],
   );
+  // PR #3157: Antigravity's `agy -p` cannot complete OAuth on its own,
+  // so the auth banner offers a one-click "Sign in via terminal"
+  // button that POSTs to the daemon. The daemon opens a system
+  // Terminal running `agy` (osascript / x-terminal-emulator /
+  // `cmd /c start`); the user finishes Google sign-in there and then
+  // clicks Retry to redo the chat run. We don't auto-retry because
+  // the OAuth completion happens externally with no reliable signal
+  // back to the chat — the secondary Retry button on the same banner
+  // covers the manual case.
+  const handleLaunchAntigravityOauth = useCallback(async () => {
+    try {
+      const { launchAntigravityOauth } = await import('../providers/daemon');
+      const result = await launchAntigravityOauth();
+      if (!result.ok) {
+        // Surface the daemon-side reason so the user knows whether
+        // the spawn failed because of missing osascript / unsupported
+        // platform / etc. instead of silently swallowing it.
+        console.warn('[antigravity] oauth-launch failed:', result.error);
+      }
+    } catch (err) {
+      console.warn('[antigravity] oauth-launch threw:', err);
+    }
+  }, []);
   // Poll the AMR login status while a retry is armed, rather than only reacting
   // to the AmrLoginPill's status event — the user may close Settings (which
   // unmounts the pill and stops its polling) before finishing sign-in in the
@@ -4249,6 +4272,12 @@ export function ProjectView({
         onBack={onBack}
         backLabel={t('project.backToProjects')}
         fileActionsBefore={(
+          <div
+            className="app-chrome-file-actions-before workspace-tabs-file-actions"
+            data-app-chrome-file-actions="true"
+          />
+        )}
+        actions={(
           <>
             <button
               type="button"
@@ -4276,14 +4305,7 @@ export function ProjectView({
               onRefreshAgents={onRefreshAgents}
               onBack={onBack}
             />
-            <div
-              className="app-chrome-file-actions-before workspace-tabs-file-actions"
-              data-app-chrome-file-actions="true"
-            />
           </>
-        )}
-        actions={(
-          null
         )}
       >
         <div className="app-project-title">
@@ -4467,6 +4489,7 @@ export function ProjectView({
               onOpenSettings={onOpenSettings}
               onOpenAmrSettings={onOpenAmrSettings}
               onSwitchToAmrAndRetry={handleSwitchToAmrAndRetry}
+              onLaunchAntigravityOauth={handleLaunchAntigravityOauth}
               onOpenMcpSettings={onOpenMcpSettings}
               connectRepoNeeded={connectRepoNeeded}
               githubConnected={githubConnected}
