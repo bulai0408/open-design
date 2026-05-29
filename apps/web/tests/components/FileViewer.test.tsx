@@ -34,6 +34,12 @@ import {
   serializeInspectOverrides,
   updateInspectOverride,
 } from '../../src/components/FileViewer';
+import {
+  IframeKeepAliveProvider,
+  PooledIframe,
+  previewIframeKeepAliveKey,
+  useIframeKeepAlivePool,
+} from '../../src/components/IframeKeepAlivePool';
 import type { InspectOverrideMap } from '../../src/components/FileViewer';
 import type { LiveArtifact, LiveArtifactWorkspaceEntry, PreviewComment, ProjectFile } from '../../src/types';
 import { I18nProvider } from '../../src/i18n';
@@ -66,16 +72,6 @@ function deferredResponse() {
     resolve = next;
   });
   return { promise, resolve };
-}
-
-function srcDocActivationMessages(calls: readonly (readonly unknown[])[]) {
-  return calls
-    .map(([message]) => message)
-    .filter((message): message is { type: 'od:srcdoc-transport-activate'; html: string } => {
-      if (typeof message !== 'object' || message === null) return false;
-      const data = message as { type?: unknown; html?: unknown };
-      return data.type === 'od:srcdoc-transport-activate' && typeof data.html === 'string';
-    });
 }
 
 function clickAgentTool(testId: string) {
@@ -385,6 +381,177 @@ describe('FileViewer SVG artifacts', () => {
     expect(sourceMarkup).not.toContain('<img');
   });
 
+  it('keeps a URL-loaded preview iframe alive while the viewer unmounts and remounts', () => {
+    const file = baseFile({
+      name: 'page.html',
+      path: 'page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+
+    function Shell() {
+      const [visible, setVisible] = useState(true);
+      return (
+        <IframeKeepAliveProvider>
+          <button type="button" onClick={() => setVisible((next) => !next)}>
+            {visible ? 'Leave project' : 'Return project'}
+          </button>
+          {visible ? (
+            <FileViewer
+              projectId="project-1"
+              projectKind="prototype"
+              file={file}
+              liveHtml="<html><body>hi</body></html>"
+            />
+          ) : (
+            <div data-testid="home-view" />
+          )}
+        </IframeKeepAliveProvider>
+      );
+    }
+
+    const { container } = render(<Shell />);
+
+    const firstFrame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+    expect(firstFrame.getAttribute('src')).toBe('/api/projects/project-1/raw/page.html?v=1710000000&r=0');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Leave project' }));
+
+    expect(screen.queryByTestId('artifact-preview-frame')).toBeNull();
+    expect(screen.getByTestId('home-view')).toBeTruthy();
+    const parkedFrame = container.querySelector<HTMLIFrameElement>('.iframe-keep-alive-pool iframe');
+    expect(parkedFrame).toBe(firstFrame);
+    expect(parkedFrame?.getAttribute('src')).toBe('/api/projects/project-1/raw/page.html?v=1710000000&r=0');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Return project' }));
+
+    expect(screen.getByTestId('artifact-preview-frame')).toBe(firstFrame);
+  });
+
+  it('evicts least-recent inactive preview iframes once the pool exceeds its limit', () => {
+    function Harness({ activeKey }: { activeKey: string | null }) {
+      return (
+        <IframeKeepAliveProvider maxEntries={2}>
+          {activeKey ? (
+            <PooledIframe
+              cacheKey={previewIframeKeepAliveKey('project-1', `${activeKey}.html`)}
+              src={`/api/projects/project-1/raw/${activeKey}.html?v=1&r=0`}
+              title={`${activeKey}.html`}
+              sandbox="allow-scripts allow-downloads"
+              data-testid="pooled-frame"
+              data-od-render-mode="url-load"
+              data-od-active="true"
+            />
+          ) : null}
+        </IframeKeepAliveProvider>
+      );
+    }
+
+    const { container, rerender } = render(<Harness activeKey="one" />);
+    const firstFrame = screen.getByTestId('pooled-frame');
+    rerender(<Harness activeKey={null} />);
+    rerender(<Harness activeKey="two" />);
+    const secondFrame = screen.getByTestId('pooled-frame');
+    rerender(<Harness activeKey={null} />);
+    rerender(<Harness activeKey="three" />);
+    const thirdFrame = screen.getByTestId('pooled-frame');
+    rerender(<Harness activeKey={null} />);
+
+    const parkedFrames = Array.from(
+      container.querySelectorAll<HTMLIFrameElement>('.iframe-keep-alive-pool iframe'),
+    );
+    expect(parkedFrames).toEqual([secondFrame, thirdFrame]);
+    expect(parkedFrames).not.toContain(firstFrame);
+  });
+
+  it('evicts inactive preview iframes for a project when the project is invalidated', () => {
+    function Harness({ active }: { active: boolean }) {
+      const pool = useIframeKeepAlivePool();
+      return (
+        <>
+          <button type="button" onClick={() => pool.evictProject('project-1')}>
+            Invalidate project
+          </button>
+          {active ? (
+            <PooledIframe
+              cacheKey={previewIframeKeepAliveKey('project-1', 'page.html')}
+              src="/api/projects/project-1/raw/page.html?v=1&r=0"
+              title="page.html"
+              sandbox="allow-scripts allow-downloads"
+              data-testid="pooled-frame"
+              data-od-render-mode="url-load"
+              data-od-active="true"
+            />
+          ) : null}
+        </>
+      );
+    }
+
+    const { container, rerender } = render(
+      <IframeKeepAliveProvider>
+        <Harness active />
+      </IframeKeepAliveProvider>,
+    );
+    const firstFrame = screen.getByTestId('pooled-frame');
+
+    rerender(
+      <IframeKeepAliveProvider>
+        <Harness active={false} />
+      </IframeKeepAliveProvider>,
+    );
+    expect(container.querySelector('.iframe-keep-alive-pool iframe')).toBe(firstFrame);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Invalidate project' }));
+
+    expect(container.querySelector('.iframe-keep-alive-pool iframe')).toBeNull();
+  });
+
+  it('reattaches a fresh visible iframe after active project invalidation', () => {
+    function Harness() {
+      const pool = useIframeKeepAlivePool();
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => pool.evictProject('project-1', { includeActive: true })}
+          >
+            Invalidate active project
+          </button>
+          <PooledIframe
+            cacheKey={previewIframeKeepAliveKey('project-1', 'page.html')}
+            src="/api/projects/project-1/raw/page.html?v=1&r=0"
+            title="page.html"
+            sandbox="allow-scripts allow-downloads"
+            data-testid="pooled-frame"
+            data-od-render-mode="url-load"
+            data-od-active="true"
+          />
+        </>
+      );
+    }
+
+    render(
+      <IframeKeepAliveProvider>
+        <Harness />
+      </IframeKeepAliveProvider>,
+    );
+    const firstFrame = screen.getByTestId('pooled-frame');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Invalidate active project' }));
+
+    const secondFrame = screen.getByTestId('pooled-frame');
+    expect(secondFrame).not.toBe(firstFrame);
+    expect(secondFrame.getAttribute('src')).toBe('/api/projects/project-1/raw/page.html?v=1&r=0');
+  });
+
   it('URL-loads a plain HTML preview iframe instead of inlining via srcDoc', () => {
     const file = baseFile({
       name: 'page.html',
@@ -587,14 +754,13 @@ describe('FileViewer SVG artifacts', () => {
 
     const { container } = render(<Switcher />);
     const getFrame = () => container.querySelector<HTMLIFrameElement>('[data-testid="artifact-preview-frame"]');
-    const initialFrame = getFrame();
-    expect(initialFrame?.getAttribute('src')).toBe('/api/projects/project-1/raw/first.html?v=1710000000&r=0');
+    expect(getFrame()?.getAttribute('src')).toBe('/api/projects/project-1/raw/first.html?v=1710000000&r=0');
 
     const observationsBeforeSwitch = observedCommittedSrcs.length;
     fireEvent.click(screen.getByRole('button', { name: 'Switch file' }));
 
     const nextFrame = getFrame();
-    expect(nextFrame).toBe(initialFrame);
+    expect(nextFrame).toBeTruthy();
     expect(observedCommittedSrcs[observationsBeforeSwitch]).toBe(
       '/api/projects/project-1/raw/second.html?v=1710000000&r=0',
     );
@@ -754,6 +920,7 @@ describe('FileViewer SVG artifacts', () => {
     expect(markup).toContain('data-od-render-mode="srcdoc"');
     expect(markup).toContain('data-od-render-mode="srcdoc" data-od-active="true"');
     expect(markup).toContain('data-od-render-mode="url-load" data-od-active="false"');
+    expect(markup).not.toContain('data-od-lazy-srcdoc-transport');
     expect(markup).toContain('sandbox="allow-scripts allow-downloads"');
   });
 
@@ -1314,8 +1481,8 @@ describe('FileViewer SVG artifacts', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /share/i }));
 
-    expect(await screen.findByRole('menuitem', { name: /Copy link · Vercel/i })).toBeTruthy();
-    const cloudflareCopy = await screen.findByRole('menuitem', { name: /Copy link · Cloudflare Pages/i });
+    expect(await screen.findByRole('menuitem', { name: /Copy Vercel link/i })).toBeTruthy();
+    const cloudflareCopy = await screen.findByRole('menuitem', { name: /Copy Cloudflare link/i });
     fireEvent.click(cloudflareCopy);
 
     expect(writeText).toHaveBeenCalledWith('https://cloudflare.pages.dev');
@@ -1361,8 +1528,8 @@ describe('FileViewer SVG artifacts', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /share/i }));
 
-    expect(await screen.findByRole('menuitem', { name: /Copy link · Cloudflare Pages/i })).toBeTruthy();
-    expect(screen.queryByRole('menuitem', { name: /Copy link · Vercel/i })).toBeNull();
+    expect(await screen.findByRole('menuitem', { name: /Copy Cloudflare link/i })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: /Copy Vercel link/i })).toBeNull();
   });
 
   it('renders unsafe SVG source as escaped text instead of executable markup', () => {
@@ -1447,6 +1614,8 @@ describe('FileViewer tweaks toolbar', () => {
     const labels: Partial<Record<keyof Dict, string>> = {
       'chat.tabComments': 'Comments',
       'chat.comments.emptySaved': 'No saved comments.',
+      'chat.comments.targetText': 'Text',
+      'chat.comments.targetLink': 'Link',
       'common.close': 'Close',
       'preview.showSidebar': 'Show Comments',
       'preview.hideSidebar': 'Hide Comments',
@@ -1501,11 +1670,10 @@ describe('FileViewer tweaks toolbar', () => {
     expect(screen.queryByPlaceholderText('Add a note for this annotation')).toBeNull();
 
     fireEvent.click(screen.getByTestId('screenshot-capture-toggle'));
-    expect(screen.getByPlaceholderText('Add a note for this annotation')).toBeTruthy();
-    expect(screen.queryByRole('status')).toBeNull();
-    expect(screen.getByTestId('screenshot-capture-toggle').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByPlaceholderText('Add a note for this annotation')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('Copying screenshot');
+    expect(screen.getByTestId('screenshot-capture-toggle').getAttribute('aria-pressed')).toBe('false');
     expect(screen.getByTestId('draw-overlay-toggle').getAttribute('aria-pressed')).toBe('false');
-    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false);
   });
 
   it('keeps the Draw bar open after queueing an annotation', () => {
@@ -1527,7 +1695,7 @@ describe('FileViewer tweaks toolbar', () => {
     expect(screen.queryByPlaceholderText('Add a note for this annotation')).toBeNull();
   });
 
-  it('keeps the preloaded selection bridge mounted while the Draw bar is open', async () => {
+  it('uses a materialized srcDoc bridge while the Draw bar is open', async () => {
     render(
       <FileViewer projectId="project-1" projectKind="prototype" file={htmlPreviewFile()}
         liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
@@ -1541,6 +1709,7 @@ describe('FileViewer tweaks toolbar', () => {
       const activeFrame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
       expect(activeFrame.getAttribute('data-od-render-mode')).toBe('srcdoc');
       expect(activeFrame.srcdoc).toContain('data-od-selection-bridge');
+      expect(activeFrame.srcdoc).toContain('data-od-snapshot-bridge');
       expect(activeFrame.srcdoc).not.toContain('data-od-lazy-srcdoc-transport');
       return activeFrame;
     });
@@ -1620,6 +1789,57 @@ describe('FileViewer tweaks toolbar', () => {
     expect(screen.getByTestId('comment-side-panel')).toBeTruthy();
     expect(screen.queryByTestId('comment-saved-marker-pin-applying')).toBeNull();
     expect(screen.queryByText('Already sent to Claude')).toBeNull();
+  });
+
+  it('shows the open comment count beside the comments icon', () => {
+    const openComment: PreviewComment = {
+      id: 'comment-open',
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      filePath: 'preview.html',
+      elementId: 'pin-open',
+      selector: '[data-od-pin="pin-open"]',
+      label: 'pin-open',
+      text: '',
+      htmlHint: '',
+      position: { x: 24, y: 32, width: 18, height: 18 },
+      note: 'Open comment',
+      status: 'open',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const otherFileComment: PreviewComment = {
+      ...openComment,
+      id: 'comment-other',
+      filePath: 'other.html',
+    };
+    const resolvedComment: PreviewComment = {
+      ...openComment,
+      id: 'comment-resolved',
+      status: 'applying',
+    };
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={htmlPreviewFile()}
+        liveHtml='<html><body><main data-od-id="hero">Hero</main></body></html>'
+        previewComments={[openComment, otherFileComment, resolvedComment]}
+      />,
+    );
+
+    const commentsButton = screen.getByTestId('comment-panel-toggle');
+    expect(commentsButton.textContent).toContain('1');
+    expect(commentsButton.getAttribute('aria-label')).toBe('Comments (1)');
+    expect(
+      screen.getByTestId('board-mode-toggle').compareDocumentPosition(screen.getByTestId('manual-edit-mode-toggle')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId('screenshot-capture-toggle').compareDocumentPosition(commentsButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('keeps comments and annotation picker mutually exclusive', () => {
@@ -2076,6 +2296,45 @@ describe('FileViewer tweaks toolbar', () => {
     expect(screen.queryByText('不要github，换成微信')).toBeNull();
     expect(screen.queryByTestId('comment-side-selectbar')).toBeNull();
     expect(screen.queryByTestId('comment-side-collapsed-rail')).toBeNull();
+  });
+
+  it('does not classify text labels containing a standalone article as links', () => {
+    const comment: PreviewComment = {
+      id: 'comment-plain-text',
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      filePath: 'preview.html',
+      elementId: 'copy-1',
+      selector: '[data-od-id="copy-1"]',
+      label: 'Turn a brand brief into an editorial collage system.',
+      text: 'Turn a brand brief into an editorial collage system.',
+      htmlHint: '<p data-od-id="copy-1">',
+      position: { x: 16, y: 24, width: 320, height: 48 },
+      note: 'Make this copy tighter.',
+      status: 'open',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    render(
+      <CommentSidePanel
+        comments={[comment]}
+        selectedIds={new Set()}
+        activeCommentId={null}
+        collapsed={false}
+        onCollapsedChange={() => {}}
+        onClose={() => {}}
+        onToggleSelect={() => {}}
+        onClearSelection={() => {}}
+        onReply={() => {}}
+        onSendSelected={() => {}}
+        sending={false}
+        t={t}
+      />,
+    );
+
+    expect(screen.getByText('1. Text')).toBeTruthy();
+    expect(screen.queryByText('Link')).toBeNull();
   });
 
   it('deletes selected comments when clear is clicked', async () => {

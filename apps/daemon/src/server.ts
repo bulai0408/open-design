@@ -41,7 +41,12 @@ import {
   sanitizeCustomModel,
   spawnEnvForAgent,
 } from './agents.js';
-import { rememberLiveModels, resolveModelForAgent } from './runtimes/models.js';
+import {
+  getRememberedLiveModels,
+  preferFreshLiveModels,
+  rememberLiveModels,
+  resolveModelForAgent,
+} from './runtimes/models.js';
 import {
   cancelVelaLogin,
   forgetVelaLogin,
@@ -173,6 +178,7 @@ import {
 } from './memory-connectors.js';
 import { attachAcpSession } from './acp.js';
 import { attachPiRpcSession } from './pi-rpc.js';
+import { stageAmrImagePaths } from './amr-image-staging.js';
 import {
   applyAutomationProposal,
   createAutomationProposal,
@@ -236,6 +242,7 @@ import { observePendingInstallerApplyAttempts } from './update-apply-observation
 import {
   agentIdToTracking,
   deriveConfigureGlobals,
+  modelIdForTracking,
   projectKindToTracking,
   type ObservabilityEventRequest,
 } from '@open-design/contracts/analytics';
@@ -1909,6 +1916,53 @@ export function __forTestResolveRunProjectKindForAnalytics(args) {
   return resolveRunProjectKindForAnalytics(args);
 }
 
+// Scans run.events newest→oldest to extract usage token counts and the
+// agent-reported model name. The scan must not short-circuit on usage
+// before reaching the model signal: usage is a terminal event while
+// status:initializing/model is emitted at the very start of the run, so
+// in reverse iteration usage is seen first. The loop continues until both
+// usage tokens are found AND (the caller already has a model from reqBody
+// OR the agent-reported model has been found).
+function scanRunEventsForFinishedProps(events, reqBodyModel) {
+  let inputTokens;
+  let outputTokens;
+  let agentReportedModel = null;
+  const needAgentModel = !(typeof reqBodyModel === 'string' && reqBodyModel.trim());
+  let haveUsageTokens = false;
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const ev = events[i];
+    const data = ev?.data;
+    if (ev?.event === 'agent' && data?.type === 'usage' && data.usage && !haveUsageTokens) {
+      const u = data.usage;
+      if (typeof u.input_tokens === 'number') inputTokens = u.input_tokens;
+      if (typeof u.output_tokens === 'number') outputTokens = u.output_tokens;
+      if (inputTokens !== undefined || outputTokens !== undefined) haveUsageTokens = true;
+    }
+    if (
+      !agentReportedModel &&
+      ev?.event === 'agent' &&
+      data?.type === 'status' &&
+      (data.label === 'model' || data.label === 'initializing')
+    ) {
+      const candidate =
+        typeof data.model === 'string'
+          ? data.model
+          : typeof data.detail === 'string'
+            ? data.detail
+            : null;
+      if (candidate && candidate.trim()) {
+        agentReportedModel = candidate.trim();
+      }
+    }
+    if (haveUsageTokens && (!needAgentModel || agentReportedModel)) break;
+  }
+  return { inputTokens, outputTokens, agentReportedModel };
+}
+
+export function __forTestScanRunEventsForFinishedProps(events, reqBodyModel) {
+  return scanRunEventsForFinishedProps(events, reqBodyModel);
+}
+
 function githubRepoNameFromPluginName(name) {
   const slug = String(name)
     .toLowerCase()
@@ -2038,6 +2092,14 @@ function shouldSkipPluginContextEntry(name) {
   return PLUGIN_CONTEXT_SKIP_DIRS.has(name) || PLUGIN_CONTEXT_SKIP_FILES.has(name);
 }
 
+export function selectPromptImagePaths(
+  agentId,
+  safeImages,
+  amrStagedImages,
+) {
+  return agentId === 'amr' ? amrStagedImages : safeImages;
+}
+
 async function ensureGhReady() {
   const version = await execGhBuffered(['--version'], { timeout: 10_000 });
   if (!version.ok) {
@@ -2078,6 +2140,33 @@ function reconcileAssistantMessageOnRunEnd(db, runs, run) {
     .catch((err) => {
       console.warn('[runs] message reconciliation failed', err);
     });
+}
+
+
+function isPluginAuthoringRun(db, run) {
+  if (run?.pluginId === 'od-plugin-authoring') return true;
+  if (
+    typeof run?.appliedPluginSnapshotId === 'string'
+    && run.appliedPluginSnapshotId.length > 0
+  ) {
+    const snapshot = getSnapshot(db, run.appliedPluginSnapshotId);
+    return snapshot?.pluginId === 'od-plugin-authoring';
+  }
+  return false;
+}
+
+async function hasGeneratedPluginArtifacts(projectRoot) {
+  if (!projectRoot || typeof projectRoot !== 'string') return false;
+  const required = [
+    path.join(projectRoot, 'generated-plugin', 'open-design.json'),
+    path.join(projectRoot, 'generated-plugin', 'SKILL.md'),
+  ];
+  try {
+    await Promise.all(required.map((file) => fs.promises.access(file, fs.constants.F_OK)));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function detectSkillPluginCandidateOnRunSuccess(db, runs, run, input, projectRoot) {
@@ -10451,6 +10540,10 @@ export async function startServer({
         resolved.startsWith(UPLOAD_DIR + path.sep) && fs.existsSync(resolved)
       );
     });
+    const amrStagedImages =
+      def.id === 'amr'
+        ? await stageAmrImagePaths(cwd ?? PROJECT_ROOT, safeImages, UPLOAD_DIR)
+        : safeImages;
 
     // Project-scoped attachments: project-relative paths inside cwd. Each
     // is run through the same path-traversal guard the file CRUD endpoints
@@ -10718,6 +10811,11 @@ export async function startServer({
     // instructions and request) — see server.ts:9920 composer notes.
     const ECHO_GUARD =
       '\n\n(Do not quote, restate, or echo the # Instructions block above in your reply. Begin your response with the answer to the # User request below.)';
+    const promptImagePaths = selectPromptImagePaths(
+      def.id,
+      safeImages,
+      amrStagedImages,
+    );
     const composed = [
       instructionPrompt
         ? `# Instructions (read first)\n\n${instructionPrompt}${cwdHint}${linkedDirsHint}${ECHO_GUARD}\n\n---\n`
@@ -10727,8 +10825,8 @@ export async function startServer({
             ? `# Instructions${linkedDirsHint}${ECHO_GUARD}\n\n---\n`
             : '',
       `# User request\n\n${userRequestPrompt}${attachmentHint}${commentHint}`,
-      safeImages.length
-        ? `\n\n${safeImages.map((p) => `@${p}`).join(' ')}`
+      promptImagePaths.length
+        ? `\n\n${promptImagePaths.map((p) => `@${p}`).join(' ')}`
         : '',
     ].join('');
     // Per-agent model + reasoning the user picked in the model menu.
@@ -10942,7 +11040,11 @@ export async function startServer({
       } catch {
         liveModels = [];
       }
-      rememberLiveModels(def.id, liveModels);
+      const rememberedLiveModels = getRememberedLiveModels(def.id);
+      if (liveModels.length > 0) {
+        rememberLiveModels(def.id, liveModels);
+      }
+      liveModels = preferFreshLiveModels(liveModels, rememberedLiveModels);
       const liveModelIds = new Set(
         liveModels.map((candidate) => candidate?.id).filter(Boolean),
       );
@@ -11742,7 +11844,7 @@ export async function startServer({
             send(channel, payload);
           }
         },
-        imagePaths: def.supportsImagePaths ? safeImages : [],
+        imagePaths: def.supportsImagePaths ? amrStagedImages : [],
         uploadRoot: UPLOAD_DIR,
       });
     } else if (def.streamFormat === 'acp-json-rpc') {
@@ -11752,6 +11854,7 @@ export async function startServer({
         prompt: composed,
         cwd: effectiveCwd,
         model: safeModel,
+        imagePaths: def.supportsImagePaths ? amrStagedImages : [],
         mcpServers,
         ...(def.id === 'amr' ? { modelUnavailableErrorCode: 'AMR_MODEL_UNAVAILABLE' } : {}),
         send: (event, data) => {
@@ -11810,7 +11913,7 @@ export async function startServer({
       send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', err.message));
       design.runs.finish(run, 'failed', 1, null);
     });
-    child.on('close', (code, signal) => {
+    child.on('close', async (code, signal) => {
       clearInactivityWatchdog();
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();
@@ -11864,6 +11967,19 @@ export async function startServer({
         send('error', createSseErrorPayload(
           'AGENT_EXECUTION_FAILED',
           'Agent completed without producing any output. The model or provider may have returned an empty response — check the agent logs for upstream errors.',
+          { retryable: true },
+        ));
+        return design.runs.finish(run, 'failed', code, signal);
+      }
+      if (
+        code === 0 &&
+        !run.cancelRequested &&
+        isPluginAuthoringRun(db, run) &&
+        !(await hasGeneratedPluginArtifacts(cwd))
+      ) {
+        send('error', createSseErrorPayload(
+          'AGENT_EXECUTION_FAILED',
+          'Plugin authoring ended before generating the required generated-plugin artifacts.',
           { retryable: true },
         ));
         return design.runs.finish(run, 'failed', code, signal);
@@ -12573,11 +12689,17 @@ export async function startServer({
           ? (reqBody.attachments as unknown[]).length > 0
           : false,
         user_query_tokens: userQueryTokens,
-        model_id: typeof reqBody.model === 'string' ? reqBody.model : null,
-        agent_provider_id:
-          typeof reqBody.agentId === 'string'
-            ? agentIdToTracking(reqBody.agentId)
-            : null,
+        // `modelIdForTracking` buckets null/empty into `'default'` so the
+        // PostHog `model_id` column always has an analysable value. The
+        // user-picked model only lands here on `run_created` (the agent
+        // hasn't initialised yet); `run_finished` below upgrades this to
+        // the agent-reported model when available.
+        model_id: modelIdForTracking(
+          typeof reqBody.model === 'string' ? reqBody.model : null,
+        ),
+        agent_provider_id: agentIdToTracking(
+          typeof reqBody.agentId === 'string' ? reqBody.agentId : null,
+        ),
         skill_id: typeof reqBody.skillId === 'string' ? reqBody.skillId : null,
         mcp_id: null,
         token_count_source: userQueryTokens > 0 ? 'estimated' : 'unknown',
@@ -12603,26 +12725,22 @@ export async function startServer({
         // child close without error event, etc.).
         const result = runResultFromStatus(status.status);
         const errorCode = deriveRunErrorCode(status);
-        let inputTokens: number | undefined;
-        let outputTokens: number | undefined;
-        for (let i = run.events.length - 1; i >= 0; i -= 1) {
-          const ev = run.events[i];
-          const data = ev?.data as
-            | { type?: string; usage?: Record<string, unknown> | null }
-            | null
-            | undefined;
-          if (ev?.event === 'agent' && data?.type === 'usage' && data.usage) {
-            const u = data.usage;
-            if (typeof u.input_tokens === 'number') inputTokens = u.input_tokens;
-            if (typeof u.output_tokens === 'number') outputTokens = u.output_tokens;
-            if (inputTokens !== undefined || outputTokens !== undefined) break;
-          }
-        }
+        // ACP reports { type:'status', label:'model', model:<id> } after
+        // session/new; stream adapters report { type:'status',
+        // label:'initializing', model:<id> } at run start. The scan must
+        // not short-circuit on usage before reaching the model signal —
+        // see `scanRunEventsForFinishedProps` for the invariant.
+        const { inputTokens, outputTokens, agentReportedModel } =
+          scanRunEventsForFinishedProps(run.events, reqBody.model);
         const haveUsage = inputTokens !== undefined || outputTokens !== undefined;
         const totalTokens =
           inputTokens !== undefined && outputTokens !== undefined
             ? inputTokens + outputTokens
             : undefined;
+        const finishedModelId =
+          typeof reqBody.model === 'string' && reqBody.model.trim()
+            ? modelIdForTracking(reqBody.model)
+            : modelIdForTracking(agentReportedModel);
         design.analytics.capture({
           eventName: 'run_finished',
           context: analyticsContext,
@@ -12634,6 +12752,10 @@ export async function startServer({
             // `design_system_generation` to match the run_created shape.
             area: isDesignSystemRun ? 'design_system_generation' : 'chat_panel',
             result,
+            // `model_id` upgrades the request-side value with the
+            // agent-reported model on terminal state; see
+            // `finishedModelId` derivation above.
+            model_id: finishedModelId,
             // Incremental count of `.html` paths the run produced or
             // modified, deduped per file. Replaces the hard-coded `0`
             // that masked the "did this run actually generate an
@@ -13088,7 +13210,8 @@ export async function startServer({
     };
     let server;
     try {
-      server = app.listen(port, host, () => {
+      server = app.listen(port, host);
+      server.once('listening', () => {
         // Widen the between-request idle window so kept-alive sockets
         // belonging to chat/SSE clients survive the gaps between bursts.
         //
@@ -13111,10 +13234,8 @@ export async function startServer({
         //
         // `headersTimeout` must exceed `keepAliveTimeout` per the Node
         // docs; otherwise a slow-loris client can stall request parsing.
-        if (server) {
-          server.keepAliveTimeout = 120_000;
-          server.headersTimeout = 125_000;
-        }
+        server.keepAliveTimeout = 120_000;
+        server.headersTimeout = 125_000;
         const address = server.address();
         // `address()` can in theory return `string | AddressInfo | null`. For
         // a TCP listener it's always `AddressInfo` with a `.port` — the guard

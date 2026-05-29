@@ -22,7 +22,9 @@ import {
 } from "../analytics/events";
 import {
   feedbackAgentProviderIdToTracking,
+  modelIdForTracking,
   normalizeCustomReason,
+  type TrackingFeedbackProviderId,
   type TrackingFeedbackReasonCode,
   type TrackingFeedbackRatingWithNone,
   type TrackingProjectKind,
@@ -659,7 +661,7 @@ export function AssistantMessage({
                 conversationId={conversationId}
                 runId={message.runId ?? null}
                 assistantMessageId={message.id}
-                modelId={assistantFeedbackModelId(message)}
+                modelId={modelIdForTracking(assistantFeedbackModelId(message))}
                 agentProviderId={feedbackAgentProviderIdToTracking(message.agentId)}
                 producedFileCount={displayedProduced.length}
                 hasDesignSystemContext={hasDesignSystemContext}
@@ -883,8 +885,8 @@ function AssistantFeedback({
   conversationId: string | null;
   runId: string | null;
   assistantMessageId: string;
-  modelId: string | null;
-  agentProviderId: ReturnType<typeof feedbackAgentProviderIdToTracking>;
+  modelId: string;
+  agentProviderId: TrackingFeedbackProviderId;
   producedFileCount: number;
 }) {
   const t = useT();
@@ -939,6 +941,8 @@ function AssistantFeedback({
         conversation_id: conversationId,
         assistant_message_id: assistantMessageId,
         run_id: runId ?? null,
+        agent_provider_id: agentProviderId,
+        model_id: modelId,
         rating: reasonRating,
       });
     }
@@ -950,6 +954,8 @@ function AssistantFeedback({
     conversationId,
     assistantMessageId,
     runId,
+    agentProviderId,
+    modelId,
   ]);
   const toggleFeedback = (rating: ChatMessageFeedbackRating) => {
     const nextRating = selected === rating ? null : rating;
@@ -973,6 +979,8 @@ function AssistantFeedback({
       conversation_id: conversationId,
       assistant_message_id: assistantMessageId,
       run_id: runId ?? "",
+      agent_provider_id: agentProviderId,
+      model_id: modelId,
       rating,
       rating_before: ratingBefore,
       has_produced_files: producedFileCount > 0,
@@ -992,6 +1000,8 @@ function AssistantFeedback({
         conversation_id: conversationId,
         assistant_message_id: assistantMessageId,
         run_id: runId ?? null,
+        agent_provider_id: agentProviderId,
+        model_id: modelId,
         rating: ratingAfter,
         rating_before: ratingBefore,
         has_produced_files: producedFileCount > 0,
@@ -1031,6 +1041,8 @@ function AssistantFeedback({
         conversation_id: conversationId,
         assistant_message_id: assistantMessageId,
         run_id: runId ?? "",
+        agent_provider_id: agentProviderId,
+        model_id: modelId,
         rating: reasonRating,
         ...(reasonJoined ? { reason: reasonJoined } : {}),
         reason_count: reasonCodes.length,
@@ -1055,8 +1067,8 @@ function AssistantFeedback({
         conversation_id: conversationId,
         assistant_message_id: assistantMessageId,
         run_id: runId ?? "",
-        model_id: modelId,
         agent_provider_id: agentProviderId,
+        model_id: modelId,
         rating: reasonRating,
         ...(reasonJoined ? { reason: reasonJoined } : {}),
         reason_count: reasonCodes.length,
@@ -1080,6 +1092,8 @@ function AssistantFeedback({
         conversation_id: conversationId,
         assistant_message_id: assistantMessageId,
         run_id: runId ?? null,
+        agent_provider_id: agentProviderId,
+        model_id: modelId,
         rating: reasonRating,
         reason: reasons,
         reason_count: reasons.length,
