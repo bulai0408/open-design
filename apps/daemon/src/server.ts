@@ -132,6 +132,7 @@ import {
   registerBuiltInAtomWorkers,
   registerBundledPlugins,
   registryRootsForDataDir,
+  restoreProjectSnapshotLink,
   resolvePluginSnapshot,
   runPipelineForRun,
   runStageWithRegistry,
@@ -367,6 +368,7 @@ import {
   insertProject,
   insertRoutine,
   insertRoutineRun,
+  insertScheduledRoutineRun,
   insertTemplate,
   findTemplateByNameAndProject,
   updateTemplate,
@@ -4016,8 +4018,8 @@ export async function startServer({
   // delegates "list me everything" / "record a run" back to SQLite.
   routineService = new RoutineService({
     list: () => listRoutines(db).map((row) => routineDbRowToContract(row, null)),
-    insertRun: (run) => {
-      insertRoutineRun(db, {
+    insertRun: (run, options) => {
+      const row = {
         id: run.id,
         routineId: run.routineId,
         trigger: run.trigger,
@@ -4030,7 +4032,12 @@ export async function startServer({
         summary: run.summary,
         error: run.error,
         errorCode: run.errorCode,
-      });
+      };
+      if (options?.scheduledSlotAt != null) {
+        return Boolean(insertScheduledRoutineRun(db, row, options.scheduledSlotAt));
+      }
+      insertRoutineRun(db, row);
+      return true;
     },
     updateRun: (id, patch) => {
       updateRoutineRun(db, id, patch);
@@ -12923,12 +12930,13 @@ export async function startServer({
     const stamp = formatLocalProjectTimestamp(new Date(now).toISOString());
     let projectId;
     let projectName;
-    if (routine.target.mode === 'reuse') {
-      const project = getProject(db, routine.target.projectId);
-      if (!project) throw new Error(`Routine target project ${routine.target.projectId} not found`);
-      projectId = project.id;
-      projectName = project.name;
-    } else {
+    const scheduledPlaceholderProjectId = `routine-pending-project-${runId}`;
+    const scheduledPlaceholderConversationId = `routine-pending-conv-${runId}`;
+    let createdProjectId: string | null = null;
+    let createdConversationId: string | null = null;
+    let previousProjectSnapshotId: string | null = null;
+    const createRoutineProject = () => {
+      if (createdProjectId) return;
       projectId = `routine-${randomUUID()}`;
       projectName = `${routine.name} · ${stamp}`;
       insertProject(db, {
@@ -12948,67 +12956,102 @@ export async function startServer({
         createdAt: now,
         updatedAt: now,
       });
+      createdProjectId = projectId;
+    };
+    if (routine.target.mode === 'reuse') {
+      const project = getProject(db, routine.target.projectId);
+      if (!project) throw new Error(`Routine target project ${routine.target.projectId} not found`);
+      projectId = project.id;
+      projectName = project.name;
+      previousProjectSnapshotId = project.appliedPluginSnapshotId ?? null;
     }
 
-    const conversationId = `routine-conv-${randomUUID()}`;
-    const conversationTitle = routine.target.mode === 'reuse'
+    let conversationId = `routine-conv-${randomUUID()}`;
+    let conversationCreatedEvent: ProjectConversationCreatedSsePayload | null = null;
+    const routineConversationTitle = () => routine.target.mode === 'reuse'
       ? `${routine.name} · ${stamp}`
       : projectName;
-    insertConversation(db, {
-      id: conversationId,
-      projectId,
-      title: conversationTitle,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    // Notify any open `ProjectView` watching this project so its
-    // conversation list picks up the new routine conversation without
-    // requiring the user to leave and re-enter the project (#1361).
-    // For reuse-an-existing-project mode this is the only path the
-    // open view has to learn the conversation exists; for new-project
-    // mode this is harmless (no subscribers for a project that was
-    // just created milliseconds ago). The payload shape is the shared
-    // `ProjectConversationCreatedSsePayload` from `@open-design/contracts`
-    // so the daemon producer and the web consumer cannot drift.
-    /** @type {ProjectConversationCreatedSsePayload} */
-    const conversationCreatedEvent = {
-      type: 'conversation-created',
-      projectId,
-      conversationId,
-      title: conversationTitle,
-      createdAt: now,
+    const createRoutineConversation = () => {
+      if (createdConversationId) return;
+      if (!projectId) createRoutineProject();
+      if (!projectId) throw new Error('Routine project could not be prepared');
+      conversationId = `routine-conv-${randomUUID()}`;
+      insertConversation(db, {
+        id: conversationId,
+        projectId,
+        title: routineConversationTitle(),
+        createdAt: now,
+        updatedAt: now,
+      });
+      createdConversationId = conversationId;
+      conversationCreatedEvent = {
+        type: 'conversation-created',
+        projectId,
+        conversationId,
+        title: routineConversationTitle(),
+        createdAt: now,
+      };
     };
-    emitProjectEvent(projectId, conversationCreatedEvent);
 
     const assistantMessageId = `routine-assistant-${randomUUID()}`;
     let resolvedRoutineSnapshot = null;
+    // Tracks any snapshot id that `resolvePluginSnapshot()` already pinned
+    // to the reused project before the resolver threw on a later linking
+    // step. `finalizeOk()` performs `linkSnapshotToProject()` BEFORE
+    // `linkSnapshotToConversation()` / `linkSnapshotToRun()`, so a failure
+    // mid-resolve can leave `projects.applied_plugin_snapshot_id` repointed
+    // at a snapshot the routine never durably claimed. The rollback path in
+    // `discard()` falls back to this id when `resolvedRoutineSnapshot` is
+    // still null so the reused project pin is restored either way.
+    let partiallyAppliedSnapshotId: string | null = null;
     const primaryPluginId = routineContext.pluginIds?.[0] ?? null;
-    if (primaryPluginId) {
+    const resolveRoutinePluginSnapshot = async () => {
+      if (!primaryPluginId || resolvedRoutineSnapshot) return;
       const registry = await loadPluginRegistryView();
-      const resolved = resolvePluginSnapshot({
-        db,
-        body: {
-          pluginId: primaryPluginId,
-          pluginInputs: { prompt: routine.prompt },
-        },
-        projectId,
-        conversationId,
-        registry,
-        activeProjectDesignSystem:
-          typeof appConfig.designSystemId === 'string' && appConfig.designSystemId.length > 0
-            ? { id: appConfig.designSystemId }
-            : undefined,
-      });
+      const projectSnapshotBefore = routine.target.mode === 'reuse'
+        ? getProject(db, routine.target.projectId)?.appliedPluginSnapshotId ?? null
+        : null;
+      let resolved;
+      try {
+        resolved = resolvePluginSnapshot({
+          db,
+          body: {
+            pluginId: primaryPluginId,
+            pluginInputs: { prompt: routine.prompt },
+          },
+          projectId,
+          conversationId,
+          registry,
+          activeProjectDesignSystem:
+            typeof appConfig.designSystemId === 'string' && appConfig.designSystemId.length > 0
+              ? { id: appConfig.designSystemId }
+              : undefined,
+        });
+      } catch (resolverError) {
+        // `resolvePluginSnapshot()` may have already updated the reused
+        // project's pin via `linkSnapshotToProject()` before throwing on
+        // `linkSnapshotToConversation()` (or `linkSnapshotToRun()`). Capture
+        // whatever pin it left behind so `discard()` can roll it back even
+        // though `resolvedRoutineSnapshot` will stay null.
+        if (routine.target.mode === 'reuse') {
+          const after = getProject(db, routine.target.projectId)?.appliedPluginSnapshotId ?? null;
+          if (after && after !== projectSnapshotBefore) {
+            partiallyAppliedSnapshotId = after;
+          }
+        }
+        throw resolverError;
+      }
       if (resolved && !resolved.ok) {
+        // Non-throwing resolver failures cannot have called `finalizeOk()`,
+        // so the project pin is still the previous one — nothing to roll
+        // back beyond the loser cleanup the caller will perform.
         throw new Error(`Automation plugin ${primaryPluginId} could not be applied: ${JSON.stringify(resolved.body)}`);
       }
       resolvedRoutineSnapshot = resolved;
-    }
-
+    };
     const run = design.runs.create({
-      projectId,
-      conversationId,
+      projectId: projectId ?? scheduledPlaceholderProjectId,
+      conversationId: createdConversationId ? conversationId : scheduledPlaceholderConversationId,
       assistantMessageId,
       clientRequestId: `routine-${trigger}-${randomUUID()}`,
       agentId,
@@ -13019,48 +13062,115 @@ export async function startServer({
           }
         : {}),
     });
-    if (resolvedRoutineSnapshot?.ok) {
-      try {
+    const persistPreparedRun = async (routineRun = null) => {
+      if (!projectId) {
+        createRoutineProject();
+      }
+      if (projectId) {
+        run.projectId = projectId;
+        if (routineRun) {
+          routineRun.projectId = projectId;
+        }
+      }
+      createRoutineConversation();
+      run.conversationId = conversationId;
+      if (routineRun) {
+        routineRun.conversationId = conversationId;
+        routineRun.agentRunId = run.id;
+      }
+      await resolveRoutinePluginSnapshot();
+      if (resolvedRoutineSnapshot?.ok) {
+        run.appliedPluginSnapshotId = resolvedRoutineSnapshot.snapshotId;
+        run.pluginId = resolvedRoutineSnapshot.snapshot.pluginId;
         const { linkSnapshotToRun } = await import('./plugins/snapshots.js');
         linkSnapshotToRun(db, resolvedRoutineSnapshot.snapshotId, run.id);
-      } catch {
-        // Snapshot linking is best-effort; the in-memory run still carries it.
       }
-    }
-    upsertMessage(db, conversationId, {
-      id: `routine-user-${run.id}`,
-      role: 'user',
-      content: routine.prompt,
-    });
-    upsertMessage(db, conversationId, {
-      id: assistantMessageId,
-      role: 'assistant',
-      content: '',
-      agentId,
-      agentName: getAgentDef(agentId)?.name ?? agentId,
-      runId: run.id,
-      runStatus: 'queued',
-      startedAt: now,
-    });
+      upsertMessage(db, conversationId, {
+        id: `routine-user-${run.id}`,
+        role: 'user',
+        content: routine.prompt,
+      });
+      upsertMessage(db, conversationId, {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        agentId,
+        agentName: getAgentDef(agentId)?.name ?? agentId,
+        runId: run.id,
+        runStatus: 'queued',
+        startedAt: now,
+      });
+    };
 
     const modelPrefs = appConfig.agentModels?.[agentId] ?? {};
-    design.runs.start(run, () => startChatRun({
-      agentId,
-      projectId,
-      conversationId: run.conversationId,
-      assistantMessageId: run.assistantMessageId,
-      clientRequestId: run.clientRequestId,
-      skillId: routineSkillId,
-      designSystemId: appConfig.designSystemId ?? null,
-      context: routineContext,
-      model: modelPrefs.model ?? null,
-      reasoning: modelPrefs.reasoning ?? null,
-      message: routine.prompt,
-      systemPrompt: [
-        `You are running an unattended scheduled routine named "${routine.name}".`,
-        'Do not ask follow-up questions, do not emit <question-form>, and do not wait for user input. Pick reasonable defaults and finish the task.',
-      ].join('\n'),
-    }, run));
+    const start = () => {
+      // Notify any open `ProjectView` only after the routine run row has
+      // been accepted and preparation has completed, so failed setup does not
+      // surface phantom conversations (#1361).
+      if (conversationCreatedEvent) emitProjectEvent(projectId, conversationCreatedEvent);
+      design.runs.start(run, () => startChatRun({
+        agentId,
+        projectId,
+        conversationId: run.conversationId,
+        assistantMessageId: run.assistantMessageId,
+        clientRequestId: run.clientRequestId,
+        skillId: routineSkillId,
+        designSystemId: appConfig.designSystemId ?? null,
+        context: routineContext,
+        model: modelPrefs.model ?? null,
+        reasoning: modelPrefs.reasoning ?? null,
+        message: routine.prompt,
+        systemPrompt: [
+          `You are running an unattended scheduled routine named "${routine.name}".`,
+          'Do not ask follow-up questions, do not emit <question-form>, and do not wait for user input. Pick reasonable defaults and finish the task.',
+        ].join('\n'),
+      }, run));
+    };
+
+    // Tear-down for the case where the durable routine_run row was never
+    // inserted (sibling daemon won the slot, or insertRun threw). The
+    // in-memory chat run was created speculatively above, but the deferred
+    // `persistPreparedRun()` has not run yet — so no project / conversation
+    // / snapshot writes have to be rolled back. Dropping the run keeps it
+    // off `/api/runs` instead of leaving a phantom canceled entry there.
+    const discardUnstarted = () => {
+      design.runs.drop(run);
+    };
+
+    const discard = () => {
+      if (typeof run.projectId === 'string' && run.projectId.startsWith('routine-pending-')) {
+        run.projectId = null;
+      }
+      if (typeof run.conversationId === 'string' && run.conversationId.startsWith('routine-pending-')) {
+        run.conversationId = null;
+      }
+      design.runs.finish(run, 'canceled');
+      if (routine.target.mode === 'reuse') {
+        // Prefer the fully-resolved snapshot id; fall back to whatever id
+        // `resolvePluginSnapshot()` left pinned on the project if it threw
+        // partway through linking — see the comment on
+        // `partiallyAppliedSnapshotId` above.
+        const snapshotIdToDiscard =
+          resolvedRoutineSnapshot?.ok
+            ? resolvedRoutineSnapshot.snapshotId
+            : partiallyAppliedSnapshotId;
+        if (snapshotIdToDiscard) {
+          restoreProjectSnapshotLink(
+            db,
+            projectId,
+            snapshotIdToDiscard,
+            previousProjectSnapshotId,
+            run.id,
+          );
+        }
+      }
+      if (createdConversationId) {
+        deleteConversation(db, createdConversationId);
+      }
+      if (createdProjectId) {
+        dbDeleteProject(db, createdProjectId);
+      }
+    };
 
     const completion = (async () => {
       const finalStatus = await design.runs.wait(run);
@@ -13110,7 +13220,16 @@ export async function startServer({
       };
     })();
 
-    return { projectId, conversationId, agentRunId: run.id, completion };
+    return {
+      projectId: run.projectId,
+      conversationId: run.conversationId,
+      agentRunId: run.id,
+      completion,
+      prepare: persistPreparedRun,
+      start,
+      discard,
+      discardUnstarted,
+    };
   });
   routineService.start();
 
