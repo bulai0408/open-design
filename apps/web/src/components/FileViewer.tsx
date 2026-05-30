@@ -4668,19 +4668,31 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     };
   }, [source, effectiveDeck, projectId, file.name, useUrlLoadPreview]);
 
+  const buildPreviewSrcDoc = useCallback(() => {
+    if (!previewSource) return '';
+    return buildSrcdoc(previewSource, {
+      deck: effectiveDeck,
+      baseHref: projectRawUrl(projectId, baseDirFor(file.name)),
+      initialSlideIndex: htmlPreviewSlideState.get(previewStateKey)?.active ?? 0,
+      selectionBridge: true,
+      editBridge: manualEditMode,
+      paletteBridge: false,
+      previewFocusGuard: true,
+    });
+  }, [
+    previewSource,
+    effectiveDeck,
+    projectId,
+    file.name,
+    previewStateKey,
+    manualEditMode,
+  ]);
+
   const srcDoc = useMemo(() => {
     if (!previewSource) return '';
     if (srcDocWrapFailure === previewSource) return SRC_DOC_PREVIEW_WRAP_FAILURE_PLACEHOLDER;
     try {
-      return buildSrcdoc(previewSource, {
-        deck: effectiveDeck,
-        baseHref: projectRawUrl(projectId, baseDirFor(file.name)),
-        initialSlideIndex: htmlPreviewSlideState.get(previewStateKey)?.active ?? 0,
-        selectionBridge: true,
-        editBridge: manualEditMode,
-        paletteBridge: false,
-        previewFocusGuard: true,
-      });
+      return buildPreviewSrcDoc();
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       console.warn(
@@ -4704,11 +4716,8 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     activePreviewSrcUrl,
     previewSource,
     srcDocWrapFailure,
-    effectiveDeck,
-    projectId,
+    buildPreviewSrcDoc,
     file.name,
-    previewStateKey,
-    manualEditMode,
     clearSrcDocOnlyPreviewModes,
   ]);
   const lazySrcDocTransport = useMemo(() => buildLazySrcdocTransport(), []);
@@ -4808,11 +4817,14 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     run(target);
     return true;
   }, []);
-  const activateSrcDocSnapshotTransport = useCallback((target: HTMLIFrameElement | null = srcDocPreviewIframeRef.current) => {
-    if (!srcDoc) return false;
+  const activateSrcDocSnapshotTransport = useCallback((
+    target: HTMLIFrameElement | null = srcDocPreviewIframeRef.current,
+    html = srcDoc,
+  ) => {
+    if (!html || html === SRC_DOC_PREVIEW_WRAP_FAILURE_PLACEHOLDER) return false;
     const win = target?.contentWindow;
     if (!win) return false;
-    win.postMessage({ type: 'od:srcdoc-transport-activate', html: srcDoc }, '*');
+    win.postMessage({ type: 'od:srcdoc-transport-activate', html }, '*');
     return true;
   }, [srcDoc]);
   useEffect(() => {
@@ -6415,17 +6427,33 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
       return activeIframe ? requestPreviewSnapshot(activeIframe) : null;
     }
 
+    let snapshotSrcDoc = srcDoc;
+    if (srcDocWrapFailure === previewSource || snapshotSrcDoc === SRC_DOC_PREVIEW_WRAP_FAILURE_PLACEHOLDER) {
+      if (!previewSource) return null;
+      try {
+        snapshotSrcDoc = buildPreviewSrcDoc();
+        setSrcDocWrapFailure((current) => (current === previewSource ? null : current));
+      } catch (err) {
+        console.warn('[exportAsImage] failed to rebuild srcdoc snapshot after wrap failure:', err);
+        return null;
+      }
+    }
+
     if (!srcDocShellReady) {
       await waitForIframeLoadOrTimeout(srcDocIframe, 500);
     }
-    const activated = activateSrcDocSnapshotTransport(srcDocIframe);
+    const activated = activateSrcDocSnapshotTransport(srcDocIframe, snapshotSrcDoc);
     if (activated) {
       await waitForIframeLoadOrTimeout(srcDocIframe);
     }
     return requestPreviewSnapshot(srcDocIframe);
   }, [
     activateSrcDocSnapshotTransport,
+    buildPreviewSrcDoc,
+    previewSource,
+    srcDoc,
     srcDocShellReady,
+    srcDocWrapFailure,
     useUrlLoadPreview,
   ]);
 

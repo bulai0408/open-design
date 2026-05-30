@@ -1168,6 +1168,87 @@ describe('FileViewer SVG artifacts', () => {
     expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
   });
 
+  it('rebuilds srcdoc for Share -> Export Image after a transient wrap failure', async () => {
+    const actualSrcdoc = await vi.importActual<typeof import('../../src/runtime/srcdoc')>(
+      '../../src/runtime/srcdoc',
+    );
+    const file = baseFile({
+      name: 'deck.html',
+      path: 'deck.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'deck',
+        title: 'Deck',
+        entry: 'deck.html',
+        renderer: 'deck-html',
+        exports: ['html'],
+      },
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    requestPreviewSnapshotMock.mockResolvedValue({
+      dataUrl: 'data:image/png;base64,AAAA',
+      w: 100,
+      h: 80,
+    });
+
+    function Host() {
+      const [html, setHtml] = useState(
+        '<html><body><section class="slide">Initial slide</section></body></html>',
+      );
+      return (
+        <>
+          <button
+            type="button"
+            data-testid="bump-source"
+            onClick={() => setHtml('<html><body><section class="slide">Recovered slide</section></body></html>')}
+          >
+            bump source
+          </button>
+          <FileViewer
+            projectId="project-1"
+            projectKind="prototype"
+            file={file}
+            isDeck
+            liveHtml={html}
+          />
+        </>
+      );
+    }
+
+    render(<Host />);
+
+    expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
+    const srcdocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
+    const postMessageSpy = vi.spyOn(srcdocFrame.contentWindow!, 'postMessage');
+    fireEvent.load(srcdocFrame);
+
+    buildSrcdocMock.mockImplementation(() => {
+      throw new Error('wrap failed once');
+    });
+    fireEvent.click(screen.getByTestId('bump-source'));
+    await waitFor(() => {
+      expect(warnSpy).toHaveBeenCalledWith(
+        'open-design preview fallback: srcdoc iframe failed; loading raw URL instead',
+        expect.objectContaining({
+          stage: 'wrap',
+        }),
+      );
+    });
+    buildSrcdocMock.mockImplementation(actualSrcdoc.buildSrcdoc);
+
+    fireEvent.click(screen.getByRole('button', { name: /share/i }));
+    fireEvent.click(await screen.findByTestId('share-menu-export-image'));
+
+    await waitFor(() => {
+      expect(requestPreviewSnapshotMock).toHaveBeenCalledWith(srcdocFrame);
+    });
+    const activations = srcDocActivationMessages(postMessageSpy.mock.calls);
+    expect(activations.at(-1)?.html).toContain('Recovered slide');
+    expect(activations.at(-1)?.html).not.toBe('<!doctype html><html><body></body></html>');
+  });
+
   it('falls back to URL-load when srcdoc transport activation reports a write failure', async () => {
     const file = baseFile({
       name: 'deck.html',
