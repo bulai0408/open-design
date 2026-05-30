@@ -2196,6 +2196,87 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
     );
   });
 
+  it('uses the selected wrapper candidate when a failed Codex test reports a resolved native binary', async () => {
+    const codex: AgentInfo = {
+      id: 'codex',
+      name: 'Codex CLI',
+      bin: 'codex',
+      available: true,
+      path: '/Users/mac/.codex/bin/codex',
+      version: '0.80.0',
+      models: [{ id: 'default', label: 'Default' }],
+      executableCandidates: [
+        {
+          path: '/Users/mac/.codex/bin/codex',
+          bin: 'codex',
+          version: '0.80.0',
+          source: 'known',
+          selected: true,
+          available: true,
+        },
+        {
+          path: '/opt/homebrew/bin/codex',
+          bin: 'codex',
+          version: '0.81.0',
+          source: 'path',
+          selected: false,
+          available: true,
+        },
+      ],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          kind: 'agent_spawn_failed',
+          latencyMs: 14,
+          agentName: 'Codex CLI',
+          model: 'default',
+          detail:
+            'spawn failed. Used Codex CLI binary: /opt/homebrew/Cellar/codex/0.80.0/bin/codex.',
+          usedExecutableSource: 'known',
+          usedExecutablePath: '/opt/homebrew/Cellar/codex/0.80.0/bin/codex',
+          detectedExecutablePath: '/opt/homebrew/Cellar/codex/0.80.0/bin/codex',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { onPersist } = renderSettingsDialog(
+      { mode: 'daemon', agentId: 'codex' },
+      { agents: [codex] },
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*1 installed/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Used Codex CLI binary: \/opt\/homebrew\/Cellar\/codex/)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Try next candidate/i }));
+
+    await waitForPersist(
+      onPersist,
+      expect.objectContaining({
+        agentCliEnv: {
+          codex: {
+            CODEX_BIN: '/opt/homebrew/bin/codex',
+          },
+        },
+      }),
+      {},
+    );
+  });
+
   it('offers Try next candidate for a broken configured OpenCode path with one healthy alternate', async () => {
     const opencode: AgentInfo = {
       id: 'opencode',

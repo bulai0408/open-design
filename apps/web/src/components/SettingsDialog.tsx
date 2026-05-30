@@ -814,18 +814,23 @@ function nextExecutableCandidatePath(
     (candidate) => candidate.available && candidate.path,
   );
   if (availableCandidates.length === 0) return null;
-  const usedPath = result.usedExecutablePath ?? result.detectedExecutablePath ?? agent.path ?? '';
-  if (
-    candidates.length < 2 &&
-    availableCandidates.every((candidate) => candidate.path === usedPath)
-  ) {
-    return null;
-  }
-  const usedIndex = availableCandidates.findIndex((candidate) => candidate.path === usedPath);
+  const reportedPaths = [
+    result.usedExecutablePath?.trim(),
+    result.detectedExecutablePath?.trim(),
+  ].filter((path): path is string => Boolean(path));
+  const reportedCandidatePath =
+    reportedPaths.find((path) => candidates.some((candidate) => candidate.path === path)) ?? '';
+  const selectedCandidatePath =
+    candidates.find((candidate) => candidate.selected && candidate.path)?.path ??
+    agent.path?.trim() ??
+    '';
+  const cursorPath = reportedCandidatePath || selectedCandidatePath;
+  if (!availableCandidates.some((candidate) => candidate.path !== cursorPath)) return null;
+  const usedIndex = availableCandidates.findIndex((candidate) => candidate.path === cursorPath);
   const start = usedIndex >= 0 ? usedIndex + 1 : 0;
   for (let offset = 0; offset < availableCandidates.length; offset += 1) {
     const candidate = availableCandidates[(start + offset) % availableCandidates.length];
-    if (candidate && candidate.path !== usedPath) return candidate.path;
+    if (candidate && candidate.path !== cursorPath) return candidate.path;
   }
   return null;
 }
