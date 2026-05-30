@@ -146,6 +146,9 @@ describe('run-end artifact manifest reconciliation (#2893)', () => {
 
     // File written during the run
     await writeProjectFile(projectsRoot, PROJECT_ID, 'new-output.html', '<p>new</p>');
+    const newPath = path.join(projectsRoot, PROJECT_ID, 'new-output.html');
+    const afterRunStart = new Date(runStartTimeMs + 1000);
+    fs.utimesSync(newPath, afterRunStart, afterRunStart);
 
     // Simulate the close-handler reconciliation with mtime filter
     const dir = path.join(projectsRoot, PROJECT_ID);
