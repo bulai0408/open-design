@@ -1,10 +1,20 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DesignFilesPanel } from '../../src/components/DesignFilesPanel';
 import type { ProjectFile, ProjectFileKind } from '../../src/types';
+
+// Stub localStorage so the component's view-state persistence writes to an
+// in-memory store. Cleared in beforeEach so no test bleeds state into the next.
+const lsStore = new Map<string, string>();
+vi.stubGlobal('localStorage', {
+  getItem: (key: string) => lsStore.get(key) ?? null,
+  setItem: (key: string, value: string) => { lsStore.set(key, value); },
+  removeItem: (key: string) => { lsStore.delete(key); },
+  clear: () => { lsStore.clear(); },
+});
 
 function extForKind(kind: ProjectFileKind): string {
   if (kind === 'html') return 'html';
@@ -84,6 +94,10 @@ function getSelects(container: HTMLElement) {
 }
 
 describe('DesignFilesPanel grouping', () => {
+  beforeEach(() => {
+    lsStore.clear();
+  });
+
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
@@ -301,6 +315,16 @@ describe('DesignFilesPanel grouping', () => {
 });
 
 describe('DesignFilesPanel large-list regression', () => {
+  beforeEach(() => {
+    lsStore.clear();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => lsStore.get(key) ?? null,
+      setItem: (key: string, value: string) => { lsStore.set(key, value); },
+      removeItem: (key: string) => { lsStore.delete(key); },
+      clear: () => { lsStore.clear(); },
+    });
+  });
+
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();

@@ -220,6 +220,7 @@ import {
   classifyAgentServiceFailure,
   cursorAuthGuidance,
 } from './runtimes/auth.js';
+import { readOpenCodeServiceFailure } from './runtimes/opencode-log.js';
 import { createQoderStreamHandler } from './qoder-stream.js';
 import { subscribe as subscribeFileEvents } from './project-watchers.js';
 import { renderDesignSystemPreview } from './design-system-preview.js';
@@ -3960,6 +3961,29 @@ export async function startServer({
     return { ok: true, id };
   }
 
+  async function validateProjectSkillId(id) {
+    if (id === undefined || id === null || id === '') {
+      return { ok: true, id: null };
+    }
+    if (typeof id !== 'string') {
+      return {
+        ok: false,
+        code: 'INVALID_SKILL_ID',
+        message: 'skillId must be a string or null',
+      };
+    }
+    const skills = await listAllSkillLikeEntries();
+    const resolved = findSkillById(skills, id);
+    if (!resolved) {
+      return {
+        ok: false,
+        code: 'SKILL_NOT_FOUND',
+        message: 'skill not found',
+      };
+    }
+    return { ok: true, id: resolved.id };
+  }
+
   function userDesignSystemWorkspaceProjectId(id) {
     if (typeof id !== 'string' || !id.startsWith('user:')) return null;
     const dirId = id.slice('user:'.length);
@@ -5601,7 +5625,7 @@ export async function startServer({
     EmptyTranscriptError,
     redactSecrets,
   };
-  const validationDeps = { isSafeId, validateExternalApiBaseUrl, validateBaseUrl, validateProjectDesignSystemId };
+  const validationDeps = { isSafeId, validateExternalApiBaseUrl, validateBaseUrl, validateProjectDesignSystemId, validateProjectSkillId };
   const agentDeps = {
     listProviderModels,
     testProviderConnection,
@@ -11522,13 +11546,36 @@ export async function startServer({
         scheduleForcedChildShutdown();
         return;
       }
-      const message =
-        `Agent stalled without emitting any new output for ${Math.round(inactivityTimeoutMs / 1000)}s. ` +
-        'The model or CLI likely hung while generating. ' +
-        `Phase details: spawned agent ${userFacingAgentLabel(agentId, resolvedBin)}; stdout arrived: ${childStdoutSeen ? 'yes' : 'no'}; ` +
-        `last agent event: ${lastAgentEventPhase}; largest tool result observed: ${lastToolResultChars} chars. ` +
-        'Retry the turn, pick a different model, or start a new conversation if the prior context is very large.';
-      send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', message, { retryable: true }));
+      // OpenCode retries a 429 usage-limit silently and emits nothing on
+      // stdout/stderr, so the watchdog is the first signal we get. The real
+      // reason is recorded only in OpenCode's own session log — recover it
+      // and surface it HERE, before finish() tears down the live SSE
+      // clients, so a viewer sees "usage limit reached" instead of the
+      // generic stall message. Bound to this run via `since` so a stale or
+      // concurrent session's error can't be misattributed. See issue #982.
+      let stallPayload = null;
+      if (agentId === 'opencode') {
+        const logFailure = readOpenCodeServiceFailure(spawnedAgentEnv, {
+          since: run.createdAt,
+        });
+        if (logFailure) {
+          stallPayload = createSseErrorPayload(
+            logFailure.code,
+            logFailure.message,
+            { retryable: true },
+          );
+        }
+      }
+      if (!stallPayload) {
+        const message =
+          `Agent stalled without emitting any new output for ${Math.round(inactivityTimeoutMs / 1000)}s. ` +
+          'The model or CLI likely hung while generating. ' +
+          `Phase details: spawned agent ${userFacingAgentLabel(agentId, resolvedBin)}; stdout arrived: ${childStdoutSeen ? 'yes' : 'no'}; ` +
+          `last agent event: ${lastAgentEventPhase}; largest tool result observed: ${lastToolResultChars} chars. ` +
+          'Retry the turn, pick a different model, or start a new conversation if the prior context is very large.';
+        stallPayload = createSseErrorPayload('AGENT_EXECUTION_FAILED', message, { retryable: true });
+      }
+      send('error', stallPayload);
       design.runs.finish(run, 'failed', 1, null);
       if (acpSession?.abort) {
         acpSession.abort();
@@ -12435,7 +12482,13 @@ export async function startServer({
         acpCleanCompletion,
         artifactQuietShutdownRequested,
       });
-      if (status === 'failed') {
+      // Skip the close-handler failure emit when the run is already
+      // terminal: the inactivity watchdog (failForInactivity) finishes the
+      // run — sending its error and clearing run.clients/eventsLogStream —
+      // before SIGTERM, so re-emitting here would double-send the error and
+      // reopen the closed events-log stream. The run is finalized below
+      // regardless (finish() no-ops once terminal).
+      if (status === 'failed' && !design.runs.isTerminal(run.status)) {
         const diagnostic = diagnoseClaudeCliFailure({
           agentId: def.id,
           exitCode: code,
@@ -12465,17 +12518,36 @@ export async function startServer({
             { retryable: true },
           ));
         } else {
-          const rewritten = rewriteKnownAgentStreamError(
-            def.id,
-            (agentStderrTail || agentStdoutTail || '').trim(),
-            `${agentStderrTail}\n${agentStdoutTail}`,
-          );
-          if (rewritten !== 'Agent stream error') {
+          // OpenCode swallows provider failures in headless mode: a 429
+          // usage-limit is marked retryable and retried silently with
+          // nothing on stdout/stderr, so the run only dies via the
+          // inactivity watchdog and the checks above find no signal. The
+          // real reason is recorded only in OpenCode's own session log,
+          // so recover it before falling back to the generic rewrite.
+          // See issue #982.
+          const openCodeFailure =
+            def.id === 'opencode'
+              ? readOpenCodeServiceFailure(spawnedAgentEnv, { since: run.createdAt })
+              : null;
+          if (openCodeFailure) {
             send('error', createSseErrorPayload(
-              'AGENT_EXECUTION_FAILED',
-              rewritten,
+              openCodeFailure.code,
+              openCodeFailure.message,
               { retryable: true },
             ));
+          } else {
+            const rewritten = rewriteKnownAgentStreamError(
+              def.id,
+              (agentStderrTail || agentStdoutTail || '').trim(),
+              `${agentStderrTail}\n${agentStdoutTail}`,
+            );
+            if (rewritten !== 'Agent stream error') {
+              send('error', createSseErrorPayload(
+                'AGENT_EXECUTION_FAILED',
+                rewritten,
+                { retryable: true },
+              ));
+            }
           }
         }
       }

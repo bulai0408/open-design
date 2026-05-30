@@ -1711,7 +1711,23 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                         currentSkillId={currentSkillId}
                         onPick={async (skill) => {
                           const applied = await applyProjectSkill(skill);
-                          if (applied) setToolsOpen(false);
+                          if (!applied) return;
+                          const ta = textareaRef.current;
+                          const insert = `${inlineMentionToken(skill.name)} `;
+                          const currentDraft = ta?.value ?? draft;
+                          const cursor = ta?.selectionStart ?? currentDraft.length;
+                          const before = currentDraft.slice(0, cursor);
+                          const after = currentDraft.slice(cursor);
+                          const next = before + insert + after;
+                          setDraft(next);
+                          setToolsOpen(false);
+                          requestAnimationFrame(() => {
+                            const el = textareaRef.current;
+                            if (!el) return;
+                            el.focus();
+                            const pos = before.length + insert.length;
+                            el.setSelectionRange(pos, pos);
+                          });
                         }}
                       />
                     ) : null}
