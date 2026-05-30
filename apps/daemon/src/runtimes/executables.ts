@@ -2,13 +2,20 @@ import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter } from 'node:path';
 import path from 'node:path';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { wellKnownUserToolchainBins } from '@open-design/platform';
+import { resolveSandboxRuntimeConfigFromEnv } from '../sandbox-mode.js';
 import { expandHomePath } from './paths.js';
 import type {
   RuntimeAgentDef,
   RuntimeExecutableCandidate,
   RuntimeExecutableCandidateSource,
 } from './types.js';
+
+const RUNTIME_PROJECT_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../..',
+);
 
 export const AGENT_BIN_ENV_KEYS = new Map<string, string>([
   ['amr', 'VELA_BIN'],
@@ -39,7 +46,12 @@ let cachedToolchainDirs: string[] | null = null;
 let cachedToolchainDirsAt = 0;
 
 function userToolchainDirs() {
-  const homeOverride = process.env.OD_AGENT_HOME;
+  const sandboxRuntime = resolveSandboxRuntimeConfigFromEnv(
+    process.env,
+    RUNTIME_PROJECT_ROOT,
+  );
+  const homeOverride =
+    sandboxRuntime?.roots.agentHomeDir ?? process.env.OD_AGENT_HOME;
   const home = homeOverride || homedir();
   const now = Date.now();
   if (
