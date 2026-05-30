@@ -58,6 +58,8 @@ export interface Dict {
   'common.exportPdf': string;
   'common.exportZip': string;
   'common.exportHtml': string;
+  'common.exportImage': string;
+  'common.exportImageFailed': string;
   'common.justNow': string;
   'common.minutesAgo': string;
   'common.hoursAgo': string;
@@ -2127,6 +2129,12 @@ export interface Dict {
   'fileViewer.exportMd': string;
   'fileViewer.exportImage': string;
   'fileViewer.exportImageFailed': string;
+  'fileViewer.exportImageModalSubtitle': string;
+  'fileViewer.exportImageFormatLabel': string;
+  'fileViewer.exportImageSaving': string;
+  'fileViewer.exportImageSaved': string;
+  'fileViewer.exportImageDownloadStarted': string;
+  'fileViewer.exportImageDownloadDetails': string;
   'fileViewer.exportJsx': string;
   'fileViewer.exportReactHtml': string;
   'fileViewer.exportStarted': string;
