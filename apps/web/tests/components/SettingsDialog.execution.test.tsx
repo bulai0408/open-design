@@ -2038,6 +2038,10 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
     expect(screen.getByText('Detected OpenCode binaries')).toBeTruthy();
     expect(screen.getByText('/opt/homebrew/bin/opencode')).toBeTruthy();
     expect(screen.getByText('/Users/mac/.opencode/bin/opencode')).toBeTruthy();
+    expect(screen.getByText(/opencode 1\.1\.14 · the PATH OpenCode CLI/)).toBeTruthy();
+    expect(screen.getByText(/opencode 1\.2\.0 · the known OpenCode install/)).toBeTruthy();
+    expect(screen.queryByText(/opencode 1\.1\.14 · path/)).toBeNull();
+    expect(screen.queryByText(/opencode 1\.2\.0 · known/)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /Use OpenCode binary \/Users\/mac\/\.opencode\/bin\/opencode/i }));
 

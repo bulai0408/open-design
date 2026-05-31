@@ -3147,11 +3147,8 @@ export function SettingsDialog({
                         ?.path ||
                       selected.path ||
                       '';
-                    const cliStrings = cliPathStrings(
-                      locale,
-                      displayAgentName(selected),
-                      envKey,
-                    );
+                    const agentName = displayAgentName(selected);
+                    const cliStrings = cliPathStrings(locale, agentName, envKey);
                     return (
                       <div className="agent-candidates">
                         <div className="agent-candidates-head">
@@ -3180,7 +3177,11 @@ export function SettingsDialog({
                                     {candidate.version ||
                                       t('common.installed')}
                                     {' · '}
-                                    {candidate.source}
+                                    {cliExecutableSourceLabel(
+                                      locale,
+                                      agentName,
+                                      candidate.source,
+                                    )}
                                   </span>
                                 </div>
                                 <div className="agent-candidate-actions">
