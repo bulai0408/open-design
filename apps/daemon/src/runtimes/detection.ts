@@ -176,6 +176,8 @@ async function probe(
       ...(def.env || {}),
     },
     configuredEnv,
+    undefined,
+    { resolvedBin: launch.selectedPath },
   );
   let probeEnv = applyAgentLaunchEnv(baseProbeEnv, launch);
   let outcome = await probeVersionAtPath(def, launch.launchPath, probeEnv);
