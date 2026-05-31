@@ -416,7 +416,7 @@ describe('App project creation routing', () => {
     expect(mockedListProjects).toHaveBeenCalledTimes(2);
 
     fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Delete Fresh project' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Fresh project' }));
 
     await waitFor(() => {
       expect(mockedDeleteProject).toHaveBeenCalledWith('project-new');
@@ -533,11 +533,13 @@ describe('App project creation routing', () => {
     expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
     fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
 
-    expect(screen.getByTestId('entry-project-project-new').textContent).toContain(
-      'Fresh project',
-    );
-    expect(screen.getByTestId('entry-project-project-existing').textContent).toContain(
-      'Existing project',
-    );
+    await waitFor(() => {
+      expect(screen.getByTestId('entry-project-project-new').textContent).toContain(
+        'Fresh project',
+      );
+      expect(screen.getByTestId('entry-project-project-existing').textContent).toContain(
+        'Existing project',
+      );
+    });
   });
 });
