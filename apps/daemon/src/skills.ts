@@ -7,7 +7,17 @@
 // of the same name without erasing the built-in copy.
 
 import type { Dirent } from "node:fs";
-import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { parseFrontmatter } from "./frontmatter.js";
 import type { SkillCritiquePolicy } from "./critique/rollout.js";
@@ -853,6 +863,16 @@ function normalizeSkillSideFiles(files: unknown): SkillSideFileInput[] {
         `duplicate skill file path: ${rel}`,
       );
     }
+    const conflict = Array.from(seen).find(
+      (existing) =>
+        existing.startsWith(`${rel}/`) || rel.startsWith(`${existing}/`),
+    );
+    if (conflict) {
+      throw new SkillImportError(
+        "BAD_REQUEST",
+        `conflicting skill file paths: ${conflict} and ${rel}`,
+      );
+    }
     seen.add(rel);
     const content = decodeSkillSideFileContent(rel, record);
     const size = content.byteLength;
@@ -979,9 +999,18 @@ export async function importUserSkill(
     }
   }
   await mkdir(dir, { recursive: true });
-  const md = buildSkillMarkdown({ name, description, body, triggers });
-  await writeFile(path.join(dir, "SKILL.md"), md, "utf8");
-  await writeSkillSideFiles(dir, files);
+  try {
+    const md = buildSkillMarkdown({ name, description, body, triggers });
+    await writeFile(path.join(dir, "SKILL.md"), md, "utf8");
+    await writeSkillSideFiles(dir, files);
+  } catch (err) {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    if (err instanceof SkillImportError) throw err;
+    throw new SkillImportError(
+      "INTERNAL_ERROR",
+      `could not write imported skill files: ${formatErrorMessage(err)}`,
+    );
+  }
   return { id: name, slug, dir };
 }
 
@@ -1057,23 +1086,72 @@ export async function updateUserSkill(
     typeof input.sourceDir === "string" &&
     input.sourceDir.length > 0 &&
     path.resolve(input.sourceDir) !== path.resolve(dir);
-  if (shouldCloneSideFiles) {
+  let backupRoot: string | null = null;
+  let backupDir: string | null = null;
+  let keepBackupRoot = false;
+  if (dirExisted) {
     try {
-      await cloneSkillSideFiles(input.sourceDir!, dir);
+      backupRoot = await mkdtemp(
+        path.join(userSkillsRoot, `.${slug}-rollback-`),
+      );
+      const candidate = path.join(backupRoot, "skill");
+      await cp(dir, candidate, {
+        recursive: true,
+        preserveTimestamps: true,
+      });
+      backupDir = candidate;
     } catch (err) {
-      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
-      if (err instanceof SkillImportError) throw err;
+      if (backupRoot) {
+        await rm(backupRoot, { recursive: true, force: true }).catch(
+          () => undefined,
+        );
+      }
       throw new SkillImportError(
         "INTERNAL_ERROR",
-        `could not clone skill side files: ${formatErrorMessage(err)}`,
+        `could not snapshot skill dir before update: ${formatErrorMessage(err)}`,
       );
     }
-  } else {
-    await mkdir(dir, { recursive: true });
   }
-  const md = buildSkillMarkdown({ name, description, body, triggers });
-  await writeFile(path.join(dir, "SKILL.md"), md, "utf8");
-  await writeSkillSideFiles(dir, files);
+
+  try {
+    if (shouldCloneSideFiles) {
+      await cloneSkillSideFiles(input.sourceDir!, dir);
+    } else {
+      await mkdir(dir, { recursive: true });
+    }
+    const md = buildSkillMarkdown({ name, description, body, triggers });
+    await writeFile(path.join(dir, "SKILL.md"), md, "utf8");
+    await writeSkillSideFiles(dir, files);
+  } catch (err) {
+    if (backupDir) {
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      try {
+        await rename(backupDir, dir);
+        backupDir = null;
+      } catch (restoreErr) {
+        keepBackupRoot = true;
+        throw new SkillImportError(
+          "INTERNAL_ERROR",
+          `could not restore skill dir after failed update: ${formatErrorMessage(
+            restoreErr,
+          )}; original error: ${formatErrorMessage(err)}`,
+        );
+      }
+    } else {
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+    if (err instanceof SkillImportError) throw err;
+    throw new SkillImportError(
+      "INTERNAL_ERROR",
+      `could not update skill files: ${formatErrorMessage(err)}`,
+    );
+  } finally {
+    if (backupRoot && !keepBackupRoot) {
+      await rm(backupRoot, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+  }
   return { id: name, slug, dir };
 }
 

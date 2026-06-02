@@ -507,6 +507,26 @@ describe('importUserSkill / deleteUserSkill', () => {
     }
   });
 
+  it('rejects side file paths that collide as ancestors before importing', async () => {
+    const root = fresh();
+    try {
+      await expect(
+        importUserSkill(root, {
+          name: 'Conflicting Files',
+          body: '# Conflicting files',
+          files: [
+            { path: 'assets', content: 'not a directory' },
+            { path: 'assets/logo.svg', content: '<svg></svg>' },
+          ],
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+      expect(existsSync(path.join(root, 'conflicting-files'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects empty bodies and impossibly-named skills', async () => {
     const root = fresh();
     try {
@@ -700,6 +720,73 @@ describe('updateUserSkill', () => {
     } finally {
       rmSync(userRoot, { recursive: true, force: true });
       rmSync(builtInRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects side file paths that collide as ancestors before shadowing a built-in', async () => {
+    const userRoot = fresh();
+    const builtInRoot = fresh();
+    try {
+      writeSkill(builtInRoot, 'conflicting-update', {
+        body: '# Original built-in',
+      });
+
+      const before = await listSkills([userRoot, builtInRoot]);
+      expect(before).toHaveLength(1);
+      expect(before[0]!.source).toBe('built-in');
+
+      await expect(
+        updateUserSkill(userRoot, {
+          name: 'conflicting-update',
+          body: '# User override',
+          sourceDir: before[0]!.dir,
+          files: [
+            { path: 'assets', content: 'not a directory' },
+            { path: 'assets/logo.svg', content: '<svg></svg>' },
+          ],
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+      expect(existsSync(path.join(userRoot, 'conflicting-update'))).toBe(false);
+
+      const after = await listSkills([userRoot, builtInRoot]);
+      expect(after).toHaveLength(1);
+      expect(after[0]!.source).toBe('built-in');
+      expect(after[0]!.body).toContain('Original built-in');
+    } finally {
+      rmSync(userRoot, { recursive: true, force: true });
+      rmSync(builtInRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls back an existing user skill when side-file writes fail', async () => {
+    const root = fresh();
+    try {
+      const dir = path.join(root, 'rollback-update');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        path.join(dir, 'SKILL.md'),
+        '---\nname: rollback-update\n---\n\n# Original user body\n',
+      );
+      writeFileSync(path.join(dir, 'assets'), 'blocking file');
+
+      await expect(
+        updateUserSkill(root, {
+          name: 'rollback-update',
+          body: '# New user body',
+          files: [{ path: 'assets/logo.svg', content: '<svg></svg>' }],
+        }),
+      ).rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
+
+      expect(
+        readFileSync(path.join(dir, 'SKILL.md'), 'utf8'),
+      ).toContain('Original user body');
+      expect(readFileSync(path.join(dir, 'assets'), 'utf8')).toBe(
+        'blocking file',
+      );
+      expect(existsSync(path.join(dir, 'assets', 'logo.svg'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
