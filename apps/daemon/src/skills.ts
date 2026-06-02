@@ -786,6 +786,10 @@ function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
   return Boolean(err) && typeof err === "object" && "code" in (err as object);
 }
 
+function formatErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 interface SkillSideFileInput {
   path: string;
   content: Buffer;
@@ -1056,11 +1060,13 @@ export async function updateUserSkill(
   if (shouldCloneSideFiles) {
     try {
       await cloneSkillSideFiles(input.sourceDir!, dir);
-    } catch {
-      // Non-fatal: SKILL.md still lands below. Side-file resolvers will
-      // 404 individual entries instead of erasing the whole edit, which
-      // matches the pre-fix behaviour for unreachable assets.
-      await mkdir(dir, { recursive: true });
+    } catch (err) {
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      if (err instanceof SkillImportError) throw err;
+      throw new SkillImportError(
+        "INTERNAL_ERROR",
+        `could not clone skill side files: ${formatErrorMessage(err)}`,
+      );
     }
   } else {
     await mkdir(dir, { recursive: true });
@@ -1084,19 +1090,29 @@ async function cloneSkillSideFiles(
   let entries: Dirent[] = [];
   try {
     entries = await readdir(sourceDir, { withFileTypes: true });
-  } catch {
-    return;
+  } catch (err) {
+    throw new SkillImportError(
+      "INTERNAL_ERROR",
+      `could not read source skill files: ${formatErrorMessage(err)}`,
+    );
   }
   for (const entry of entries) {
     if (entry.name === "SKILL.md") continue;
     if (entry.name.startsWith(".")) continue;
     const src = path.join(sourceDir, entry.name);
     const dst = path.join(destDir, entry.name);
-    await cp(src, dst, {
-      recursive: true,
-      dereference: true,
-      preserveTimestamps: true,
-    });
+    try {
+      await cp(src, dst, {
+        recursive: true,
+        dereference: true,
+        preserveTimestamps: true,
+      });
+    } catch (err) {
+      throw new SkillImportError(
+        "INTERNAL_ERROR",
+        `could not clone skill side file "${entry.name}": ${formatErrorMessage(err)}`,
+      );
+    }
   }
 }
 

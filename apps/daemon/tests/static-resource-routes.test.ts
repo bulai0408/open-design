@@ -9,6 +9,7 @@ import type { DesignSystemTokenContractRebuildJobResponse } from '@open-design/c
 import { isLocalSameOrigin } from '../src/origin-validation.js';
 import { listDesignSystems } from '../src/design-systems.js';
 import { registerStaticResourceRoutes } from '../src/routes/static-resource.js';
+import { listSkills } from '../src/skills.js';
 
 describe('static resource mutation routes', () => {
   let server: http.Server;
@@ -345,5 +346,127 @@ describe('design system import catalog lookup', () => {
     } finally {
       await new Promise<void>((resolve) => fixture.close(() => resolve()));
     }
+  });
+});
+
+describe('skills update route side-file clone failures', () => {
+  let server: http.Server;
+  let baseUrl: string;
+  let tempRoot: string;
+  let skillsDir: string;
+  let userSkillsDir: string;
+
+  beforeAll(
+    () =>
+      new Promise<void>((resolve) => {
+        tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'od-static-skill-update-'));
+        skillsDir = path.join(tempRoot, 'skills');
+        userSkillsDir = path.join(tempRoot, 'user-skills');
+
+        const skillDir = path.join(skillsDir, 'clone-fail');
+        fs.mkdirSync(path.join(skillDir, 'references'), { recursive: true });
+        fs.writeFileSync(
+          path.join(skillDir, 'SKILL.md'),
+          [
+            '---',
+            'name: clone-fail',
+            'description: Built-in clone failure fixture.',
+            '---',
+            '',
+            '# Original built-in',
+            '',
+          ].join('\n'),
+        );
+        fs.writeFileSync(
+          path.join(skillDir, 'references', 'notes.md'),
+          '# bundled notes',
+        );
+        fs.symlinkSync(
+          path.join(skillDir, 'missing-target.md'),
+          path.join(skillDir, 'broken-link.md'),
+        );
+
+        const app = express();
+        app.use(express.json({ limit: '4mb' }));
+        registerStaticResourceRoutes(app, {
+          http: {
+            createSseResponse: () => undefined,
+            isLocalSameOrigin,
+            requireLocalDaemonRequest: (_req: unknown, _res: unknown, next: () => void) => next(),
+            resolvedPortRef: {
+              get current() {
+                const address = server.address();
+                return typeof address === 'object' && address ? address.port : 0;
+              },
+            },
+            sendApiError: (res: express.Response, status: number, code: string, message: string) =>
+              res.status(status).json({ error: message, code }),
+            sendLiveArtifactRouteError: () => undefined,
+            sendMulterError: () => undefined,
+          },
+          paths: {
+            ARTIFACTS_DIR: path.join(tempRoot, 'artifacts'),
+            BUNDLED_PETS_DIR: path.join(tempRoot, 'pets'),
+            DESIGN_SYSTEMS_DIR: path.join(tempRoot, 'design-systems'),
+            DESIGN_TEMPLATES_DIR: path.join(tempRoot, 'design-templates'),
+            OD_BIN: path.join(tempRoot, 'od'),
+            PROJECT_ROOT: tempRoot,
+            PROJECTS_DIR: path.join(tempRoot, 'projects'),
+            PROMPT_TEMPLATES_DIR: path.join(tempRoot, 'prompt-templates'),
+            RUNTIME_DATA_DIR: path.join(tempRoot, 'data'),
+            RUNTIME_DATA_DIR_CANONICAL: path.join(tempRoot, 'data'),
+            SKILLS_DIR: skillsDir,
+            USER_DESIGN_SYSTEMS_DIR: path.join(tempRoot, 'user-design-systems'),
+            USER_DESIGN_TEMPLATES_DIR: path.join(tempRoot, 'user-design-templates'),
+            USER_SKILLS_DIR: userSkillsDir,
+          },
+          resources: {
+            listAllDesignSystems: async () => [],
+            listAllSkills: async () => listSkills([userSkillsDir, skillsDir]),
+            listAllDesignTemplates: async () => [],
+            listAllSkillLikeEntries: async () => [],
+            mimeFor: () => 'application/octet-stream',
+          },
+        });
+
+        server = app.listen(0, '127.0.0.1', () => {
+          const addr = server.address() as { port: number };
+          baseUrl = `http://127.0.0.1:${addr.port}`;
+          resolve();
+        });
+      }),
+  );
+
+  afterAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server.close(() => {
+          fs.rmSync(tempRoot, { recursive: true, force: true });
+          resolve();
+        });
+      }),
+  );
+
+  it('returns an error without leaving a partial shadow folder', async () => {
+    const res = await fetch(`${baseUrl}/api/skills/clone-fail`, {
+      method: 'PUT',
+      headers: {
+        Origin: baseUrl,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: 'clone-fail',
+        body: '# User override',
+      }),
+    });
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ code: 'INTERNAL_ERROR' });
+    expect(fs.existsSync(path.join(userSkillsDir, 'clone-fail'))).toBe(false);
+
+    const skills = await listSkills([userSkillsDir, skillsDir]);
+    expect(skills).toHaveLength(1);
+    expect(skills[0]!.source).toBe('built-in');
+    expect(skills[0]!.body).toContain('Original built-in');
   });
 });

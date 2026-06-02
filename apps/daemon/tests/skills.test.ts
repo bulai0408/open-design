@@ -1,4 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -648,6 +654,49 @@ describe('updateUserSkill', () => {
         'utf8',
       );
       expect(noteContent).toContain('bundled notes');
+    } finally {
+      rmSync(userRoot, { recursive: true, force: true });
+      rmSync(builtInRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('aborts a first built-in shadow update when side-file cloning fails', async () => {
+    const userRoot = fresh();
+    const builtInRoot = fresh();
+    try {
+      writeSkill(builtInRoot, 'clone-fail', {
+        body: '# Original built-in',
+      });
+      mkdirSync(path.join(builtInRoot, 'clone-fail', 'references'), {
+        recursive: true,
+      });
+      writeFileSync(
+        path.join(builtInRoot, 'clone-fail', 'references', 'notes.md'),
+        '# bundled notes',
+      );
+      symlinkSync(
+        path.join(builtInRoot, 'clone-fail', 'missing-target.md'),
+        path.join(builtInRoot, 'clone-fail', 'broken-link.md'),
+      );
+
+      const before = await listSkills([userRoot, builtInRoot]);
+      expect(before).toHaveLength(1);
+      expect(before[0]!.source).toBe('built-in');
+
+      await expect(
+        updateUserSkill(userRoot, {
+          name: 'clone-fail',
+          body: '# User override',
+          sourceDir: before[0]!.dir,
+        }),
+      ).rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
+
+      expect(existsSync(path.join(userRoot, 'clone-fail'))).toBe(false);
+
+      const after = await listSkills([userRoot, builtInRoot]);
+      expect(after).toHaveLength(1);
+      expect(after[0]!.source).toBe('built-in');
+      expect(after[0]!.body).toContain('Original built-in');
     } finally {
       rmSync(userRoot, { recursive: true, force: true });
       rmSync(builtInRoot, { recursive: true, force: true });
