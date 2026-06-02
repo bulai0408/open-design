@@ -279,6 +279,7 @@ export type DaemonAgentFailureCategory =
   | 'agent_crashed';
 
 export class DaemonAgentExitError extends Error {
+  readonly code?: string;
   readonly category: DaemonAgentFailureCategory;
   readonly details: string;
   readonly retryDelayMs?: number;
@@ -290,6 +291,7 @@ export class DaemonAgentExitError extends Error {
     options: {
       category: DaemonAgentFailureCategory;
       details: string;
+      code?: string | null;
       retryDelayMs?: number;
       exitCode: number | null;
       exitSignal: string | null;
@@ -297,6 +299,7 @@ export class DaemonAgentExitError extends Error {
   ) {
     super(message);
     this.name = 'DaemonAgentExitError';
+    if (options.code) this.code = options.code;
     this.category = options.category;
     this.details = options.details;
     this.retryDelayMs = options.retryDelayMs;
@@ -312,16 +315,19 @@ export function isDaemonAgentExitError(err: unknown): err is DaemonAgentExitErro
 function buildDaemonAgentExitError({
   agentId,
   stderr,
+  errorCode,
   exitCode,
   exitSignal,
 }: {
   agentId?: string | null;
   stderr: string;
+  errorCode?: string | null;
   exitCode: number | null;
   exitSignal: string | null;
 }): DaemonAgentExitError | null {
   const details = stderr.trim();
   if (!details) return null;
+  const code = errorCode?.trim() || undefined;
   const text = details.toLowerCase();
   const retryDelayMs = extractRetryDelayMs(details);
   const label = agentLabel(agentId, details);
@@ -344,6 +350,7 @@ function buildDaemonAgentExitError({
     return new DaemonAgentExitError(message, {
       category: 'quota_exhausted',
       details,
+      code,
       retryDelayMs,
       exitCode,
       exitSignal,
@@ -363,6 +370,7 @@ function buildDaemonAgentExitError({
       {
         category: 'auth_required',
         details,
+        code,
         exitCode,
         exitSignal,
       },
@@ -380,6 +388,7 @@ function buildDaemonAgentExitError({
       {
         category: 'prompt_too_large',
         details,
+        code,
         exitCode,
         exitSignal,
       },
@@ -398,6 +407,7 @@ function buildDaemonAgentExitError({
       {
         category: 'cli_version_mismatch',
         details,
+        code,
         exitCode,
         exitSignal,
       },
@@ -415,6 +425,7 @@ function buildDaemonAgentExitError({
       {
         category: 'binary_not_found',
         details,
+        code,
         exitCode,
         exitSignal,
       },
@@ -430,6 +441,7 @@ function buildDaemonAgentExitError({
       {
         category: 'network',
         details,
+        code,
         retryDelayMs,
         exitCode,
         exitSignal,
@@ -440,6 +452,7 @@ function buildDaemonAgentExitError({
   return new DaemonAgentExitError('The agent process exited before finishing.', {
     category: 'agent_crashed',
     details,
+    code,
     exitCode,
     exitSignal,
   });
@@ -1059,6 +1072,7 @@ async function consumeDaemonRun({
       const classified = buildDaemonAgentExitError({
         agentId,
         stderr: diagnostic,
+        errorCode: fallbackRunErrorCode,
         exitCode,
         exitSignal,
       });

@@ -1519,6 +1519,53 @@ describe('streamViaDaemon', () => {
     expect(handlers.onDone).not.toHaveBeenCalled();
   });
 
+  it('preserves structured fallback run status codes on daemon exit errors', async () => {
+    const handlers = createDaemonHandlers();
+    const runError =
+      'AMR Cloud reported insufficient balance for this model. Recharge your AMR wallet at https://open-design.ai/amr/wallet, then retry this run.';
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/runs/run-1/events?after=7') return sseResponse('');
+      if (url === '/api/runs/run-1') {
+        return jsonResponse({
+          id: 'run-1',
+          projectId: null,
+          conversationId: null,
+          assistantMessageId: null,
+          agentId: 'amr',
+          status: 'failed',
+          createdAt: 1,
+          updatedAt: 2,
+          exitCode: 1,
+          signal: null,
+          error: runError,
+          errorCode: 'AMR_INSUFFICIENT_BALANCE',
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await reattachDaemonRun({
+      runId: 'run-1',
+      agentId: 'amr',
+      signal: new AbortController().signal,
+      initialLastEventId: '7',
+      handlers,
+    });
+
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      category?: string;
+      code?: string;
+      details?: string;
+    };
+    expect(error.code).toBe('AMR_INSUFFICIENT_BALANCE');
+    expect(error.category).toBe('agent_crashed');
+    expect(error.details).toContain('AMR_INSUFFICIENT_BALANCE');
+    expect(error.details).toContain(runError);
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
   it('combines partial resumed stderr with fallback run status errors', async () => {
     const handlers = createDaemonHandlers();
     const replayedStderr = 'late stderr chunk without the provider payload';
