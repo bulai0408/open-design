@@ -100,6 +100,7 @@ describe('buildLazySrcdocTransport (#2253)', () => {
     const shell = buildLazySrcdocTransport();
     const result = runShellInSandbox(shell);
     result.triggerActivate('<html><body>activated</body></html>');
+    expect(result.parentMessages).toContainEqual({ type: 'od:srcdoc-transport-activated' });
     // The shell handler calls document.open/write/close in order.
     // We assert behavior via the document mock the sandbox exposed.
     // (Re-running with our own probe to inspect document mock.)
@@ -216,6 +217,34 @@ describe('buildLazySrcdocTransport (#2253)', () => {
       stage: 'srcdoc-transport-activate',
       message: 'write failed',
     }]);
+  });
+
+  it('reports successful activation from the injected activation bridge', () => {
+    const script = extractActivationBridgeScript(buildSrcdoc('<main>Hero</main>'));
+    const parentMessages: unknown[] = [];
+    const writes: string[] = [];
+    const win: Record<string, unknown> = {
+      addEventListener(_t: string, listener: (ev: { data: unknown }) => void) {
+        (win as { __listener: typeof listener }).__listener = listener;
+      },
+    };
+    win.parent = { postMessage: (message: unknown) => parentMessages.push(message) };
+    const sandbox: Record<string, unknown> = {
+      document: {
+        open: () => {},
+        write: (chunk: string) => writes.push(chunk),
+        close: () => {},
+      },
+      window: win,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(script, sandbox);
+
+    const listener = (win as { __listener: (ev: { data: unknown }) => void }).__listener;
+    listener({ data: { type: 'od:srcdoc-transport-activate', html: '<p>hi</p>' } });
+
+    expect(writes).toEqual(['<p>hi</p>']);
+    expect(parentMessages).toEqual([{ type: 'od:srcdoc-transport-activated' }]);
   });
 });
 

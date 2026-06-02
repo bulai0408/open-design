@@ -797,6 +797,42 @@ function waitForIframeLoadOrTimeout(iframe: HTMLIFrameElement, timeout = 750): P
   });
 }
 
+function activateSrcDocTransportAndWait(
+  iframe: HTMLIFrameElement,
+  html: string,
+  timeout = 750,
+): Promise<boolean> {
+  const win = iframe.contentWindow;
+  if (!win || !html || html === SRC_DOC_PREVIEW_WRAP_FAILURE_PLACEHOLDER) {
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('message', onMessage);
+      window.clearTimeout(timer);
+      resolve(ok);
+    };
+    const onMessage = (ev: MessageEvent) => {
+      if (ev.source !== win) return;
+      const data = ev.data as { type?: string; stage?: string } | null;
+      if (data?.type === 'od:srcdoc-transport-activated') {
+        finish(true);
+        return;
+      }
+      if (data?.type === 'od:preview-error') {
+        const stage = String(data.stage || '');
+        if (stage.startsWith('srcdoc-transport')) finish(false);
+      }
+    };
+    const timer = window.setTimeout(() => finish(false), timeout);
+    window.addEventListener('message', onMessage);
+    win.postMessage({ type: 'od:srcdoc-transport-activate', html }, '*');
+  });
+}
+
 function previewViewportStateKey(projectId: string, file: Pick<ProjectFile, 'name' | 'path'>): string {
   return `${projectId}:${file.path || file.name}`;
 }
@@ -5068,11 +5104,8 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     target: HTMLIFrameElement | null = srcDocPreviewIframeRef.current,
     html = srcDoc,
   ) => {
-    if (!html || html === SRC_DOC_PREVIEW_WRAP_FAILURE_PLACEHOLDER) return false;
-    const win = target?.contentWindow;
-    if (!win) return false;
-    win.postMessage({ type: 'od:srcdoc-transport-activate', html }, '*');
-    return true;
+    if (!target) return Promise.resolve(false);
+    return activateSrcDocTransportAndWait(target, html);
   }, [srcDoc]);
   useEffect(() => {
     if (useUrlLoadPreview) {
@@ -6784,10 +6817,9 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     if (!srcDocShellReady) {
       await waitForIframeLoadOrTimeout(srcDocIframe, 500);
     }
-    const activated = activateSrcDocSnapshotTransport(srcDocIframe, snapshotSrcDoc);
-    if (activated) {
-      await waitForIframeLoadOrTimeout(srcDocIframe);
-    }
+    const activated = await activateSrcDocSnapshotTransport(srcDocIframe, snapshotSrcDoc);
+    if (!activated) return null;
+    await waitForIframeLoadOrTimeout(srcDocIframe);
     return requestPreviewSnapshot(srcDocIframe);
   }, [
     activateSrcDocSnapshotTransport,

@@ -1227,6 +1227,15 @@ describe('FileViewer SVG artifacts', () => {
 
     expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
     const srcdocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
+    vi.spyOn(srcdocFrame.contentWindow!, 'postMessage').mockImplementation((message) => {
+      const data = message as { type?: string };
+      if (data?.type === 'od:srcdoc-transport-activate') {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: srcdocFrame.contentWindow,
+          data: { type: 'od:srcdoc-transport-activated' },
+        }));
+      }
+    });
     fireEvent.load(srcdocFrame);
 
     fireEvent.click(screen.getByRole('button', { name: /download/i }));
@@ -1294,7 +1303,15 @@ describe('FileViewer SVG artifacts', () => {
 
     expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
     const srcdocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
-    const postMessageSpy = vi.spyOn(srcdocFrame.contentWindow!, 'postMessage');
+    const postMessageSpy = vi.spyOn(srcdocFrame.contentWindow!, 'postMessage').mockImplementation((message) => {
+      const data = message as { type?: string };
+      if (data?.type === 'od:srcdoc-transport-activate') {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: srcdocFrame.contentWindow,
+          data: { type: 'od:srcdoc-transport-activated' },
+        }));
+      }
+    });
     fireEvent.load(srcdocFrame);
 
     buildSrcdocMock.mockImplementation(() => {
@@ -1320,6 +1337,61 @@ describe('FileViewer SVG artifacts', () => {
     const activations = srcDocActivationMessages(postMessageSpy.mock.calls);
     expect(activations.at(-1)?.html).toContain('Recovered slide');
     expect(activations.at(-1)?.html).not.toBe('<!doctype html><html><body></body></html>');
+  });
+
+  it('aborts Download -> Export Image when hidden srcdoc transport activation reports a write failure', async () => {
+    const file = baseFile({
+      name: 'deck.html',
+      path: 'deck.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'deck',
+        title: 'Deck',
+        entry: 'deck.html',
+        renderer: 'deck-html',
+        exports: ['html'],
+      },
+    });
+    requestPreviewSnapshotMock.mockResolvedValue({
+      dataUrl: 'data:image/png;base64,AAAA',
+      w: 100,
+      h: 80,
+    });
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        isDeck
+        liveHtml={'<html><body><section class="slide">one</section><section class="slide">two</section></body></html>'}
+      />,
+    );
+
+    const srcdocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
+    vi.spyOn(srcdocFrame.contentWindow!, 'postMessage').mockImplementation((message) => {
+      const data = message as { type?: string };
+      if (data?.type === 'od:srcdoc-transport-activate') {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: srcdocFrame.contentWindow,
+          data: {
+            type: 'od:preview-error',
+            stage: 'srcdoc-transport-activate',
+            message: 'write failed',
+          },
+        }));
+      }
+    });
+    fireEvent.load(srcdocFrame);
+
+    fireEvent.click(screen.getByRole('button', { name: /download/i }));
+    fireEvent.click(await screen.findByTestId('share-menu-export-image'));
+
+    expect(screen.getByRole('dialog', { name: /export as image/i })).toBeTruthy();
+    expect(await screen.findByText(/Image capture failed/i)).toBeTruthy();
+    expect(requestPreviewSnapshotMock).not.toHaveBeenCalled();
   });
 
   it('falls back to URL-load when srcdoc transport activation reports a write failure', async () => {

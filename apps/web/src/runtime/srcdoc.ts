@@ -102,6 +102,13 @@ export function buildLazySrcdocTransport(): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script data-od-lazy-srcdoc-transport>(function(){
+      function reportActivationSuccess(){
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'od:srcdoc-transport-activated' }, '*');
+          }
+        } catch (_) {}
+      }
       function reportActivationError(err){
         try {
           if (window.parent && window.parent !== window) {
@@ -120,6 +127,7 @@ export function buildLazySrcdocTransport(): string {
           document.open();
           document.write(data.html);
           document.close();
+          reportActivationSuccess();
         } catch (err) {
           reportActivationError(err);
         }
@@ -170,6 +178,13 @@ export function canActivateSrcDocTransport(state: SrcDocActivationInputs): boole
 
 function injectSrcdocTransportActivationBridge(doc: string): string {
   const script = `<script data-od-srcdoc-transport-activation>(function(){
+  function reportActivationSuccess(){
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'od:srcdoc-transport-activated' }, '*');
+      }
+    } catch (_) {}
+  }
   function reportActivationError(err){
     try {
       if (window.parent && window.parent !== window) {
@@ -188,6 +203,7 @@ function injectSrcdocTransportActivationBridge(doc: string): string {
       document.open();
       document.write(data.html);
       document.close();
+      reportActivationSuccess();
     } catch (err) {
       reportActivationError(err);
     }
