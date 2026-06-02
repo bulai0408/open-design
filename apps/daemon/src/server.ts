@@ -97,6 +97,7 @@ import {
   findSkillById,
   listSkills,
   resolveSkillId,
+  SKILL_IMPORT_JSON_BODY_LIMIT_BYTES,
   splitDerivedSkillId,
 } from './skills.js';
 import { validateLinkedDirs } from './linked-dirs.js';
@@ -4461,6 +4462,11 @@ export async function startServer({
 
   const app = express();
   installRouteRegistrationGuard(app);
+  const skillImportJsonParser = express.json({
+    limit: SKILL_IMPORT_JSON_BODY_LIMIT_BYTES,
+  });
+  app.post('/api/skills/import', skillImportJsonParser);
+  app.put('/api/skills/:id', skillImportJsonParser);
   app.use(express.json({ limit: '4mb' }));
   const projectPreviewScopes = createProjectPreviewScopeRegistry();
 

@@ -794,6 +794,8 @@ interface SkillSideFileInput {
 const SKILL_IMPORT_MAX_FILES = 100;
 const SKILL_IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024;
 const SKILL_IMPORT_MAX_TOTAL_FILE_BYTES = 25 * 1024 * 1024;
+export const SKILL_IMPORT_JSON_BODY_LIMIT_BYTES =
+  4 * Math.ceil(SKILL_IMPORT_MAX_TOTAL_FILE_BYTES / 3) + 1024 * 1024;
 
 function normalizeSkillSideFilePath(input: unknown): string {
   const raw = typeof input === "string" ? input.trim() : "";
