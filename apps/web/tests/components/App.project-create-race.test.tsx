@@ -387,6 +387,54 @@ describe('App project creation routing', () => {
     expect(window.location.pathname).toBe('/projects/project-new');
   });
 
+  it('merges non-conflicting projects from an older list after a newer empty create refresh', async () => {
+    const bootstrapProjects = deferred<Project[]>();
+    const createRefreshProjects = deferred<Project[]>();
+    mockedListProjects
+      .mockReturnValueOnce(bootstrapProjects.promise)
+      .mockReturnValueOnce(createRefreshProjects.promise)
+      .mockResolvedValue([]);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
+    });
+    expect(window.location.pathname).toBe('/projects/project-new');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh projects' }));
+    expect(mockedListProjects).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      createRefreshProjects.resolve([]);
+      await createRefreshProjects.promise;
+    });
+
+    expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
+    expect(window.location.pathname).toBe('/projects/project-new');
+
+    await act(async () => {
+      bootstrapProjects.resolve([existingProject]);
+      await bootstrapProjects.promise;
+    });
+
+    expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
+    expect(window.location.pathname).toBe('/projects/project-new');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('entry-project-project-new').textContent).toContain(
+        'Fresh project',
+      );
+      expect(screen.getByTestId('entry-project-project-existing').textContent).toContain(
+        'Existing project',
+      );
+    });
+  });
+
   it('does not re-add a locally deleted project when an older project list resolves stale', async () => {
     const initialProjects = deferred<Project[]>();
     const staleRefreshProjects = deferred<Project[]>();

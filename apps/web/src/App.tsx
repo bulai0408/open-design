@@ -321,7 +321,6 @@ function AppInner() {
         (project) =>
           pendingLocalProjectIds.has(project.id),
       );
-      if (hydratableProjects.length === 0) return false;
       const hydratableById = new Map(
         hydratableProjects.map((project) => [project.id, project]),
       );
