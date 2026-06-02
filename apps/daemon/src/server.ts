@@ -241,6 +241,7 @@ import {
   countDesignSystemPreviewModules,
   countNewHtmlArtifacts,
   didRunCreateDesignSystemFile,
+  runAskedUserQuestion,
 } from './run-artifacts.js';
 import {
   reportRunCompletedFromDaemon,
@@ -353,6 +354,7 @@ import {
   assertSandboxProjectRootAvailable,
   detectEntryFile,
   ensureProject,
+  isRunTouchedProjectFile,
   isSafeId,
   listFiles,
   mimeFor,
@@ -2839,6 +2841,54 @@ function isLoopbackPeerAddress(address) {
   return false;
 }
 
+const PROJECT_PREVIEW_SCOPE_TTL_MS = 60 * 60 * 1000;
+const PROJECT_PREVIEW_ASSET_PATH_RE = /^\/projects\/([^/]+)\/preview\/([^/]+)\/.+$/u;
+
+function createProjectPreviewScopeRegistry() {
+  const scopes = new Map();
+
+  function pruneExpired(now = Date.now()) {
+    for (const [scope, entry] of scopes) {
+      if (entry.expiresAt <= now) scopes.delete(scope);
+    }
+  }
+
+  return {
+    mint(projectId) {
+      pruneExpired();
+      const scope = randomUUID();
+      scopes.set(scope, {
+        projectId: String(projectId),
+        expiresAt: Date.now() + PROJECT_PREVIEW_SCOPE_TTL_MS,
+      });
+      return scope;
+    },
+    validate(projectId, scope) {
+      const key = String(scope || '');
+      const entry = scopes.get(key);
+      if (!entry) return false;
+      if (entry.expiresAt <= Date.now()) {
+        scopes.delete(key);
+        return false;
+      }
+      return entry.projectId === String(projectId);
+    },
+  };
+}
+
+function parseProjectPreviewAssetPath(pathname) {
+  const match = PROJECT_PREVIEW_ASSET_PATH_RE.exec(String(pathname || ''));
+  if (!match) return null;
+  try {
+    return {
+      projectId: decodeURIComponent(match[1]),
+      scope: match[2],
+    };
+  } catch {
+    return null;
+  }
+}
+
 function localOriginFromHeader(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -3867,6 +3917,7 @@ export async function startServer({
 
   const app = express();
   app.use(express.json({ limit: '4mb' }));
+  const projectPreviewScopes = createProjectPreviewScopeRegistry();
 
   // Plan §3.K1 — bearer-token middleware.
   //
@@ -3874,8 +3925,11 @@ export async function startServer({
   // check (the desktop UI / local CLI never carry a bearer); every
   // other request must present `Authorization: Bearer <token>` with a
   // value matching `OD_API_TOKEN`. Health / readiness / version remain
-  // open so monitoring probes don't need the token. Rich daemon status
-  // stays authenticated because it includes local runtime paths.
+  // open so monitoring probes don't need the token. Server-minted
+  // project preview asset scopes are also accepted for GETs so sandboxed
+  // browser iframes can load HTML/CSS/JS without privileged headers.
+  // Rich daemon status stays authenticated because it includes local
+  // runtime paths.
   if (apiToken.length > 0) {
     const openProbePaths = new Set([
       '/health',
@@ -3887,6 +3941,15 @@ export async function startServer({
     ]);
     app.use('/api', (req, res, next) => {
       if (openProbePaths.has(req.path)) return next();
+      if (req.method === 'GET') {
+        const previewAsset = parseProjectPreviewAssetPath(req.path);
+        if (
+          previewAsset &&
+          projectPreviewScopes.validate(previewAsset.projectId, previewAsset.scope)
+        ) {
+          return next();
+        }
+      }
       // Loopback short-circuit. We ignore the proxied X-Forwarded-For
       // header here because a reverse proxy MUST always forward the
       // bearer; the loopback bypass exists for the localhost desktop
@@ -4174,7 +4237,7 @@ export async function startServer({
   // Routes that serve content to sandboxed iframes (Origin: null) for
   // read-only purposes.  All other /api routes reject Origin: null.
   const _NULL_ORIGIN_SAFE_GET_RE =
-    /^\/projects\/[^/]+\/raw\/|^\/codex-pets\/[^/]+\/spritesheet$/;
+    /^\/projects\/[^/]+\/(?:raw|preview)\/|^\/codex-pets\/[^/]+\/spritesheet$/;
 
   // Reject cross-origin requests to API endpoints.
   // Health/version remain open for monitoring probes.
@@ -5733,6 +5796,7 @@ export async function startServer({
     events: projectEventDeps,
     ids: idDeps,
     telemetry: { reportFinalizedMessage },
+    appConfig: appConfigDeps,
     validation: validationDeps,
   });
   registerImportRoutes(app, {
@@ -5781,7 +5845,7 @@ export async function startServer({
     auth: authDeps,
     http: httpDeps,
     paths: pathDeps,
-    projects: { getProject },
+    projects: { getProject: (id: string) => getProject(db, id) },
   });
   app.use('/artifacts', express.static(ARTIFACTS_DIR));
   registerDeployRoutes(app, {
@@ -5830,6 +5894,7 @@ export async function startServer({
     projectFiles: projectFileDeps,
     documents: { buildDocumentPreview },
     artifacts: artifactDeps,
+    projectPreviewScopes,
   });
 
   registerMediaRoutes(app, {
@@ -12750,7 +12815,7 @@ export async function startServer({
               try {
                 const filePath = path.join(dir, f.name);
                 const st = await fs.promises.stat(filePath);
-                if (st.mtimeMs < runStartTimeMs) continue;
+                if (!isRunTouchedProjectFile(st.mtimeMs, runStartTimeMs)) continue;
                 await reconcileHtmlArtifactManifest(
                   PROJECTS_DIR,
                   run.projectId,
@@ -13531,6 +13596,12 @@ export async function startServer({
             // for the dedup semantics; tested in
             // `tests/run-artifacts.test.ts`.
             artifact_count: countNewHtmlArtifacts(run.events),
+            // True when the run raised an AskUserQuestion clarification
+            // card. Clarification turns inherently produce no artifact, so
+            // the dashboard excludes them from the "run finished -> has
+            // artifact" funnel instead of counting them as failures. See
+            // `run-artifacts.ts`; tested in `tests/run-artifacts.test.ts`.
+            asked_user_question: runAskedUserQuestion(run.events),
             ...(isDesignSystemRun ? {
               // DS runs land a `DESIGN.md` write when generation
               // succeeded; the run-artifacts inspector reuses the
@@ -14064,6 +14135,7 @@ export async function startServer({
       mimeFor,
     },
     routines: { routineService },
+    projectPreviewScopes,
     validation: validationDeps,
     finalize: finalizeDeps,
     handoff: handoffDeps,
