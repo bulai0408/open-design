@@ -1279,6 +1279,7 @@ export interface Dict {
   'routines.status.canceled': string;
   'routines.confirmDelete': string;
   'routines.errorPickProject': string;
+  'routines.errorAgentEmptyOutput': string;
   // Bottom-of-rail help menu
   'entry.helpAria': string;
   'entry.helpMenuAria': string;
@@ -1808,6 +1809,16 @@ export interface Dict {
   'chat.importFolder': string;
   'chat.importSkills': string;
   'chat.importProject': string;
+  'chat.importDesignSystemHeader': string;
+  'chat.importDesignSystemBack': string;
+  'chat.importDesignSystemSearch': string;
+  'chat.importDesignSystemEmpty': string;
+  'chat.importDesignSystemNone': string;
+  'chat.importDesignSystemNoneSub': string;
+  'chat.importDesignSystemActive': string;
+  'chat.importDesignSystemSwitched': string;
+  'chat.importDesignSystemFailed': string;
+  'chat.importDesignSystemLoadFailed': string;
   'chat.mentionTabsAria': string;
   'chat.mentionTabAll': string;
   'chat.mentionTabPlugins': string;
@@ -1921,14 +1932,15 @@ export interface Dict {
   'generationPreview.stepUnderstand': string;
   'generationPreview.stepGenerate': string;
   'generationPreview.stepPrepare': string;
-  'generationPreview.elapsed': string;
-  'generationPreview.estimate': string;
-  'generationPreview.progressAria': string;
   'generationPreview.retry': string;
   'generationPreview.awaitingTitle': string;
   'generationPreview.awaitingLead': string;
   'generationPreview.stoppedTitle': string;
   'generationPreview.stoppedLead': string;
+  'generationPreview.reasonAuth': string;
+  'generationPreview.reasonRateLimited': string;
+  'generationPreview.reasonService': string;
+  'generationPreview.reasonBalance': string;
   'designFiles.title': string;
   'designFiles.upload': string;
   'designFiles.pasteText': string;
@@ -2144,6 +2156,11 @@ export interface Dict {
   'fileViewer.shareMenuPresentation': string;
   'fileViewer.shareMenuSourceFiles': string;
   'fileViewer.shareMenuSave': string;
+  'fileViewer.copyShareLink': string;
+  'fileViewer.openSharePage': string;
+  'fileViewer.shareLinkRequiresDeploy': string;
+  'fileViewer.shareLinkPublishGuide': string;
+  'fileViewer.shareAfterGenerationComplete': string;
   'fileViewer.copyProviderLink': string;
   'fileViewer.copyCloudflareLink': string;
   'fileViewer.screenshotCopying': string;

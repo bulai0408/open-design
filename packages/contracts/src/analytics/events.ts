@@ -175,8 +175,11 @@ export type TrackingExportFormat =
   | 'pptx'
   | 'zip'
   | 'html'
+  | 'image'
   | 'markdown'
   | 'template'
+  | 'share_link'
+  | 'share_page'
   | 'vercel'
   | 'cloudflare_pages';
 
@@ -1757,6 +1760,12 @@ export interface RunFinishedProps extends Omit<RunCreatedProps, 'area'> {
   result: TrackingRunResult;
   error_code?: string;
   artifact_count: number;
+  // True when the run raised an AskUserQuestion clarification card. Such runs
+  // are intent-clarification turns (the agent stops to ask the user a question)
+  // and therefore inherently produce no artifact, so the dashboard can exclude
+  // them from the "run finished -> has artifact" funnel instead of counting
+  // them as artifact-generation failures.
+  asked_user_question: boolean;
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
