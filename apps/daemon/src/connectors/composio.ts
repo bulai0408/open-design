@@ -686,7 +686,10 @@ export class ComposioConnectorProvider {
   async prepareAuthConfig(definition: ConnectorCatalogDefinition, signal?: AbortSignal): Promise<ComposioAuthConfigPrepareResult> {
     if (definition.authentication !== 'composio') return { status: 'error', message: 'connector is not backed by Composio' };
     const unsupported = this.unsupportedManagedAuthConfigs.get(definition.id);
-    if (unsupported) return { status: 'custom_required', message: unsupported };
+    if (unsupported) {
+      const authConfigId = await this.getExistingAuthConfigIdForToolkit(definition, signal);
+      return authConfigId ? { status: 'ready', authConfigId } : { status: 'custom_required', message: unsupported };
+    }
     try {
       const resolution = await this.getOrCreateManagedAuthConfigId(definition, signal);
       return { status: 'ready', authConfigId: resolution.authConfigId };
@@ -912,6 +915,20 @@ export class ComposioConnectorProvider {
       return authConfigId;
     }
     return undefined;
+  }
+
+  private async getExistingAuthConfigIdForToolkit(definition: ConnectorCatalogDefinition, signal?: AbortSignal): Promise<string | undefined> {
+    const persisted = this.getPersistedAuthConfigId(definition.id);
+    if (persisted) return persisted;
+
+    const discovered = this.discoveredAuthConfigIds?.[definition.id];
+    if (discovered) return discovered;
+
+    const existing = await this.getAuthConfigIdForToolkit(definition, signal);
+    if (!existing) return undefined;
+
+    this.storeAuthConfigId(definition, existing);
+    return existing;
   }
 
   private async createConnectedAccountLink(authConfigId: string, state: string, callbackUrl: string, signal?: AbortSignal): Promise<ComposioConnectedAccountResponse> {
