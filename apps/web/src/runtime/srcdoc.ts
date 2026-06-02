@@ -846,6 +846,21 @@ function injectSelectionBridge(
   // brackets (close the <style> tag), and newlines (defense in depth).
   var UNSAFE_VALUE = /[;{}<>\\n\\r]/;
   function active(){ return commentEnabled || inspectEnabled; }
+  function deckSlideIndexForPayload(){
+    try {
+      var state = window.__odDeckSlideState && window.__odDeckSlideState();
+      if (state && typeof state.active === 'number' && state.count > 1) return state.active;
+    } catch (_) {}
+    return null;
+  }
+  function elementVisibleForComment(el, rect){
+    if (!el || !rect || rect.width <= 0 || rect.height <= 0) return false;
+    try {
+      var cs = window.getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) return false;
+    } catch (_) {}
+    return true;
+  }
   function esc(value){ try { return window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/"/g, '\\\\"'); } catch (_) { return String(value); } }
   // Recompute the selector from elementId rather than trusting the one in
   // the inbound message — a forged selector like
@@ -1016,7 +1031,7 @@ function meaningfulDomFallbackTarget(el) {
 
   var tag = el.tagName ? el.tagName.toLowerCase() : '';
 
-  if (/^(a|button|input|textarea|select|label|img|video|canvas|h1|h2|h3|h4|h5|h6|p|li|td|th|section|article|main|aside|nav)$/.test(tag)) {
+  if (/^(a|button|input|textarea|select|label|img|video|canvas|h1|h2|h3|h4|h5|h6|p|li|td|th)$/.test(tag)) {
     return true;
   }
 
@@ -1045,9 +1060,13 @@ function meaningfulDomFallbackTarget(el) {
   var text = (el.textContent || '').replace(/\s+/g, ' ').trim();
   if (!text) return false;
 
+  if (/^(span|strong|em|b|i|small|code|mark)$/.test(tag)) return true;
+
   var meaningfulChildren = 0;
   for (var child = el.firstElementChild;child;child = child.nextElementSibling) {
-    if ((child.textContent || '').replace(/\s+/g, ' ').trim()) {
+    var childTag = child.tagName ? child.tagName.toLowerCase() : '';
+    if (/^(script|style|template|meta|link|title|noscript)$/.test(childTag)) continue;
+    if ((child.textContent || '').replace(/\s+/g, ' ').trim() || /^(img|video|canvas|svg|input|textarea|select)$/.test(childTag)) {
       meaningfulChildren++;
       if (meaningfulChildren > 1) return false;
     }
@@ -1055,8 +1074,12 @@ function meaningfulDomFallbackTarget(el) {
 
   return true;
 }
+  function generatedRootAnnotation(el, id){
+    return id === 'path-0' && el && el.parentElement === document.body && el.id === 'root';
+  }
   function targetFrom(el, allowDomFallback, clickedEl, clickPoint){
     var id = el.getAttribute('data-od-id') || el.getAttribute('data-screen-label');
+    if (allowDomFallback && id && generatedRootAnnotation(el, id)) return null;
     var selector = annotatedSelectorFor(el);
     if (!id && allowDomFallback && meaningfulDomFallbackTarget(el)) {
       selector = domSelectorFor(el);
@@ -1069,9 +1092,7 @@ function meaningfulDomFallbackTarget(el) {
     var html = '';
     try { html = (el.outerHTML || '').replace(/\\s+/g, ' ').match(/^<[^>]+>/)?.[0] || ''; } catch (_) {}
     var position = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
-    if (clickPoint) {
-      position = { x: Math.round(clickPoint.x), y: Math.round(clickPoint.y), width: 1, height: 1 };
-    }
+    if (!elementVisibleForComment(el, position)) return null;
     var payload = {
       type: 'od:comment-target',
       elementId: id,
@@ -1082,6 +1103,8 @@ function meaningfulDomFallbackTarget(el) {
       htmlHint: html.slice(0, 180),
       style: styleSnapshot(el)
     };
+    var slideIndex = deckSlideIndexForPayload();
+    if (typeof slideIndex === 'number') payload.slideIndex = slideIndex;
     if (clickPoint) {
       payload.hoverPoint = { x: Math.round(clickPoint.x), y: Math.round(clickPoint.y) };
     }
@@ -1114,8 +1137,34 @@ function meaningfulDomFallbackTarget(el) {
   }
   var postTargetsPending = false;
   var postPreviewScrollPending = false;
+  var postActiveTargetPending = false;
+  var activeCommentElementId = null;
+  var activeCommentSelector = null;
   function previewScrollElement(){
     return document.querySelector('.design-canvas') || document.scrollingElement || document.documentElement;
+  }
+  function previewScrollBy(left, top){
+    var dx = Number(left || 0);
+    var dy = Number(top || 0);
+    if (!Number.isFinite(dx)) dx = 0;
+    if (!Number.isFinite(dy)) dy = 0;
+    if (!dx && !dy) return;
+    var el = previewScrollElement();
+    if (!el) return;
+    try {
+      if (typeof el.scrollBy === 'function') el.scrollBy({ left: dx, top: dy, behavior: 'auto' });
+      else {
+        el.scrollLeft = (el.scrollLeft || 0) + dx;
+        el.scrollTop = (el.scrollTop || 0) + dy;
+      }
+    } catch (_) {
+      try {
+        el.scrollLeft = (el.scrollLeft || 0) + dx;
+        el.scrollTop = (el.scrollTop || 0) + dy;
+      } catch (__) {}
+    }
+    schedulePostTargets();
+    schedulePostPreviewScroll();
   }
   function postPreviewScroll(){
     var el = previewScrollElement();
@@ -1140,6 +1189,34 @@ function meaningfulDomFallbackTarget(el) {
   function requestPreviewScrollRestore(){
     window.parent.postMessage({ type: 'od:preview-scroll-request' }, '*');
   }
+  function findCommentTargetByIdentity(elementId, selector){
+    var el = null;
+    if (selector) {
+      try { el = document.querySelector(String(selector)); } catch (_) { el = null; }
+    }
+    if (!el && elementId) {
+      try {
+        var id = String(elementId).replace(/"/g, '\\"');
+        el = document.querySelector('[data-od-id="' + id + '"], [data-screen-label="' + id + '"]');
+      } catch (_) { el = null; }
+    }
+    return el;
+  }
+  function postActiveCommentTarget(){
+    if (!active() || !activeCommentElementId) return;
+    var el = findCommentTargetByIdentity(activeCommentElementId, activeCommentSelector);
+    if (!el) return;
+    var payload = targetFrom(el, commentEnabled && mode === 'picker' && !inspectEnabled);
+    if (payload) window.parent.postMessage(Object.assign({}, payload, { type: 'od:comment-active-target-update' }), '*');
+  }
+  function schedulePostActiveCommentTarget(){
+    if (!active() || !activeCommentElementId || postActiveTargetPending) return;
+    postActiveTargetPending = true;
+    window.requestAnimationFrame(function(){
+      postActiveTargetPending = false;
+      postActiveCommentTarget();
+    });
+  }
   function postTargets(){
     if (!active()) return;
     window.parent.postMessage({ type: 'od:comment-targets', targets: allTargets() }, '*');
@@ -1163,21 +1240,67 @@ function meaningfulDomFallbackTarget(el) {
     window.parent.postMessage({ type: type, points: stroke.slice() }, '*');
   }
   function canUseDomFallback(){
-    return commentEnabled && !inspectEnabled && document.querySelectorAll('[data-od-id], [data-screen-label]').length === 0;
+    return commentEnabled && !inspectEnabled;
+  }
+  function eventCandidateElements(event){
+    var items = [];
+    function push(node){
+      if (!node || node.nodeType !== 1) return;
+      if (items.indexOf(node) >= 0) return;
+      items.push(node);
+    }
+    try {
+      if (event && typeof event.composedPath === 'function') {
+        var path = event.composedPath();
+        for (var i = 0; i < path.length; i++) push(path[i]);
+      }
+    } catch (_) {}
+    push(event && event.target);
+    try {
+      if (
+        event &&
+        typeof event.clientX === 'number' &&
+        typeof event.clientY === 'number' &&
+        document.elementsFromPoint
+      ) {
+        var stack = document.elementsFromPoint(event.clientX, event.clientY);
+        for (var s = 0; s < stack.length; s++) push(stack[s]);
+      } else if (
+        event &&
+        typeof event.clientX === 'number' &&
+        typeof event.clientY === 'number' &&
+        document.elementFromPoint
+      ) {
+        push(document.elementFromPoint(event.clientX, event.clientY));
+      }
+    } catch (_) {}
+    return items;
   }
   function closestTarget(event){
-    var clicked = event.target;
-    var el = clicked;
-    var fallback = null;
+    var candidates = eventCandidateElements(event);
     var allowDomFallback = mode === 'picker' && canUseDomFallback();
-    while (el && el !== document.documentElement) {
-      if (el.getAttribute && (el.hasAttribute('data-od-id') || el.hasAttribute('data-screen-label'))) {
-        return { target: el, clicked: clicked };
+    var annotatedFallback = null;
+    for (var i = 0; i < candidates.length; i++) {
+      var clicked = candidates[i];
+      var el = clicked;
+      while (el && el !== document.documentElement) {
+        if (allowDomFallback && meaningfulDomFallbackTarget(el)) {
+          return { target: el, clicked: clicked };
+        }
+        if (el.getAttribute && (el.hasAttribute('data-od-id') || el.hasAttribute('data-screen-label'))) {
+          var id = el.getAttribute('data-od-id') || el.getAttribute('data-screen-label');
+          if (allowDomFallback && generatedRootAnnotation(el, id)) {
+            el = el.parentElement;
+            continue;
+          }
+          if (allowDomFallback && !annotatedFallback) annotatedFallback = { target: el, clicked: clicked };
+          if (allowDomFallback) break;
+          return { target: el, clicked: clicked };
+        }
+        el = el.parentElement;
       }
-      if (!fallback && allowDomFallback && meaningfulDomFallbackTarget(el)) fallback = el;
-      el = el.parentElement;
     }
-    return fallback ? { target: fallback, clicked: clicked } : null;
+    return annotatedFallback;
   }
   function applyOverride(elementId, selector, prop, value){
     if (!elementId || !prop) return;
@@ -1214,7 +1337,11 @@ function meaningfulDomFallbackTarget(el) {
       document.documentElement.toggleAttribute('data-od-comment-mode', commentEnabled);
       document.documentElement.setAttribute('data-od-comment-mode-kind', mode);
       if (active()) setTimeout(postTargets, 0);
-      else hoveredId = null;
+      else {
+        hoveredId = null;
+        activeCommentElementId = null;
+        activeCommentSelector = null;
+      }
       if (!commentEnabled || mode !== 'pod') {
         drawing = false;
         stroke = [];
@@ -1230,6 +1357,17 @@ function meaningfulDomFallbackTarget(el) {
       setTimeout(postPreviewScroll, 0);
       return;
     }
+    if (data.type === 'od:comment-active-target') {
+      activeCommentElementId = data.elementId ? String(data.elementId) : null;
+      activeCommentSelector = data.selector ? String(data.selector) : null;
+      schedulePostActiveCommentTarget();
+      return;
+    }
+    if (data.type === 'od:preview-scroll-by') {
+      previewScrollBy(data.left, data.top);
+      return;
+    }
+
     if (data.type === 'od:inspect-mode') {
       inspectEnabled = !!data.enabled;
       document.documentElement.toggleAttribute('data-od-inspect-mode', inspectEnabled);
@@ -1316,7 +1454,11 @@ function meaningfulDomFallbackTarget(el) {
       var commentPickerClick = commentEnabled && mode === 'picker' && !inspectEnabled;
       var clickPoint = commentPickerClick ? { x: ev.clientX, y: ev.clientY } : null;
       var payload = targetFrom(result.target, commentPickerClick, result.clicked, clickPoint);
-      if (payload) window.parent.postMessage(payload, '*');
+      if (payload) {
+        activeCommentElementId = payload.elementId || activeCommentElementId;
+        activeCommentSelector = payload.selector || activeCommentSelector;
+        window.parent.postMessage(payload, '*');
+      }
       return;
     }
     // Free-pin fallback (comment mode only). Lets users drop a comment
@@ -1341,9 +1483,9 @@ function meaningfulDomFallbackTarget(el) {
     var pinX = Math.round(ev.clientX);
     var pinY = Math.round(ev.clientY);
     var pinId = 'pin-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
-    window.parent.postMessage({
+    var pinSlideIndex = deckSlideIndexForPayload();
+    var pinPayload = {
       type: 'od:comment-target',
-      elementId: pinId,
       // Synthetic selector / label so daemon upsert validation (which
       // requires both to be non-empty) accepts the saved free-pin.
       selector: '[data-od-pin="' + pinId + '"]',
@@ -1354,7 +1496,10 @@ function meaningfulDomFallbackTarget(el) {
       htmlHint: '',
       style: null,
       freePin: true
-    }, '*');
+    };
+    pinPayload.elementId = pinId;
+    if (typeof pinSlideIndex === 'number') pinPayload.slideIndex = pinSlideIndex;
+    window.parent.postMessage(pinPayload, '*');
   }, true);
   // Pod drawing — only active in comment mode with the 'pod' tool.
   document.addEventListener('pointerdown', function(ev){
@@ -1388,11 +1533,14 @@ function meaningfulDomFallbackTarget(el) {
   document.addEventListener('pointercancel', finishStroke, true);
   window.addEventListener('resize', schedulePostTargets);
   document.addEventListener('scroll', function(){
+    schedulePostActiveCommentTarget();
     schedulePostTargets();
     schedulePostPreviewScroll();
   }, true);
   var mo = new MutationObserver(schedulePostTargets);
-  mo.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+  mo.observe(document.documentElement, { subtree: true, childList: true, attributes: true });
+  var textMo = new MutationObserver(schedulePostActiveCommentTarget);
+  textMo.observe(document.documentElement, { subtree: true, characterData: true });
   // Reflect the host-requested initial modes on the documentElement so
   // the cursor/hover styles match what the bridge picks up on click.
   if (commentEnabled) document.documentElement.toggleAttribute('data-od-comment-mode', true);
@@ -1408,6 +1556,7 @@ function meaningfulDomFallbackTarget(el) {
   setTimeout(requestPreviewScrollRestore, 0);
   setTimeout(requestPreviewScrollRestore, 80);
   setTimeout(requestPreviewScrollRestore, 240);
+  window.__odScheduleCommentTargets = schedulePostTargets;
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', postTargets);
   else setTimeout(postTargets, 0);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', postPreviewScroll);
@@ -1482,9 +1631,42 @@ function injectDeckBridge(doc: string, initialSlideIndex = 0): string {
     if (structured.length) return structured;
     return document.querySelectorAll('.slide');
   }
-  function scroller(){
-    if (document.body && document.body.scrollWidth > document.body.clientWidth + 1) return document.body;
-    return document.scrollingElement || document.documentElement;
+  function scrollOverflow(el){
+    if (!el) return 0;
+    return Math.max(0, (el.scrollWidth || 0) - (el.clientWidth || 0));
+  }
+  function overflowMode(el){
+    if (!el || !window.getComputedStyle) return '';
+    try {
+      return String(window.getComputedStyle(el).overflowX || '').toLowerCase();
+    } catch (_) {
+      return '';
+    }
+  }
+  function isScrollableOverflowMode(mode){
+    return mode === 'auto' || mode === 'scroll' || mode === 'overlay';
+  }
+  function isClippedOverflowMode(mode){
+    return mode === 'hidden' || mode === 'clip';
+  }
+  function isRootScrollContainer(el){
+    return !!el && (
+      el === document.scrollingElement ||
+      el === document.documentElement ||
+      el === document.body
+    );
+  }
+  function rootScrollerClipped(){
+    return isClippedOverflowMode(overflowMode(document.documentElement)) ||
+      isClippedOverflowMode(overflowMode(document.body));
+  }
+  function scrollLeftOf(el){
+    if (!el) return 0;
+    try {
+      return Number(el.scrollLeft) || 0;
+    } catch (_) {
+      return 0;
+    }
   }
   function scrollTargets(){
     var targets = [];
@@ -1514,7 +1696,15 @@ function injectDeckBridge(doc: string, initialSlideIndex = 0): string {
     return false;
   }
   function isScrollDeck(){
-    return hasHorizontalScroll();
+    var targets = scrollTargets();
+    for (var i=0; i<targets.length; i++) {
+      var candidate = targets[i];
+      if (scrollOverflow(candidate) <= 1) continue;
+      var mode = overflowMode(candidate);
+      if (isScrollableOverflowMode(mode)) return true;
+      if (isRootScrollContainer(candidate) && !isClippedOverflowMode(mode) && !rootScrollerClipped()) return true;
+    }
+    return false;
   }
   function findActiveByClass(list){
     for (var i=0; i<list.length; i++) {
@@ -1566,8 +1756,27 @@ function injectDeckBridge(doc: string, initialSlideIndex = 0): string {
     }
     return 'active';
   }
+  function hasComputedHiddenSibling(list, active){
+    if (active < 0) return false;
+    for (var i=0; i<list.length; i++) {
+      if (i === active) continue;
+      try {
+        var cs = window.getComputedStyle(list[i]);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return true;
+      } catch (_) {}
+    }
+    return false;
+  }
   function canSetActive(list){
-    if (findActiveByClass(list) >= 0) return true;
+    // A bare active-class marker is not enough to prove the host can drive the
+    // deck by class mutation alone. Many generated decks keep that marker in
+    // sync for counters / dots but move the visible slide via a translated
+    // stage or track, so flipping classes in the host bridge updates the
+    // reported slide index while leaving the canvas on the old page. Only
+    // treat class-driven decks as directly mutable when inactive siblings are
+    // actually hidden by computed visibility rules.
+    var active = findActiveByClass(list);
+    if (active >= 0 && hasComputedHiddenSibling(list, active)) return true;
     for (var i=0; i<list.length; i++) {
       if (list[i].style.display === 'none') return true;
       if (list[i].style.visibility === 'hidden') return true;
@@ -1718,6 +1927,7 @@ function injectDeckBridge(doc: string, initialSlideIndex = 0): string {
     for (var k = 0; k < n; k++) dispatchKey(key);
     setTimeout(report, 320);
   }
+  var lastCommentTargetSlideIndex = -1;
   function report(){
     try {
       var list = slides();
@@ -1739,8 +1949,18 @@ function injectDeckBridge(doc: string, initialSlideIndex = 0): string {
         if (el.querySelector('span,.bar')) return;
         el.style.width=progressWidth;
       });
+      if (i !== lastCommentTargetSlideIndex) {
+        lastCommentTargetSlideIndex = i;
+        try {
+          if (typeof window.__odScheduleCommentTargets === 'function') window.__odScheduleCommentTargets();
+        } catch (_) {}
+      }
     } catch (e) {}
   }
+  window.__odDeckSlideState = function(){
+    var list = slides();
+    return { active: activeIndex(list), count: list.length };
+  };
   function restoreInitialSlide(){
     if (didRestoreInitialSlide) { report(); return; }
     var list = slides();

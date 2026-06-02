@@ -1879,8 +1879,13 @@ function StatusPill({
   label: string;
   detail?: string | undefined;
 }) {
+  const variant =
+    label === "error" ? "error" : label === "warning" ? "warning" : undefined;
   return (
-    <div className="status-pill">
+    <div
+      className={`status-pill${variant ? ` is-${variant}` : ""}`}
+      data-status={label}
+    >
       <span className="status-label">{label}</span>
       {detail ? <span className="status-detail">{renderLinkedStatusDetail(detail)}</span> : null}
     </div>
