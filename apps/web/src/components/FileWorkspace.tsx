@@ -61,6 +61,10 @@ import {
   parseSketchWorkspaceDocument,
   type SketchItem,
 } from './sketch-model';
+import { GenerationPreviewStage } from './GenerationPreviewStage';
+import { AmrGuidance } from './AmrGuidance';
+import { buildGenerationPreviewState } from '../runtime/generation-preview';
+import type { ChatMessage } from '../types';
 
 interface Props {
   projectId: string;
@@ -72,6 +76,8 @@ interface Props {
   isDeck: boolean;
   onExportAsPptx?: ((fileName: string) => void) | undefined;
   streaming?: boolean;
+  commentQueueOnSend?: boolean;
+  commentSendDisabled?: boolean;
   openRequest?: { name: string; nonce: number } | null;
   liveArtifactEvents?: LiveArtifactEventItem[];
   designSystemActivityEvents?: AgentEvent[];
@@ -82,7 +88,7 @@ interface Props {
   previewComments?: PreviewComment[];
   onSavePreviewComment?: (target: PreviewCommentTarget, note: string, attachAfterSave: boolean) => Promise<PreviewComment | null>;
   onRemovePreviewComment?: (commentId: string) => Promise<void>;
-  onSendBoardCommentAttachments?: (attachments: ChatCommentAttachment[]) => Promise<void> | void;
+  onSendBoardCommentAttachments?: (attachments: ChatCommentAttachment[]) => Promise<boolean | void> | boolean | void;
   onPluginFolderAgentAction?: (
     relativePath: string,
     action: PluginFolderAgentAction,
@@ -111,6 +117,17 @@ interface Props {
   githubConnected?: boolean;
   commentPortalId?: string;
   onCommentModeChange?: (active: boolean) => void;
+  messages?: ChatMessage[];
+  artifactHtml?: string | null;
+  conversationError?: string | null;
+  onRetry?: (message: ChatMessage) => void;
+  // Contextual failure recovery, mirrored from the chat error card so the
+  // preview surface can offer the same one-click fix (AMR authorize, terminal
+  // sign-in) instead of a bare retry.
+  onAuthorizeAndRetry?: (message: ChatMessage) => void;
+  onLaunchTerminalAuth?: () => void;
+  // Conversation id for the AMR promotion-card telemetry payload.
+  conversationId?: string | null;
 }
 
 interface SketchState {
@@ -203,6 +220,8 @@ export function FileWorkspace({
   isDeck,
   onExportAsPptx,
   streaming,
+  commentQueueOnSend = false,
+  commentSendDisabled = false,
   openRequest,
   liveArtifactEvents = [],
   designSystemActivityEvents = [],
@@ -229,6 +248,13 @@ export function FileWorkspace({
   githubConnected,
   commentPortalId,
   onCommentModeChange,
+  messages = [],
+  artifactHtml,
+  conversationError,
+  onRetry,
+  onAuthorizeAndRetry,
+  onLaunchTerminalAuth,
+  conversationId,
 }: Props) {
   const t = useT();
   const analytics = useAnalytics();
@@ -297,6 +323,21 @@ export function FileWorkspace({
   const liveArtifactEntries = useMemo(
     () => liveArtifacts.map(liveArtifactSummaryToWorkspaceEntry),
     [liveArtifacts],
+  );
+
+  const generationPreview = useMemo(
+    () =>
+      buildGenerationPreviewState({
+        designSystemProject: Boolean(designSystemProject),
+        messages,
+        streaming: Boolean(streaming),
+        activeTab,
+        projectFiles: visibleFiles,
+        liveArtifacts,
+        artifactHtml,
+        conversationError,
+      }),
+    [designSystemProject, messages, streaming, activeTab, visibleFiles, liveArtifacts, artifactHtml, conversationError],
   );
 
   // Pull the persisted active tab in when the parent's hydration completes
@@ -1056,6 +1097,37 @@ export function FileWorkspace({
             onConnectRepo={onConnectRepo}
             githubConnected={githubConnected}
           />
+        ) : generationPreview ? (
+          <GenerationPreviewStage
+            model={generationPreview}
+            onRetry={
+              generationPreview.retryTarget && onRetry
+                ? () => onRetry(generationPreview.retryTarget!)
+                : undefined
+            }
+            onAuthorizeAndRetry={
+              generationPreview.retryTarget && onAuthorizeAndRetry
+                ? () => onAuthorizeAndRetry(generationPreview.retryTarget!)
+                : undefined
+            }
+            onLaunchTerminalAuth={onLaunchTerminalAuth}
+            amrGuidance={
+              generationPreview.promoteAmrSwitch
+                && generationPreview.errorCode
+                && generationPreview.retryTarget
+                && onAuthorizeAndRetry ? (
+                <AmrGuidance
+                  errorCode={generationPreview.errorCode}
+                  projectId={projectId}
+                  projectKind={projectKind}
+                  conversationId={conversationId ?? null}
+                  assistantMessageId={generationPreview.retryTarget.id}
+                  runId={generationPreview.retryTarget.runId ?? null}
+                  onActivate={() => onAuthorizeAndRetry(generationPreview.retryTarget!)}
+                />
+              ) : undefined
+            }
+          />
         ) : activeTab === DESIGN_FILES_TAB ? (
           <DesignFilesPanel
             key={projectId}
@@ -1150,6 +1222,8 @@ export function FileWorkspace({
             isDeck={isDeck}
             onExportAsPptx={onExportAsPptx}
             streaming={streaming}
+            commentQueueOnSend={commentQueueOnSend}
+            commentSendDisabled={commentSendDisabled}
             previewComments={previewComments.filter((comment) => comment.filePath === activeFile.name)}
             onSavePreviewComment={onSavePreviewComment}
             onRemovePreviewComment={onRemovePreviewComment}

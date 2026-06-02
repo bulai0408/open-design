@@ -1,6 +1,8 @@
 import { symlinkSync } from 'node:fs';
 import { test, vi } from 'vitest';
 import { homedir } from 'node:os';
+import { dirname, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as platform from '@open-design/platform';
 import {
   assert, chmodSync, detectAgents, inspectAgentExecutableResolution, join, minimalAgentDef, mkdirSync, mkdtempSync, opencode, resolveAgentExecutable, rmSync, spawnEnvForAgent, tmpdir, withEnvSnapshot, withPlatform, writeFileSync,
@@ -8,6 +10,7 @@ import {
 import { isCursorAuthFailureText } from '../../src/runtimes/auth.js';
 
 const fsTest = process.platform === 'win32' ? test.skip : test;
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 // Issue #398: Claude Code prefers ANTHROPIC_API_KEY over `claude login`
 // credentials, silently billing API usage. Strip it for the claude
@@ -53,6 +56,113 @@ test('spawnEnvForAgent applies configured Codex env without mutating the base en
   assert.equal(env.PATH, '/usr/bin');
   assert.equal('CODEX_HOME' in base, false);
   assert.equal('CODEX_BIN' in base, false);
+});
+
+test('spawnEnvForAgent reapplies sandbox state roots after configured env overrides', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'od-agent-env-sandbox-'));
+  try {
+    const codexEnv = spawnEnvForAgent(
+      'codex',
+      {
+        OD_DATA_DIR: dataDir,
+        OD_SANDBOX_MODE: '1',
+        PATH: '/usr/bin',
+      },
+      {
+        CODEX_HOME: '/Users/test/.codex-host',
+      },
+    );
+    assert.equal(
+      codexEnv.CODEX_HOME,
+      join(dataDir, 'sandbox', 'agent-home', '.codex'),
+    );
+    assert.equal(codexEnv.HOME, join(dataDir, 'sandbox', 'agent-home'));
+
+    const claudeEnv = spawnEnvForAgent(
+      'claude',
+      {
+        OD_DATA_DIR: dataDir,
+        OD_SANDBOX_MODE: '1',
+        PATH: '/usr/bin',
+      },
+      {
+        CLAUDE_CONFIG_DIR: '/Users/test/.claude-host',
+      },
+    );
+    assert.equal(
+      claudeEnv.CLAUDE_CONFIG_DIR,
+      join(dataDir, 'sandbox', 'config', 'claude'),
+    );
+
+    const amrEnv = spawnEnvForAgent(
+      'amr',
+      {
+        OD_DATA_DIR: dataDir,
+        OD_SANDBOX_MODE: '1',
+        PATH: '/usr/bin',
+      },
+      {
+        OPENCODE_TEST_HOME: '/Users/test/.opencode-host',
+      },
+    );
+    assert.equal(
+      amrEnv.OPENCODE_TEST_HOME,
+      join(dataDir, 'sandbox', 'agent-home', '.opencode'),
+    );
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('spawnEnvForAgent keeps sandbox roots pinned to the base OD_DATA_DIR', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'od-agent-env-sandbox-base-'));
+  try {
+    const env = spawnEnvForAgent(
+      'codex',
+      {
+        OD_DATA_DIR: dataDir,
+        OD_SANDBOX_MODE: '1',
+        PATH: '/usr/bin',
+      },
+      {
+        CODEX_HOME: '/Users/test/.codex-host',
+        OD_DATA_DIR: '/host/path/.od',
+      },
+    );
+
+    assert.equal(env.OD_DATA_DIR, dataDir);
+    assert.equal(env.CODEX_HOME, join(dataDir, 'sandbox', 'agent-home', '.codex'));
+    assert.equal(env.HOME, join(dataDir, 'sandbox', 'agent-home'));
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('spawnEnvForAgent resolves relative OD_DATA_DIR before applying sandbox roots', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'od-agent-env-sandbox-relative-'));
+  try {
+    const relativeDataDir = relative(repoRoot, dataDir);
+    const env = spawnEnvForAgent(
+      'codex',
+      {
+        OD_DATA_DIR: relativeDataDir,
+        OD_SANDBOX_MODE: '1',
+        PATH: '/usr/bin',
+      },
+      {
+        CODEX_HOME: '/Users/test/.codex-host',
+      },
+    );
+
+    assert.equal(
+      env.CODEX_HOME,
+      join(dataDir, 'sandbox', 'agent-home', '.codex'),
+    );
+    assert.equal(env.CLAUDE_CONFIG_DIR, join(dataDir, 'sandbox', 'config', 'claude'));
+    assert.equal(env.HOME, join(dataDir, 'sandbox', 'agent-home'));
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
 });
 
 test('spawnEnvForAgent applies system proxy env to all agent runtimes before base env overrides', () => {
@@ -478,6 +588,56 @@ fsTest('detectAgents marks AMR available from packaged built-in Vela with the bu
   }
 });
 
+
+fsTest('detectAgents prefers configured AMR live models over stale fallback defaults', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'od-detect-amr-live-models-'));
+  try {
+    return await withEnvSnapshot(['PATH', 'OD_AGENT_HOME', 'OD_RESOURCE_ROOT', 'VELA_OPENCODE_BIN'], async () => {
+      const fakeVela = join(root, 'vela');
+      const fakeOpenCode = join(root, 'opencode');
+      writeFileSync(
+        fakeVela,
+        `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "vela custom-live"; exit 0; fi
+if [ "$1" = "models" ]; then printf "%s\n" "public_model_deepseek_v4_flash    vela" "public_model_glm_5    vela"; exit 0; fi
+exit 0
+`,
+      );
+      writeFileSync(fakeOpenCode, `#!/bin/sh
+exit 0
+`);
+      chmodSync(fakeVela, 0o755);
+      chmodSync(fakeOpenCode, 0o755);
+      process.env.PATH = '';
+      process.env.OD_AGENT_HOME = join(root, 'empty-home');
+      delete process.env.OD_RESOURCE_ROOT;
+      delete process.env.VELA_OPENCODE_BIN;
+
+      const agents = await detectAgents({
+        amr: {
+          VELA_BIN: fakeVela,
+          VELA_OPENCODE_BIN: fakeOpenCode,
+        },
+      });
+      const amrAgent = agents.find((agent) => agent.id === 'amr');
+
+      assert.ok(amrAgent);
+      assert.equal(amrAgent.available, true);
+      assert.equal(amrAgent.path, fakeVela);
+      assert.equal(amrAgent.version, 'vela custom-live');
+      assert.equal(amrAgent.modelsSource, 'live');
+      assert.deepEqual(amrAgent.models, [
+        { id: 'deepseek-v4-flash', label: 'deepseek-v4-flash' },
+        { id: 'glm-5', label: 'glm-5' },
+      ]);
+      assert.equal(amrAgent.models.some((model) => model.id === 'default'), false);
+      assert.equal(amrAgent.models.some((model) => model.id === 'gpt-5.4-mini'), false);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function codexNativeTargetTriple(): string {
   if (process.platform === 'darwin' && process.arch === 'arm64') return 'aarch64-apple-darwin';
   if (process.platform === 'darwin' && process.arch === 'x64') return 'x86_64-apple-darwin';
@@ -844,6 +1004,22 @@ test('spawnEnvForAgent strips ANTHROPIC_API_KEY case-insensitively for the claud
     (k) => k.toUpperCase() === 'ANTHROPIC_API_KEY',
   );
   assert.deepEqual(remaining, []);
+  assert.equal(env.PATH, '/usr/bin');
+});
+
+test('spawnEnvForAgent preserves ANTHROPIC_API_KEY when claude resolves to OpenClaude fallback', () => {
+  const env = spawnEnvForAgent(
+    'claude',
+    {
+      ANTHROPIC_API_KEY: 'sk-openclaude',
+      PATH: '/usr/bin',
+    },
+    {},
+    {},
+    { resolvedBin: '/tools/openclaude' },
+  );
+
+  assert.equal(env.ANTHROPIC_API_KEY, 'sk-openclaude');
   assert.equal(env.PATH, '/usr/bin');
 });
 
