@@ -387,7 +387,7 @@ describe('App project creation routing', () => {
     expect(window.location.pathname).toBe('/projects/project-new');
   });
 
-  it('merges non-conflicting projects from an older list after a newer empty create refresh', async () => {
+  it('does not revive nonlocal projects from an older list after a newer empty refresh', async () => {
     const bootstrapProjects = deferred<Project[]>();
     const createRefreshProjects = deferred<Project[]>();
     mockedListProjects
@@ -429,10 +429,8 @@ describe('App project creation routing', () => {
       expect(screen.getByTestId('entry-project-project-new').textContent).toContain(
         'Fresh project',
       );
-      expect(screen.getByTestId('entry-project-project-existing').textContent).toContain(
-        'Existing project',
-      );
     });
+    expect(screen.queryByTestId('entry-project-project-existing')).toBeNull();
   });
 
   it('does not re-add a locally deleted project when an older project list resolves stale', async () => {
@@ -549,7 +547,7 @@ describe('App project creation routing', () => {
     expect(window.location.pathname).toBe('/projects/project-new');
   });
 
-  it('keeps non-conflicting projects from an older list that hydrates a host import', async () => {
+  it('does not revive unrelated projects from an older list that hydrates a host import', async () => {
     const bootstrapProjects = deferred<Project[]>();
     const importListProjects = deferred<Project[]>();
     mockedListProjects
@@ -585,9 +583,7 @@ describe('App project creation routing', () => {
       expect(screen.getByTestId('entry-project-project-new').textContent).toContain(
         'Fresh project',
       );
-      expect(screen.getByTestId('entry-project-project-existing').textContent).toContain(
-        'Existing project',
-      );
     });
+    expect(screen.queryByTestId('entry-project-project-existing')).toBeNull();
   });
 });

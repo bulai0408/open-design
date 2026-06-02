@@ -321,6 +321,7 @@ function AppInner() {
         (project) =>
           pendingLocalProjectIds.has(project.id),
       );
+      if (hydratableProjects.length === 0) return false;
       const hydratableById = new Map(
         hydratableProjects.map((project) => [project.id, project]),
       );
@@ -338,7 +339,7 @@ function AppInner() {
           hydratableById.delete(project.id);
           return hydrated;
         });
-        for (const project of visibleList) {
+        for (const project of hydratableById.values()) {
           if (currentIds.has(project.id)) continue;
           changed = true;
           next.push(project);
