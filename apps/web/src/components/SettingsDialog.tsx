@@ -811,6 +811,7 @@ function nextExecutableCandidatePath(
   agent: AgentInfo,
   result: ConnectionTestResponse,
 ): string | null {
+  if (agent.id !== 'opencode') return null;
   if (!canTryNextExecutableCandidate(result)) return null;
   const candidates = agent.executableCandidates?.filter((candidate) => candidate.path) ?? [];
   const availableCandidates = candidates.filter(

@@ -2268,7 +2268,7 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
     );
   });
 
-  it('uses the selected wrapper candidate when a failed Codex test reports a resolved native binary', async () => {
+  it('does not offer Try next candidate for Codex primary failures', async () => {
     const codex: AgentInfo = {
       id: 'codex',
       name: 'Codex CLI',
@@ -2311,18 +2311,14 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
           latencyMs: 14,
           agentName: 'Codex CLI',
           model: 'default',
-          detail:
-            'spawn failed. Used Codex CLI binary: /opt/homebrew/Cellar/codex/0.80.0/bin/codex.',
-          usedExecutableSource: 'known',
-          usedExecutablePath: '/opt/homebrew/Cellar/codex/0.80.0/bin/codex',
-          detectedExecutablePath: '/opt/homebrew/Cellar/codex/0.80.0/bin/codex',
+          detail: 'spawn failed.',
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       );
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { onPersist } = renderSettingsDialog(
+    renderSettingsDialog(
       { mode: 'daemon', agentId: 'codex' },
       { agents: [codex] },
     );
@@ -2331,22 +2327,9 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Test' }));
 
     await waitFor(() => {
-      expect(screen.getByText(/Used Codex CLI binary: \/opt\/homebrew\/Cellar\/codex/)).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Retry test/i })).toBeTruthy();
     });
-
-    fireEvent.click(screen.getByRole('button', { name: /Try next candidate/i }));
-
-    await waitForPersist(
-      onPersist,
-      expect.objectContaining({
-        agentCliEnv: {
-          codex: {
-            CODEX_BIN: '/opt/homebrew/bin/codex',
-          },
-        },
-      }),
-      {},
-    );
+    expect(screen.queryByRole('button', { name: /Try next candidate/i })).toBeNull();
   });
 
   it('offers Try next candidate for a broken configured OpenCode path with one healthy alternate', async () => {
