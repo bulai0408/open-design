@@ -2122,6 +2122,72 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
     );
   });
 
+  it('marks the selected OpenCode candidate current when a saved binary is no longer listed', async () => {
+    const opencode: AgentInfo = {
+      id: 'opencode',
+      name: 'OpenCode',
+      bin: 'opencode-cli',
+      available: true,
+      path: '/Users/mac/.opencode/bin/opencode',
+      version: 'opencode 1.2.0',
+      models: [{ id: 'default', label: 'Default' }],
+      executableCandidates: [
+        {
+          path: '/Users/mac/.opencode/bin/opencode',
+          bin: 'opencode',
+          version: 'opencode 1.2.0',
+          source: 'known',
+          selected: true,
+          available: true,
+        },
+        {
+          path: '/usr/local/bin/opencode',
+          bin: 'opencode',
+          version: 'opencode 1.1.0',
+          source: 'path',
+          selected: false,
+          available: true,
+        },
+      ],
+    };
+
+    renderSettingsDialog(
+      {
+        mode: 'daemon',
+        agentId: 'opencode',
+        agentCliEnv: {
+          opencode: {
+            OPENCODE_BIN: '/opt/homebrew/bin/opencode',
+          },
+        },
+      },
+      { agents: [opencode] },
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*1 installed/i }));
+
+    expect(screen.queryByText('/opt/homebrew/bin/opencode')).toBeNull();
+    const selectedRow = screen
+      .getByText('/Users/mac/.opencode/bin/opencode')
+      .closest('.agent-candidate-row');
+    expect(selectedRow).not.toBeNull();
+    expect(within(selectedRow as HTMLElement).getByText('Current')).toBeTruthy();
+    expect(
+      within(selectedRow as HTMLElement).queryByRole('button', {
+        name: /Use OpenCode binary/i,
+      }),
+    ).toBeNull();
+    const alternateRow = screen
+      .getByText('/usr/local/bin/opencode')
+      .closest('.agent-candidate-row');
+    expect(alternateRow).not.toBeNull();
+    expect(
+      within(alternateRow as HTMLElement).getByRole('button', {
+        name: /Use OpenCode binary \/usr\/local\/bin\/opencode/i,
+      }),
+    ).toBeTruthy();
+  });
+
   it('offers Try next candidate after an OpenCode connection-test failure', async () => {
     const opencode: AgentInfo = {
       id: 'opencode',

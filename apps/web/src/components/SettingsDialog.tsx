@@ -3160,8 +3160,13 @@ export function SettingsDialog({
                     if (candidates.length < 2) return null;
                     const configuredPath =
                       cfg.agentCliEnv?.[selected.id]?.[envKey]?.trim() ?? '';
+                    const configuredCandidatePath =
+                      configuredPath &&
+                      candidates.some((candidate) => candidate.path === configuredPath)
+                        ? configuredPath
+                        : '';
                     const currentPath =
-                      configuredPath ||
+                      configuredCandidatePath ||
                       candidates.find((candidate) => candidate.selected)
                         ?.path ||
                       selected.path ||
