@@ -1223,6 +1223,7 @@ export const id: Dict = {
   'manualEdit.title': 'Editor manual',
   'manualEdit.fallbackTitle': 'Edit',
   'manualEdit.movePanel': 'Move edit panel',
+  'manualEdit.editParams': 'Edit parameter',
   'manualEdit.closePanel': 'Close edit panel',
   'manualEdit.selectLayer': 'Pilih lapisan',
   'manualEdit.empty': 'Klik elemen di pratinjau atau pilih lapisan.',
