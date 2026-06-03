@@ -55,6 +55,7 @@ import {
   messageTime,
   relativeTimeLong,
 } from "../utils/chatTime";
+import { filterImplicitProducedFiles } from "../produced-files";
 import type {
   AgentEvent,
   ChatMessage,
@@ -712,14 +713,14 @@ function inferProducedFilesFromTurn({
   if (fileOps.length > 0) return [];
   const start = message.startedAt - 1_000;
   const end = message.endedAt + 60_000;
-  return projectFiles
-    .filter((file) => {
+  return filterImplicitProducedFiles(
+    projectFiles.filter((file) => {
       if (file.type === "dir") return false;
       if (!file.name || file.name.startsWith(".")) return false;
       if (file.name.includes("/.")) return false;
       return file.mtime >= start && file.mtime <= end;
-    })
-    .sort((a, b) => b.mtime - a.mtime);
+    }),
+  ).sort((a, b) => b.mtime - a.mtime);
 }
 
 function isFeedbackEligible({
@@ -824,6 +825,13 @@ function AssistantFooter({
 }: AssistantFooterProps) {
   const t = useT();
   const elapsed = useLiveElapsed(streaming, startedAt, endedAt, usage?.durationMs);
+  const formattedCost =
+    typeof usage?.costUsd === "number" &&
+    Number.isFinite(usage.costUsd) &&
+    usage.costUsd > 0
+      ? usage.costUsd.toFixed(4)
+      : "";
+  const costLabel = formattedCost && formattedCost !== "0.0000" ? ` · $${formattedCost}` : "";
   if (
     !forceVisible &&
     !streaming &&
@@ -853,9 +861,7 @@ function AssistantFooter({
         {usage?.outputTokens != null
           ? ` · ${t("assistant.outTokens", { n: usage.outputTokens })}`
           : ""}
-        {typeof usage?.costUsd === "number"
-          ? ` · $${usage.costUsd.toFixed(4)}`
-          : ""}
+        {costLabel}
       </span>
       {feedbackControls}
     </div>
