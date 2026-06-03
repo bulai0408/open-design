@@ -337,12 +337,7 @@ function buildDaemonAgentExitError({
 
   if (
     hasQuotaStatusCode(details) ||
-    text.includes('resource_exhausted') ||
-    text.includes('rate limit') ||
-    text.includes('rate_limit') ||
-    text.includes('capacity on this model') ||
-    text.includes('quota') ||
-    text.includes('exhausted')
+    hasProviderQuotaSignal(details)
   ) {
     const message = text.includes('capacity on this model')
       ? `${label} hit a per-model capacity limit.${retryHint}`
@@ -460,6 +455,14 @@ function buildDaemonAgentExitError({
 
 function hasQuotaStatusCode(details: string): boolean {
   return /(?:\b(?:code|status|statuscode|httpstatus|http status|last status|response status)\b\s*[:=]?\s*["']?429\b|\bhttp\s*429\b|\b429\b[^\n]{0,80}\b(?:too many requests|rate[-_ ]?limit|quota|resource[-_ ]?exhausted|capacity)\b|\b(?:too many requests|rate[-_ ]?limit|quota|resource[-_ ]?exhausted|capacity)\b[^\n]{0,80}\b429\b)/i.test(details);
+}
+
+function hasProviderQuotaSignal(details: string): boolean {
+  return (
+    /\b(?:resource[-_ ]?exhausted|rate[-_ ]?limit|too many requests|capacity on this model)\b/i.test(details) ||
+    /\b(?:openai|anthropic|claude|gemini|google|vertex|generativelanguage|openrouter|model|provider|api)\b[^\n]{0,120}\b(?:quota|exhausted|capacity)\b/i.test(details) ||
+    /\b(?:quota|exhausted|capacity)\b[^\n]{0,120}\b(?:openai|anthropic|claude|gemini|google|vertex|generativelanguage|openrouter|model|provider|api)\b/i.test(details)
+  );
 }
 
 function hasAuthStatusCode(details: string): boolean {
