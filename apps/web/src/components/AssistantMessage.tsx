@@ -20,7 +20,10 @@ import {
   trackFeedbackSubmitResult,
 } from "../analytics/events";
 import {
+  feedbackAgentProviderIdToTracking,
+  modelIdForTracking,
   normalizeCustomReason,
+  type TrackingFeedbackProviderId,
   type TrackingFeedbackReasonCode,
   type TrackingFeedbackRatingWithNone,
   type TrackingProjectKind,
@@ -51,6 +54,7 @@ import {
   messageTime,
   relativeTimeLong,
 } from "../utils/chatTime";
+import { filterImplicitProducedFiles } from "../produced-files";
 import type {
   AgentEvent,
   ChatMessage,
@@ -644,6 +648,8 @@ export function AssistantMessage({
                 conversationId={conversationId}
                 runId={message.runId ?? null}
                 assistantMessageId={message.id}
+                modelId={modelIdForTracking(assistantFeedbackModelId(message))}
+                agentProviderId={feedbackAgentProviderIdToTracking(message.agentId)}
                 producedFileCount={displayedProduced.length}
                 hasDesignSystemContext={hasDesignSystemContext}
                 footerProps={{
@@ -693,14 +699,14 @@ function inferProducedFilesFromTurn({
   if (fileOps.length > 0) return [];
   const start = message.startedAt - 1_000;
   const end = message.endedAt + 60_000;
-  return projectFiles
-    .filter((file) => {
+  return filterImplicitProducedFiles(
+    projectFiles.filter((file) => {
       if (file.type === "dir") return false;
       if (!file.name || file.name.startsWith(".")) return false;
       if (file.name.includes("/.")) return false;
       return file.mtime >= start && file.mtime <= end;
-    })
-    .sort((a, b) => b.mtime - a.mtime);
+    }),
+  ).sort((a, b) => b.mtime - a.mtime);
 }
 
 function isFeedbackEligible({
@@ -767,6 +773,16 @@ function assistantModelDetail(message: ChatMessage): string | null {
   return detail;
 }
 
+function assistantFeedbackModelId(message: ChatMessage): string | null {
+  const detail = assistantModelDetail(message);
+  if (detail) return detail;
+  const displayName = message.agentName?.trim();
+  if (!displayName) return null;
+  const parts = displayName.split(" · ");
+  const model = parts.length > 1 ? parts[parts.length - 1]?.trim() : "";
+  return model || null;
+}
+
 function appendRoleModel(label: string, model: string | null): string {
   if (!model || label.includes(" · ")) return label;
   return `${label} · ${model}`;
@@ -795,6 +811,13 @@ function AssistantFooter({
 }: AssistantFooterProps) {
   const t = useT();
   const elapsed = useLiveElapsed(streaming, startedAt, endedAt, usage?.durationMs);
+  const formattedCost =
+    typeof usage?.costUsd === "number" &&
+    Number.isFinite(usage.costUsd) &&
+    usage.costUsd > 0
+      ? usage.costUsd.toFixed(4)
+      : "";
+  const costLabel = formattedCost && formattedCost !== "0.0000" ? ` · $${formattedCost}` : "";
   if (
     !forceVisible &&
     !streaming &&
@@ -824,9 +847,7 @@ function AssistantFooter({
         {usage?.outputTokens != null
           ? ` · ${t("assistant.outTokens", { n: usage.outputTokens })}`
           : ""}
-        {typeof usage?.costUsd === "number"
-          ? ` · $${usage.costUsd.toFixed(4)}`
-          : ""}
+        {costLabel}
       </span>
       {feedbackControls}
     </div>
@@ -843,6 +864,8 @@ function AssistantFeedback({
   conversationId,
   runId,
   assistantMessageId,
+  modelId,
+  agentProviderId,
   producedFileCount,
 }: {
   feedback: ChatMessage["feedback"];
@@ -854,6 +877,8 @@ function AssistantFeedback({
   conversationId: string | null;
   runId: string | null;
   assistantMessageId: string;
+  modelId: string;
+  agentProviderId: TrackingFeedbackProviderId;
   producedFileCount: number;
 }) {
   const t = useT();
@@ -908,6 +933,8 @@ function AssistantFeedback({
         conversation_id: conversationId,
         assistant_message_id: assistantMessageId,
         run_id: runId ?? null,
+        agent_provider_id: agentProviderId,
+        model_id: modelId,
         rating: reasonRating,
       });
     }
@@ -919,6 +946,8 @@ function AssistantFeedback({
     conversationId,
     assistantMessageId,
     runId,
+    agentProviderId,
+    modelId,
   ]);
   const toggleFeedback = (rating: ChatMessageFeedbackRating) => {
     const nextRating = selected === rating ? null : rating;
@@ -942,6 +971,8 @@ function AssistantFeedback({
       conversation_id: conversationId,
       assistant_message_id: assistantMessageId,
       run_id: runId ?? "",
+      agent_provider_id: agentProviderId,
+      model_id: modelId,
       rating,
       rating_before: ratingBefore,
       has_produced_files: producedFileCount > 0,
@@ -961,6 +992,8 @@ function AssistantFeedback({
         conversation_id: conversationId,
         assistant_message_id: assistantMessageId,
         run_id: runId ?? null,
+        agent_provider_id: agentProviderId,
+        model_id: modelId,
         rating: ratingAfter,
         rating_before: ratingBefore,
         has_produced_files: producedFileCount > 0,
@@ -1000,6 +1033,8 @@ function AssistantFeedback({
         conversation_id: conversationId,
         assistant_message_id: assistantMessageId,
         run_id: runId ?? "",
+        agent_provider_id: agentProviderId,
+        model_id: modelId,
         rating: reasonRating,
         ...(reasonJoined ? { reason: reasonJoined } : {}),
         reason_count: reasonCodes.length,
@@ -1024,6 +1059,8 @@ function AssistantFeedback({
         conversation_id: conversationId,
         assistant_message_id: assistantMessageId,
         run_id: runId ?? "",
+        agent_provider_id: agentProviderId,
+        model_id: modelId,
         rating: reasonRating,
         ...(reasonJoined ? { reason: reasonJoined } : {}),
         reason_count: reasonCodes.length,
@@ -1047,6 +1084,8 @@ function AssistantFeedback({
         conversation_id: conversationId,
         assistant_message_id: assistantMessageId,
         run_id: runId ?? null,
+        agent_provider_id: agentProviderId,
+        model_id: modelId,
         rating: reasonRating,
         reason: reasons,
         reason_count: reasons.length,
@@ -1832,8 +1871,13 @@ function StatusPill({
   label: string;
   detail?: string | undefined;
 }) {
+  const variant =
+    label === "error" ? "error" : label === "warning" ? "warning" : undefined;
   return (
-    <div className="status-pill">
+    <div
+      className={`status-pill${variant ? ` is-${variant}` : ""}`}
+      data-status={label}
+    >
       <span className="status-label">{label}</span>
       {detail ? <span className="status-detail">{renderStatusDetail(detail)}</span> : null}
     </div>
@@ -1842,7 +1886,7 @@ function StatusPill({
 
 function renderStatusDetail(detail: string): ReactNode {
   const segments: ReactNode[] = [];
-  const urlRe = /(https?:\/\/[^\s)<>]+)/g;
+  const urlRe = /(https?:\/\/[^\s)<>"}\]]+)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   let key = 0;
@@ -1875,7 +1919,7 @@ function renderStatusDetail(detail: string): ReactNode {
 }
 
 function splitStatusDetailUrlPunctuation(url: string): [string, string] {
-  const match = /([.,!?;:，。！？；：、'"」』】》〉）]+)$/.exec(url);
+  const match = /([.,!?;:，。！？；：、'"」』】》〉）}\]]+)$/.exec(url);
   if (!match?.[1]) return [url, ''];
   const trimmed = url.slice(0, -match[1].length);
   return trimmed ? [trimmed, match[1]] : [url, ''];

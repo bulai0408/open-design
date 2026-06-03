@@ -28,6 +28,10 @@ import {
   DesignSystemDetailView,
 } from './components/DesignSystemFlow';
 import {
+  IframeKeepAliveProvider,
+  useIframeKeepAlivePool,
+} from './components/IframeKeepAlivePool';
+import {
   SettingsDialog,
   switchApiProtocolConfig,
   updateCurrentApiProtocolConfig,
@@ -92,6 +96,7 @@ import type {
   DesignSystemSummary,
   Project,
   ProjectTemplate,
+  ProviderModelOption,
   PromptTemplateSummary,
   SkillSummary,
 } from './types';
@@ -115,6 +120,11 @@ function normalizeSavedComposioConfig(config: AppConfig['composio']): AppConfig[
   }
   return { ...(config ?? {}) };
 }
+
+type ProjectListRequest = {
+  generation: number;
+  mutationVersion: number;
+};
 
 export async function persistComposioConfigChange(
   current: AppConfig,
@@ -172,7 +182,16 @@ export function resolveSettingsCloseConfig(
 }
 
 export function App() {
+  return (
+    <IframeKeepAliveProvider>
+      <AppInner />
+    </IframeKeepAliveProvider>
+  );
+}
+
+function AppInner() {
   const { t } = useI18n();
+  const iframeKeepAlivePool = useIframeKeepAlivePool();
   const clientType = useMemo(() => detectClientType(), []);
   // Observability marker. `apps/web/src/observability/white-screen.ts`
   // keys its "app actually mounted" success condition on this attribute
@@ -198,6 +217,9 @@ export function App() {
   const [integrationInitialTab, setIntegrationInitialTab] = useState<IntegrationTab>('mcp');
   const [daemonLive, setDaemonLive] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [providerModelsCache, setProviderModelsCache] = useState<
+    Record<string, ProviderModelOption[]>
+  >({});
   // Functional skills (capabilities the agent invokes mid-task) — stays
   // small and lives under the Settings → Skills surface.
   const [skills, setSkills] = useState<SkillSummary[]>([]);
@@ -212,6 +234,11 @@ export function App() {
     queued: [],
     recent: [],
   });
+  const pendingLocalProjectIdsRef = useRef<Set<string>>(new Set());
+  const locallyDeletedProjectIdsRef = useRef<Map<string, number>>(new Map());
+  const projectListMutationVersionRef = useRef(0);
+  const projectListRequestGenerationRef = useRef(0);
+  const latestAppliedProjectListGenerationRef = useRef(0);
   const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
   const [promptTemplates, setPromptTemplates] = useState<
     PromptTemplateSummary[]
@@ -258,6 +285,103 @@ export function App() {
   // automations / plugins / design_systems / integrations) instead.
   // `detectClientType` still feeds analytics identity via the provider.
   void detectClientType;
+
+  const rememberLocalProject = useCallback((projectId: string) => {
+    pendingLocalProjectIdsRef.current.add(projectId);
+    locallyDeletedProjectIdsRef.current.delete(projectId);
+    projectListMutationVersionRef.current += 1;
+  }, []);
+
+  const clearLocalProject = useCallback((projectId: string, options?: { deleted?: boolean }) => {
+    pendingLocalProjectIdsRef.current.delete(projectId);
+    projectListMutationVersionRef.current += 1;
+    if (options?.deleted) {
+      locallyDeletedProjectIdsRef.current.set(
+        projectId,
+        projectListMutationVersionRef.current,
+      );
+    }
+  }, []);
+
+  const beginProjectListRequest = useCallback((): ProjectListRequest => {
+    projectListRequestGenerationRef.current += 1;
+    return {
+      generation: projectListRequestGenerationRef.current,
+      mutationVersion: projectListMutationVersionRef.current,
+    };
+  }, []);
+
+  const reconcileFetchedProjects = useCallback((list: Project[], request: ProjectListRequest) => {
+    const pendingLocalProjectIds = pendingLocalProjectIdsRef.current;
+    const locallyDeletedProjectIds = locallyDeletedProjectIdsRef.current;
+    const fetchedIds = new Set(list.map((project) => project.id));
+    if (request.generation < latestAppliedProjectListGenerationRef.current) {
+      const visibleList =
+        locallyDeletedProjectIds.size > 0
+          ? list.filter((project) => !locallyDeletedProjectIds.has(project.id))
+          : list;
+      if (visibleList.length === 0) return false;
+      const hydratableProjects = visibleList.filter(
+        (project) =>
+          pendingLocalProjectIds.has(project.id),
+      );
+      if (hydratableProjects.length === 0) return false;
+      const hydratableById = new Map(
+        hydratableProjects.map((project) => [project.id, project]),
+      );
+      for (const project of hydratableProjects) {
+        pendingLocalProjectIds.delete(project.id);
+      }
+      setProjects((current) => {
+        let changed = false;
+        const currentIds = new Set<string>();
+        const next = current.map((project) => {
+          currentIds.add(project.id);
+          const hydrated = hydratableById.get(project.id);
+          if (!hydrated) return project;
+          changed = true;
+          hydratableById.delete(project.id);
+          return hydrated;
+        });
+        for (const project of hydratableById.values()) {
+          if (currentIds.has(project.id)) continue;
+          changed = true;
+          next.push(project);
+        }
+        return changed ? next : current;
+      });
+      return true;
+    }
+    latestAppliedProjectListGenerationRef.current = request.generation;
+    for (const id of fetchedIds) pendingLocalProjectIds.delete(id);
+    for (const [id, deletedAtMutationVersion] of locallyDeletedProjectIds) {
+      if (
+        request.mutationVersion >= deletedAtMutationVersion
+        && !fetchedIds.has(id)
+      ) {
+        locallyDeletedProjectIds.delete(id);
+      }
+    }
+    const activeDeletedProjectIds = new Set(locallyDeletedProjectIds.keys());
+    const visibleList =
+      activeDeletedProjectIds.size > 0
+        ? list.filter((project) => !activeDeletedProjectIds.has(project.id))
+        : list;
+    const visibleFetchedIds =
+      activeDeletedProjectIds.size > 0
+        ? new Set(visibleList.map((project) => project.id))
+        : fetchedIds;
+    setProjects((current) => {
+      const preserved = current.filter(
+        (project) =>
+          pendingLocalProjectIds.has(project.id) &&
+          !visibleFetchedIds.has(project.id) &&
+          !activeDeletedProjectIds.has(project.id),
+      );
+      return preserved.length > 0 ? [...preserved, ...visibleList] : visibleList;
+    });
+    return true;
+  }, []);
 
   // Propagate the Privacy toggle through to PostHog without a reload —
   // posthog-js's opt_out_capturing flips a localStorage flag that makes
@@ -427,9 +551,10 @@ export function App() {
         setDsLoading(false);
       });
 
+      const request = beginProjectListRequest();
       void listProjects().then((list) => {
         if (cancelled) return;
-        setProjects(list);
+        reconcileFetchedProjects(list, request);
         setProjectsLoading(false);
       });
 
@@ -533,7 +658,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [beginProjectListRequest, reconcileFetchedProjects]);
 
   // Auto-pick the first available agent once both the daemon-stored config
   // and the agents listing have landed. Splitting this out of bootstrap
@@ -600,9 +725,10 @@ export function App() {
   }, []);
 
   const refreshProjects = useCallback(async () => {
+    const request = beginProjectListRequest();
     const list = await listProjects();
-    setProjects(list);
-  }, []);
+    reconcileFetchedProjects(list, request);
+  }, [beginProjectListRequest, reconcileFetchedProjects]);
 
   const refreshDesignSystems = useCallback(async () => {
     const list = await fetchDesignSystems();
@@ -934,6 +1060,7 @@ export function App() {
             appliedPluginSnapshotId: result.appliedPluginSnapshotId,
           }
         : result.project;
+      rememberLocalProject(project.id);
       flushSync(() => {
         setProjects((curr) => [
           project,
@@ -949,7 +1076,7 @@ export function App() {
       navigate(projectRoute);
       return true;
     },
-    [analytics.track],
+    [analytics.track, rememberLocalProject],
   );
 
   const handleCreatePluginShareProject = useCallback(
@@ -975,6 +1102,7 @@ export function App() {
             appliedPluginSnapshotId: outcome.appliedPluginSnapshotId,
           }
         : outcome.project;
+      rememberLocalProject(project.id);
       setProjects((curr) => [
         project,
         ...curr.filter((p) => p.id !== project.id),
@@ -986,7 +1114,7 @@ export function App() {
       });
       return outcome;
     },
-    [],
+    [rememberLocalProject],
   );
 
   const handleImportClaudeDesign = useCallback(async (
@@ -994,6 +1122,7 @@ export function App() {
   ): Promise<ImportClaudeDesignOutcome> => {
     try {
       const result = await importClaudeDesignZip(file);
+      rememberLocalProject(result.project.id);
       setProjects((curr) => [
         result.project,
         ...curr.filter((p) => p.id !== result.project.id),
@@ -1010,36 +1139,56 @@ export function App() {
         message: err instanceof Error ? err.message : 'The ZIP could not be imported.',
       };
     }
-  }, []);
+  }, [rememberLocalProject]);
 
   const handleImportFolder = useCallback(async (baseDir: string) => {
     const result = await importFolderProject({ baseDir });
+    rememberLocalProject(result.project.id);
     setProjects((curr) => [result.project, ...curr.filter((p) => p.id !== result.project.id)]);
     navigate({
       kind: 'project',
       projectId: result.project.id,
       fileName: result.entryFile,
     });
-  }, []);
+  }, [rememberLocalProject]);
 
   // PR #974: on desktop, the host bridge owns the picker and import POST
   // atomically. The renderer never sees the path, token, or daemon DTO;
   // it receives host-owned project identifiers and refreshes project state
   // through the normal daemon API.
   const handleImportFolderResponse = useCallback(async (result: OpenDesignHostProjectImportSuccess) => {
+    rememberLocalProject(result.projectId);
     const project = await getProject(result.projectId);
     if (project != null) {
       setProjects((curr) => [project, ...curr.filter((p) => p.id !== project.id)]);
     } else {
+      // Daemon hasn't materialized the full record yet (race between the
+      // host's import POST and our /api/projects read). Seed a minimal
+      // placeholder so the route stays alive and ProjectView mounts; the
+      // pending-local id keeps reconcileFetchedProjects from evicting the
+      // stub until a project-list snapshot actually includes it, and the
+      // next refresh swaps it for the real Project record. Without the
+      // stub, a stale `[]` list response would replace `projects` with `[]`
+      // and the route-guard effect would bounce the user back to Home.
+      const stub: Project = {
+        id: result.projectId,
+        name: '',
+        skillId: null,
+        designSystemId: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      setProjects((curr) => [stub, ...curr.filter((p) => p.id !== stub.id)]);
+      const request = beginProjectListRequest();
       const list = await listProjects();
-      setProjects(list);
+      reconcileFetchedProjects(list, request);
     }
     navigate({
       kind: 'project',
       projectId: result.projectId,
       fileName: result.entryFile,
     });
-  }, []);
+  }, [beginProjectListRequest, rememberLocalProject, reconcileFetchedProjects]);
 
   const handleOpenProject = useCallback((id: string) => {
     navigate({ kind: 'project', projectId: id, fileName: null });
@@ -1078,12 +1227,14 @@ export function App() {
   const handleDeleteProject = useCallback(async (id: string) => {
     const ok = await deleteProjectApi(id);
     if (!ok) return false;
+    clearLocalProject(id, { deleted: true });
+    iframeKeepAlivePool.evictProject(id, { includeActive: true });
     setProjects((curr) => curr.filter((p) => p.id !== id));
     if (route.kind === 'project' && route.projectId === id) {
       navigate({ kind: 'home', view: 'home' });
     }
     return true;
-  }, [route]);
+  }, [clearLocalProject, iframeKeepAlivePool, route]);
 
   const handleRenameProject = useCallback(async (id: string, name: string) => {
     const trimmed = name.trim();
@@ -1120,8 +1271,70 @@ export function App() {
   }, [route]);
 
   const handleProjectChange = useCallback((updated: Project) => {
-    setProjects((curr) => curr.map((p) => (p.id === updated.id ? updated : p)));
-  }, []);
+    setProjects((curr) => {
+      const previous = curr.find((p) => p.id === updated.id);
+      if (
+        previous
+        && (
+          previous.skillId !== updated.skillId
+          || previous.designSystemId !== updated.designSystemId
+          || previous.customInstructions !== updated.customInstructions
+        )
+      ) {
+        iframeKeepAlivePool.evictProject(updated.id, { includeActive: true });
+      }
+      return curr.map((p) => (p.id === updated.id ? updated : p));
+    });
+  }, [iframeKeepAlivePool]);
+
+  // ProjectView's prompt-context signature derives from SkillSummary /
+  // DesignSystemSummary fields, so a body-only registry edit (same name,
+  // description, etc.) leaves every signature unchanged and the active
+  // preview keeps serving stale prompt context. Settings → Skills /
+  // Settings → Design Systems call back through these handlers after
+  // every successful mutation; we drop any pool entry whose project
+  // depends on the affected id — active or parked — so the next mount
+  // recomposes the system prompt with the new body. A ref tracks
+  // projects so the callback is stable across renders.
+  const projectsRef = useRef<Project[]>(projects);
+  useEffect(() => {
+    projectsRef.current = projects;
+  }, [projects]);
+
+  const handleSkillsChanged = useCallback(
+    (affectedSkillId?: string) => {
+      void fetchSkills().then((list) => setSkills(list));
+      void fetchDesignTemplates().then((list) => setDesignTemplates(list));
+      iframeKeepAlivePool.evictMatching(
+        (entry) => {
+          const proj = projectsRef.current.find((p) => p.id === entry.projectId);
+          if (!proj) return false;
+          if (affectedSkillId) return proj.skillId === affectedSkillId;
+          return proj.skillId != null;
+        },
+        { includeActive: true },
+      );
+    },
+    [iframeKeepAlivePool],
+  );
+
+  const handleDesignSystemsChanged = useCallback(
+    (affectedDesignSystemId?: string) => {
+      void fetchDesignSystems().then((list) => setDesignSystems(list));
+      iframeKeepAlivePool.evictMatching(
+        (entry) => {
+          const proj = projectsRef.current.find((p) => p.id === entry.projectId);
+          if (!proj) return false;
+          if (affectedDesignSystemId) {
+            return proj.designSystemId === affectedDesignSystemId;
+          }
+          return proj.designSystemId != null;
+        },
+        { includeActive: true },
+      );
+    },
+    [iframeKeepAlivePool],
+  );
 
   const activeProject =
     route.kind === 'project'
@@ -1150,17 +1363,25 @@ export function App() {
         });
         return;
       }
+      const request = beginProjectListRequest();
       const list = await listProjects();
       if (cancelled) return;
-      setProjects(list);
-      if (!list.find((p) => p.id === route.projectId)) {
+      const applied = reconcileFetchedProjects(list, request);
+      if (!applied) return;
+      const fetchedProject = locallyDeletedProjectIdsRef.current.has(route.projectId)
+        ? undefined
+        : list.find((p) => p.id === route.projectId);
+      const staleRequest = request.mutationVersion < projectListMutationVersionRef.current;
+      const knownLocalProject =
+        staleRequest && pendingLocalProjectIdsRef.current.has(route.projectId);
+      if (!fetchedProject && !knownLocalProject) {
         navigate({ kind: 'home', view: 'home' }, { replace: true });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [route, activeProject, projects, daemonLive]);
+  }, [route, activeProject, projects, daemonLive, beginProjectListRequest, reconcileFetchedProjects]);
 
   const openSettings = useCallback((
     section: SettingsSection = 'execution',
@@ -1419,6 +1640,8 @@ export function App() {
         defaultDesignSystemId={config.designSystemId}
         agents={agents}
         config={config}
+        providerModelsCache={providerModelsCache}
+        onProviderModelsCacheChange={setProviderModelsCache}
         integrationInitialTab={integrationInitialTab}
         composioConfigLoading={composioConfigLoading}
         daemonLive={daemonLive}
@@ -1540,6 +1763,11 @@ export function App() {
           daemonMediaProvidersFetchState={daemonMediaProvidersFetchState}
           mediaProvidersNotice={mediaProvidersNotice}
           onReloadMediaProviders={reloadMediaProvidersFromDaemon}
+          onProjectsRefresh={refreshProjects}
+          onSkillsChanged={handleSkillsChanged}
+          onDesignSystemsChanged={handleDesignSystemsChanged}
+          providerModelsCache={providerModelsCache}
+          onProviderModelsCacheChange={setProviderModelsCache}
         />
       ) : null}
       <MemoryToast onOpenMemory={() => openSettings('memory')} />

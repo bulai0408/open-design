@@ -42,6 +42,7 @@ export type AnalyticsEventName =
   | 'settings_view'
   | 'settings_cli_test_result'
   | 'settings_byok_test_result'
+  | 'settings_byok_models_fetch_result'
   | 'settings_connector_auth_result'
   // Onboarding-only result events. UI clicks + page_views inside the
   // onboarding flow reuse the generic `ui_click` / `page_view` shapes
@@ -157,6 +158,10 @@ export type TrackingCliProviderId =
   | 'kilo'
   | 'other';
 
+export type TrackingFeedbackProviderId =
+  | TrackingCliProviderId
+  | TrackingByokProviderId;
+
 export type TrackingArtifactKind =
   | 'html'
   | 'markdown'
@@ -171,8 +176,11 @@ export type TrackingExportFormat =
   | 'pptx'
   | 'zip'
   | 'html'
+  | 'image'
   | 'markdown'
   | 'template'
+  | 'share_link'
+  | 'share_page'
   | 'vercel'
   | 'cloudflare_pages';
 
@@ -180,6 +188,102 @@ export type TrackingResult = 'success' | 'failed';
 export type TrackingRunResult = 'success' | 'failed' | 'cancelled';
 export type TrackingExportResult = 'success' | 'failed' | 'cancelled';
 export type TrackingTestResult = 'success' | 'failed' | 'timeout';
+export type TrackingRunFailureCategory =
+  | 'auth'
+  | 'rate_limit'
+  | 'insufficient_balance'
+  | 'model_unavailable'
+  | 'prompt_too_large'
+  | 'upstream_unavailable'
+  | 'timeout'
+  | 'empty_output'
+  | 'tool_error'
+  | 'process_exit'
+  | 'user_cancel'
+  | 'unknown';
+export type TrackingRunFailureDetail =
+  | 'auth_required'
+  | 'stale_profile'
+  | 'refresh_token_reused'
+  | 'missing_api_key'
+  | 'hard_quota'
+  | 'rate_limit_429'
+  | 'amr_insufficient_balance'
+  | 'model_not_found'
+  | 'model_not_supported'
+  | 'model_disabled'
+  | 'cli_version_incompatible'
+  | 'prompt_too_large'
+  | 'upstream_5xx'
+  | 'stream_disconnected'
+  | 'network_error'
+  | 'provider_high_demand'
+  | 'provider_routing_error'
+  | 'inactivity_timeout'
+  | 'timeout'
+  | 'empty_output'
+  | 'tool_error'
+  | 'cli_not_installed'
+  | 'spawn_failed'
+  | 'spawn_enoexec'
+  | 'spawn_ebadf'
+  | 'spawn_eperm'
+  | 'stdin_write_eof'
+  | 'agent_protocol_error'
+  | 'permission_request_not_found'
+  | 'qoder_stop_sequence'
+  | 'exit_code'
+  | 'terminated_unknown'
+  | 'execution_failed'
+  | 'user_cancelled'
+  | 'unknown';
+export type TrackingRunFailureStage =
+  | 'preflight'
+  | 'spawn'
+  | 'session_init'
+  | 'model_select'
+  | 'prompt_send'
+  | 'first_token_wait'
+  | 'tool_execution'
+  | 'artifact_write'
+  | 'child_close'
+  | 'finalize';
+export type TrackingRunFailureUserAction =
+  | 'retry'
+  | 'login'
+  | 'recharge'
+  | 'switch_model'
+  | 'reduce_context'
+  | 'install_cli'
+  | 'none';
+export type TrackingRunDiagnosticSource =
+  | 'error_event'
+  | 'stderr'
+  | 'exit_code'
+  | 'signal'
+  | 'unknown';
+export type TrackingStderrLineCountBucket =
+  | 'none'
+  | '1_5'
+  | '6_20'
+  | '21_100'
+  | 'gt_100';
+export type TrackingLangfuseDeliveryStatus =
+  | 'not_expected'
+  | 'queued'
+  | 'accepted'
+  | 'failed';
+export type TrackingLangfuseDropReason =
+  | 'metrics_consent_off'
+  | 'content_consent_off'
+  | 'missing_sink_config'
+  | 'payload_too_large'
+  | 'relay_429'
+  | 'relay_413'
+  | 'relay_5xx'
+  | 'langfuse_4xx'
+  | 'langfuse_5xx'
+  | 'network_error';
 
 export type TrackingFeedbackRating = 'positive' | 'negative';
 // Click events emit `none` when the user clears a previously-set rating, so
@@ -984,6 +1088,7 @@ export interface ProjectsListControlsClickProps {
     | 'your_designs'
     | 'search_input'
     | 'select'
+    | 'create_project'
     | 'grid_view'
     | 'list_view';
 }
@@ -1314,6 +1419,12 @@ export interface ShareOptionPopoverClickProps {
 }
 
 // FEEDBACK clicks (CSV rows 56 / 58)
+// `agent_provider_id` / `model_id` are carried on every feedback event so
+// `reason × agent` and `reason × model` analyses don't need to join back to
+// `run_created` (which loses rows when the feedback is given to a message
+// whose run is outside the query window — the dominant source of "unknown"
+// in earlier reports). `model_id` uses `'default'` instead of null when the
+// user did not pick a specific model; see `modelIdForTracking`.
 export interface AssistantFeedbackButtonClickProps {
   page_name: 'chat_panel';
   area: 'chat_panel';
@@ -1324,6 +1435,8 @@ export interface AssistantFeedbackButtonClickProps {
   conversation_id: string | null;
   assistant_message_id: string;
   run_id: string;
+  agent_provider_id: TrackingFeedbackProviderId;
+  model_id: string;
   // For `clear_feedback_rating`, `rating` carries the rating that was
   // cleared (not the previous-before-clear value, which lives in
   // `rating_before`). Mason flagged the v1 emission supplied the wrong
@@ -1343,6 +1456,8 @@ export interface AssistantFeedbackReasonSubmitClickProps {
   conversation_id: string | null;
   assistant_message_id: string;
   run_id: string;
+  agent_provider_id: TrackingFeedbackProviderId;
+  model_id: string;
   rating: 'positive' | 'negative';
   reason?: string;
   reason_count: number;
@@ -1368,6 +1483,7 @@ export type TrackingSettingsArea =
   | 'notifications'
   | 'pets'
   | 'design_systems'
+  | 'project_locations'
   | 'privacy'
   | 'about';
 
@@ -1726,8 +1842,11 @@ export interface RunCreatedProps {
   aspect?: string;
   has_attachment: boolean;
   user_query_tokens: number;
-  model_id: string | null;
-  agent_provider_id: string | null;
+  // `'default'` when the user did not pick a specific model and the agent's
+  // own default was selected; use `modelIdForTracking` to bucket null/empty
+  // into `'default'` at every emit site.
+  model_id: string;
+  agent_provider_id: TrackingCliProviderId;
   skill_id: string | null;
   mcp_id: string | null;
   token_count_source: TrackingTokenCountSource;
@@ -1737,12 +1856,45 @@ export interface RunFinishedProps extends Omit<RunCreatedProps, 'area'> {
   area: 'chat_panel' | 'design_system_generation';
   result: TrackingRunResult;
   error_code?: string;
+  failure_category?: TrackingRunFailureCategory;
+  failure_detail?: TrackingRunFailureDetail;
+  failure_stage?: TrackingRunFailureStage;
+  retryable?: boolean;
+  user_action?: TrackingRunFailureUserAction;
+  langfuse_trace_id?: string;
+  langfuse_expected?: boolean;
+  langfuse_drop_reason?: TrackingLangfuseDropReason;
+  langfuse_delivery_status?: TrackingLangfuseDeliveryStatus;
+  diagnostic_source?: TrackingRunDiagnosticSource;
+  stderr_present?: boolean;
+  stderr_line_count_bucket?: TrackingStderrLineCountBucket;
   artifact_count: number;
+  // True when the run raised an AskUserQuestion clarification card. Such runs
+  // are intent-clarification turns (the agent stops to ask the user a question)
+  // and therefore inherently produce no artifact, so the dashboard can exclude
+  // them from the "run finished -> has artifact" funnel instead of counting
+  // them as artifact-generation failures.
+  asked_user_question: boolean;
   input_tokens?: number;
+  input_tokens_provider?: number;
+  input_tokens_effective?: number;
   output_tokens?: number;
   total_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  uncached_input_tokens?: number;
+  estimated_context_tokens?: number;
+  cache_hit_ratio?: number;
+  cache_token_source?: 'anthropic' | 'openai' | 'unavailable';
+  queue_duration_ms?: number;
+  pre_spawn_duration_ms?: number;
+  process_spawn_duration_ms?: number;
   time_to_first_token_ms?: number;
+  spawn_to_first_token_ms?: number;
   generation_duration_ms?: number;
+  tool_call_count?: number;
+  tool_duration_ms?: number;
+  finalize_duration_ms?: number;
   total_duration_ms: number;
   // DS-variant outcome fields. `design_system_created` is true when
   // the run produced a stored DESIGN.md; `preview_module_count` and
@@ -1849,6 +2001,14 @@ export interface FeedbackSubmitResultProps {
   conversation_id: string | null;
   assistant_message_id: string;
   run_id: string;
+  // `model_id` uses `modelIdForTracking` to bucket null/empty into the real
+  // `'default'` bucket (user accepted the agent's own default), so the
+  // PostHog `model_id` column never carries the analyst-hostile mix of
+  // "no selection" and "join failed" that `null/unknown` used to mean.
+  // `agent_provider_id` carries the BYOK provider when the agent maps to
+  // one, so reason × provider analyses can split CLI vs API surfaces.
+  model_id: string;
+  agent_provider_id: TrackingFeedbackProviderId;
   rating: 'positive' | 'negative';
   reason?: string;
   reason_count: number;
@@ -1868,6 +2028,12 @@ interface AssistantFeedbackBase {
   // but the product funnel keys off this; we emit `null` rather than dropping
   // the field so PostHog can distinguish "no run id" from "field forgotten".
   run_id: string | null;
+  // Same rationale as `FeedbackSubmitResultProps`: carry agent/model on the
+  // event itself so reason × agent / reason × model analyses don't depend
+  // on joining back to `run_created`. Buckets via `modelIdForTracking` and
+  // `feedbackAgentProviderIdToTracking` at every emit site.
+  agent_provider_id: TrackingFeedbackProviderId;
+  model_id: string;
   rating: TrackingFeedbackRating;
 }
 
@@ -1937,8 +2103,26 @@ export interface SettingsByokTestResultProps {
   // wire format matches the doc.
   area: 'execution_model';
   provider_id: TrackingByokProviderId;
-  result: TrackingTestResult | 'not_ready';
+  result: TrackingTestResult;
   error_code?: string;
+  error_kind?: string;
+  field_missing?: 'api_key' | 'base_url' | 'model' | 'multiple' | 'none';
+  config_key_changed?: boolean;
+  success_after_action?: boolean;
+  duration_ms: number;
+}
+
+export interface SettingsByokModelsFetchResultProps {
+  page_name: TrackingSettingsPage;
+  area: 'configure_execution_mode_byok';
+  provider_id: TrackingByokProviderId;
+  result: TrackingResult;
+  trigger: 'auto' | 'manual';
+  source: 'network' | 'cache';
+  error_code?: string;
+  error_kind?: string;
+  field_missing?: 'api_key' | 'base_url' | 'model' | 'multiple' | 'none';
+  model_count?: number;
   duration_ms: number;
 }
 
@@ -1982,6 +2166,10 @@ export type AnalyticsEventPayload =
   | { event: 'settings_view'; props: SettingsViewProps }
   | { event: 'settings_cli_test_result'; props: SettingsCliTestResultProps }
   | { event: 'settings_byok_test_result'; props: SettingsByokTestResultProps }
+  | {
+      event: 'settings_byok_models_fetch_result';
+      props: SettingsByokModelsFetchResultProps;
+    }
   | { event: 'settings_connector_auth_result'; props: SettingsConnectorAuthResultProps }
   | { event: 'onboarding_runtime_scan_result'; props: OnboardingRuntimeScanResultProps }
   | { event: 'onboarding_complete_result'; props: OnboardingCompleteResultProps }
@@ -2063,6 +2251,16 @@ export function executionModeToTracking(
   return mode === 'daemon' ? 'local_cli' : 'byok';
 }
 
+// Model id bucket for analytics. `'default'` represents "user did not pick
+// a specific model — went with the agent's own default". This is a real,
+// analysable bucket, distinct from `null/unknown` which previously masked
+// both "no selection" and "join failed". Callers that have a non-empty
+// model string pass it through unchanged.
+export function modelIdForTracking(model: string | null | undefined): string {
+  const trimmed = typeof model === 'string' ? model.trim() : '';
+  return trimmed.length > 0 ? trimmed : 'default';
+}
+
 // Daemon agent id (apps/daemon/src/agents.ts) → CSV cli_provider_id.
 export function agentIdToTracking(agentId: string | null | undefined): TrackingCliProviderId {
   switch (agentId) {
@@ -2094,6 +2292,27 @@ export function agentIdToTracking(agentId: string | null | undefined): TrackingC
       return 'kilo';
     default:
       return 'other';
+  }
+}
+
+export function feedbackAgentProviderIdToTracking(
+  agentId: string | null | undefined,
+): TrackingFeedbackProviderId {
+  switch (agentId) {
+    case 'anthropic-api':
+      return byokProtocolToTracking('anthropic') ?? 'other';
+    case 'openai-api':
+      return byokProtocolToTracking('openai') ?? 'other';
+    case 'azure-openai-api':
+      return byokProtocolToTracking('azure') ?? 'other';
+    case 'google-gemini-api':
+      return byokProtocolToTracking('google') ?? 'other';
+    case 'ollama-cloud-api':
+      return byokProtocolToTracking('ollama') ?? 'other';
+    case 'senseaudio-api':
+      return byokProtocolToTracking('senseaudio') ?? 'other';
+    default:
+      return agentIdToTracking(agentId);
   }
 }
 
@@ -2157,6 +2376,8 @@ export function settingsSectionToTracking(
       return 'skills';
     case 'designSystems':
       return 'design_systems';
+    case 'projectLocations':
+      return 'project_locations';
     case 'memory':
       return 'memory';
     case 'privacy':

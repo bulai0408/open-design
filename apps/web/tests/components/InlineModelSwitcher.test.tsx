@@ -4,7 +4,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InlineModelSwitcher } from '../../src/components/InlineModelSwitcher';
 import { AMR_LOGIN_TIMEOUT_MS } from '../../src/components/amrLoginPolling';
-import type { AgentInfo, AppConfig } from '../../src/types';
+import { providerModelsCacheKey } from '../../src/components/providerModelsCache';
+import type { AgentInfo, AppConfig, ProviderModelOption } from '../../src/types';
 
 const baseConfig: AppConfig = {
   mode: 'daemon',
@@ -48,12 +49,14 @@ const codexAgent: AgentInfo = {
 function renderSwitcher(
   config: Partial<AppConfig> = {},
   agents: AgentInfo[] = [amrAgent],
+  providerModelsCache: Record<string, ProviderModelOption[]> = {},
 ) {
   const onAgentModelChange = vi.fn();
   const view = render(
     <InlineModelSwitcher
       config={{ ...baseConfig, ...config }}
       agents={agents}
+      providerModelsCache={providerModelsCache}
       daemonLive={true}
       onModeChange={vi.fn()}
       onAgentChange={vi.fn()}
@@ -156,6 +159,8 @@ describe('InlineModelSwitcher AMR row', () => {
     fireEvent.click(screen.getByTestId('inline-model-switcher-chip'));
 
     const popover = screen.getByTestId('inline-model-switcher-popover');
+    expect(within(popover).getByTestId('inline-model-switcher-open-settings')).toBeTruthy();
+    expect(within(popover).getByRole('button', { name: /settings/i })).toBeTruthy();
     const amrButton = await within(popover).findByRole('radio', {
       name: /^AMR\s+Sign in$/i,
     });
@@ -167,13 +172,15 @@ describe('InlineModelSwitcher AMR row', () => {
     expect(within(popover).queryByText(/Not signed in/i)).toBeNull();
     expect(within(popover).queryByRole('button', { name: 'Sign in' })).toBeNull();
 
-    const modelSelect = within(popover).getByTestId(
+    const modelPicker = within(popover).getByTestId(
       'inline-model-switcher-agent-model',
-    ) as HTMLSelectElement;
-    expect(Array.from(modelSelect.options).map((option) => option.value)).toEqual([
-      'default',
-      'amr-cloud-latest',
-    ]);
+    );
+    expect(modelPicker.textContent).toContain('Default');
+    fireEvent.click(modelPicker);
+    const modelPopover = screen.getByTestId('inline-model-switcher-agent-model-popover');
+    expect(
+      within(modelPopover).getAllByRole('option').map((option) => option.textContent?.trim()),
+    ).toEqual(['Default', 'AMR Cloud Latest']);
   });
 
   it('persists the live AMR fallback when the saved AMR model is stale', async () => {
@@ -196,14 +203,15 @@ describe('InlineModelSwitcher AMR row', () => {
     fireEvent.click(screen.getByTestId('inline-model-switcher-chip'));
 
     const popover = screen.getByTestId('inline-model-switcher-popover');
-    const modelSelect = within(popover).getByTestId(
+    const modelPicker = within(popover).getByTestId(
       'inline-model-switcher-agent-model',
-    ) as HTMLSelectElement;
-    expect(modelSelect.value).toBe('default');
-    expect(Array.from(modelSelect.options).map((option) => option.value)).toEqual([
-      'default',
-      'amr-cloud-latest',
-    ]);
+    );
+    expect(modelPicker.textContent).toContain('Default');
+    fireEvent.click(modelPicker);
+    const modelPopover = screen.getByTestId('inline-model-switcher-agent-model-popover');
+    expect(
+      within(modelPopover).getAllByRole('option').map((option) => option.textContent?.trim()),
+    ).toEqual(['Default', 'AMR Cloud Latest']);
     await waitFor(() => {
       expect(onAgentModelChange).toHaveBeenCalledWith('amr', {
         model: 'default',
@@ -245,6 +253,86 @@ describe('InlineModelSwitcher AMR row', () => {
     expect(within(amrButton).getByText(/Signed in/i)).toBeTruthy();
     expect(within(popover).queryByText(/manual-amr@example\.local/i)).toBeNull();
     expect(within(popover).queryByRole('button', { name: 'Sign out' })).toBeNull();
+  });
+
+  it('filters fetched BYOK provider models in the Home switcher search box', async () => {
+    renderSwitcher(
+      {
+        mode: 'api',
+        apiProtocol: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        apiProviderBaseUrl: 'https://api.openai.com/v1',
+        apiKey: 'sk-test',
+        model: 'gpt-4.1-mini',
+      },
+      [amrAgent, codexAgent],
+      {
+        [providerModelsCacheKey(
+          'openai',
+          'https://api.openai.com/v1',
+          'sk-test',
+        )]: [
+          { id: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+          { id: 'gpt-4.1', label: 'gpt-4.1' },
+          { id: 'gpt-5.5', label: 'gpt-5.5' },
+          { id: 'o4-mini', label: 'o4-mini' },
+          { id: 'o3', label: 'o3' },
+          { id: 'o1', label: 'o1' },
+          { id: 'gpt-4o', label: 'gpt-4o' },
+          { id: 'gpt-4o-mini', label: 'gpt-4o-mini' },
+        ],
+      },
+    );
+
+    fireEvent.click(screen.getByTestId('inline-model-switcher-chip'));
+
+    const modelPicker = screen.getByTestId('inline-model-switcher-api-model');
+    fireEvent.click(modelPicker);
+
+    const searchInput = screen.getByTestId(
+      'inline-model-switcher-api-model-search',
+    ) as HTMLInputElement;
+    fireEvent.change(searchInput, { target: { value: '5.5' } });
+
+    const modelPopover = screen.getByTestId('inline-model-switcher-api-model-popover');
+    expect(
+      within(modelPopover).getAllByRole('option').map((option) => option.textContent?.trim()),
+    ).toEqual(['gpt-4.1-mini', 'gpt-5.5']);
+  });
+
+  it('prefers fetched BYOK provider models over only showing the currently selected custom model', async () => {
+    renderSwitcher(
+      {
+        mode: 'api',
+        apiProtocol: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        apiProviderBaseUrl: 'https://api.openai.com/v1',
+        apiKey: 'sk-test',
+        model: 'gpt-4.1-mini',
+      },
+      [amrAgent, codexAgent],
+      {
+        [providerModelsCacheKey(
+          'openai',
+          'https://api.openai.com/v1',
+          'sk-test',
+        )]: [
+          { id: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+          { id: 'gpt-4.1', label: 'gpt-4.1' },
+          { id: 'gpt-5.5', label: 'gpt-5.5' },
+        ],
+      },
+    );
+
+    fireEvent.click(screen.getByTestId('inline-model-switcher-chip'));
+
+    const modelPicker = screen.getByTestId('inline-model-switcher-api-model');
+    fireEvent.click(modelPicker);
+    const modelPopover = screen.getByTestId('inline-model-switcher-api-model-popover');
+    expect(
+      within(modelPopover).getAllByRole('option').map((option) => option.textContent?.trim()),
+    ).toEqual(expect.arrayContaining(['gpt-4.1-mini', 'gpt-4.1', 'gpt-5.5']));
+    expect(within(modelPopover).getAllByRole('option').length).toBeGreaterThan(1);
   });
 
   it('treats env-backed AMR login as signed in even when no user profile is available', async () => {
@@ -601,5 +689,40 @@ describe('InlineModelSwitcher AMR row', () => {
       expect(loginCalls).toBe(1);
       expect(onAgentChange).toHaveBeenCalledWith('amr');
     });
+  });
+
+  it('lists fetched BYOK provider models from the shared cache', () => {
+    const cacheKey = providerModelsCacheKey(
+      'anthropic',
+      baseConfig.baseUrl,
+      'sk-test',
+      '',
+    );
+    renderSwitcher(
+      {
+        mode: 'api',
+        apiKey: 'sk-test',
+        model: 'claude-3-5-haiku-latest',
+      },
+      [amrAgent],
+      {
+        [cacheKey]: [
+          { id: 'claude-3-5-haiku-latest', label: 'Claude 3.5 Haiku' },
+        ],
+      },
+    );
+
+    fireEvent.click(screen.getByTestId('inline-model-switcher-chip'));
+
+    const select = screen.getByTestId(
+      'inline-model-switcher-api-model',
+    );
+    fireEvent.click(select);
+    const modelPopover = screen.getByTestId(
+      'inline-model-switcher-api-model-popover',
+    );
+    expect(
+      within(modelPopover).getByRole('option', { name: 'Claude 3.5 Haiku' }),
+    ).toBeTruthy();
   });
 });

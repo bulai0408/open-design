@@ -19,6 +19,7 @@ const {
   importGitHubDesignSystemMock,
   fetchProviderModelsMock,
   fetchLatestGithubReleaseInfoMock,
+  analyticsTrackMock,
 } = vi.hoisted(() => ({
   playSoundMock: vi.fn(),
   requestNotificationPermissionMock: vi.fn(),
@@ -34,6 +35,7 @@ const {
   importGitHubDesignSystemMock: vi.fn(),
   fetchProviderModelsMock: vi.fn(),
   fetchLatestGithubReleaseInfoMock: vi.fn(),
+  analyticsTrackMock: vi.fn(),
 }));
 
 vi.mock('../../src/utils/notifications', async () => {
@@ -70,6 +72,18 @@ vi.mock('../../src/providers/registry', async () => {
 
 vi.mock('../../src/providers/provider-models', () => ({
   fetchProviderModels: fetchProviderModelsMock,
+}));
+
+vi.mock('../../src/analytics/provider', () => ({
+  useAnalytics: () => ({
+    track: analyticsTrackMock,
+    setConsent: () => undefined,
+    setIdentity: () => undefined,
+    setConfigureGlobals: () => undefined,
+    anonymousId: 'test-anonymous',
+    sessionId: 'test-session',
+    newRequestId: () => 'test-request',
+  }),
 }));
 
 import { SettingsDialog } from '../../src/components/SettingsDialog';
@@ -114,6 +128,7 @@ const amrAgent: AgentInfo = {
   available: true,
   version: '1.0.0',
   models: [{ id: 'default', label: 'Default' }],
+  supportsCustomModel: false,
 };
 
 type OnRefreshAgents = (
@@ -295,6 +310,7 @@ beforeEach(() => {
   importLocalDesignSystemMock.mockReset();
   importGitHubDesignSystemMock.mockReset();
   fetchProviderModelsMock.mockReset();
+  analyticsTrackMock.mockReset();
   notificationPermissionMock.mockReturnValue('default');
   requestNotificationPermissionMock.mockResolvedValue('granted');
   showCompletionNotificationMock.mockResolvedValue('shown');
@@ -445,11 +461,13 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
     renderSettingsDialog({ apiProtocol: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', apiProviderBaseUrl: 'https://api.openai.com/v1' });
 
     fireEvent.click(screen.getByRole('tab', { name: 'OpenAI' }));
+    // Quick fill dropdown indexes for the openai protocol:
+    // 0 = OpenAI, 1 = OpenRouter, 2 = DeepSeek — OpenAI, …
     fireEvent.change(screen.getByLabelText('Quick fill provider'), {
-      target: { value: '1' },
+      target: { value: '2' },
     });
 
-    expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('deepseek-chat');
+    expect(screen.getByRole('combobox', { name: 'Model' }).textContent).toContain('deepseek-chat');
     expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.deepseek.com');
   });
 
@@ -468,7 +486,7 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
 
     fireEvent.change(providerSelect, { target: { value: '1' } });
 
-    expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('deepseek-chat');
+    expect(screen.getByRole('combobox', { name: 'Model' }).textContent).toContain('deepseek-chat');
     expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe(
       'https://api.deepseek.com/anthropic',
     );
@@ -770,9 +788,28 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
       }),
       expect.any(AbortSignal),
     );
-    const select = screen.getByLabelText('Model') as HTMLSelectElement;
-    expect(Array.from(select.options).map((option) => option.value)).toEqual(
-      expect.arrayContaining(['gpt-account', 'gpt-4o', '__custom__']),
+    const modelPicker = screen.getByRole('combobox', { name: 'Model' });
+    fireEvent.click(modelPicker);
+    const modelPopover = screen.getByTestId('settings-byok-model-popover');
+    expect(
+      within(modelPopover).getAllByRole('option').map((option) => option.textContent?.trim()),
+    ).toEqual(expect.arrayContaining([
+      'Account Model (gpt-account) · From your account',
+      'gpt-4o · Suggested',
+      'Custom (type below)…',
+    ]));
+    expect(analyticsTrackMock).toHaveBeenCalledWith(
+      'settings_byok_models_fetch_result',
+      expect.objectContaining({
+        page_name: 'settings',
+        area: 'configure_execution_mode_byok',
+        provider_id: 'openai',
+        result: 'success',
+        trigger: 'auto',
+        source: 'network',
+        model_count: 1,
+      }),
+      undefined,
     );
 
     fireEvent.click(screen.getByRole('tab', { name: 'Azure OpenAI' }));
@@ -782,6 +819,120 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Ollama Cloud' }));
     expect(screen.queryByRole('button', { name: 'Fetch models' })).toBeNull();
     expect(screen.getByText('Model discovery is not available for this protocol.')).toBeTruthy();
+  });
+
+  it('auto-loads provider models after a pasted dirty key is cleaned on blur', async () => {
+    fetchProviderModelsMock.mockResolvedValueOnce({
+      ok: true,
+      kind: 'success',
+      latencyMs: 12,
+      models: [{ id: 'gpt-account', label: 'Account Model' }],
+    });
+    renderSettingsDialog({
+      apiProtocol: 'openai',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4o',
+      apiProviderBaseUrl: 'https://api.openai.com/v1',
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'OpenAI' }));
+    expect(fetchProviderModelsMock).not.toHaveBeenCalled();
+
+    // Paste a key with a leading zero-width char + trailing newline/tab.
+    fireEvent.change(screen.getByLabelText('API key'), {
+      target: { value: '\u200Bsk-openai\n\t' },
+    });
+    fireEvent.blur(screen.getByLabelText('API key'));
+
+    // If onByokKeyCommit committed the dirty-key cache key, the auto-fetch
+    // effect would bail on providerModelsCommittedKey !== providerModelsKey
+    // and this text would never appear.
+    expect(await screen.findByText('✓ Loaded 1 models from your account.')).toBeTruthy();
+    expect(fetchProviderModelsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        protocol: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: 'sk-openai',
+      }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('defaults to an account model when discovery replaces a provider preset', async () => {
+    fetchProviderModelsMock.mockResolvedValueOnce({
+      ok: true,
+      kind: 'success',
+      latencyMs: 12,
+      models: [{ id: 'account-ready-model', label: 'Account Ready' }],
+    });
+    const { onPersist } = renderSettingsDialog({
+      apiProtocol: 'openai',
+      apiKey: 'sk-openai',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4o',
+      apiProviderBaseUrl: 'https://api.openai.com/v1',
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'OpenAI' }));
+
+    expect(await screen.findByText('✓ Loaded 1 models from your account.')).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'Model' }).textContent).toContain(
+      'Account Ready (account-ready-model) · From your account',
+    );
+    await waitForPersist(
+      onPersist,
+      expect.objectContaining({
+        apiProtocol: 'openai',
+        model: 'account-ready-model',
+      }),
+      {},
+    );
+  });
+
+  it('keeps a suggested model the user explicitly re-picked after discovery resolves', async () => {
+    fetchProviderModelsMock.mockResolvedValueOnce({
+      ok: true,
+      kind: 'success',
+      latencyMs: 12,
+      models: [{ id: 'account-ready-model', label: 'Account Ready' }],
+    });
+    const { onPersist } = renderSettingsDialog({
+      apiProtocol: 'openai',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4o',
+      apiProviderBaseUrl: 'https://api.openai.com/v1',
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'OpenAI' }));
+    expect(fetchProviderModelsMock).not.toHaveBeenCalled();
+
+    // The user deliberately re-picks the suggested model that equals the
+    // provider preset id before discovery runs.
+    fireEvent.click(screen.getByRole('combobox', { name: 'Model' }));
+    const modelPopover = screen.getByTestId('settings-byok-model-popover');
+    fireEvent.click(within(modelPopover).getByRole('option', { name: 'gpt-4o' }));
+
+    // Supplying the key triggers account-model discovery.
+    fireEvent.change(screen.getByLabelText('API key'), {
+      target: { value: 'sk-openai' },
+    });
+    fireEvent.blur(screen.getByLabelText('API key'));
+
+    expect(await screen.findByText('✓ Loaded 1 models from your account.')).toBeTruthy();
+
+    // The explicit pick must survive discovery — no silent rewrite to the
+    // first fetched account model.
+    const modelCombobox = screen.getByRole('combobox', { name: 'Model' });
+    expect(modelCombobox.textContent).toContain('gpt-4o');
+    expect(modelCombobox.textContent).not.toContain('account-ready-model');
+    await waitForPersist(
+      onPersist,
+      expect.objectContaining({
+        apiProtocol: 'openai',
+        model: 'gpt-4o',
+      }),
+      {},
+    );
   });
 
   it('does not show a BYOK Test button or nag when the API key is still missing', () => {
@@ -797,6 +948,49 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
     fireEvent.blur(screen.getByLabelText('API key'));
 
     expect(screen.queryByText('Fill API key to test the connection.')).toBeNull();
+  });
+
+  it('filters long BYOK model lists in Settings after provider discovery succeeds', async () => {
+    fetchProviderModelsMock.mockResolvedValueOnce({
+      ok: true,
+      kind: 'success',
+      latencyMs: 12,
+      models: [
+        { id: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+        { id: 'gpt-4.1', label: 'gpt-4.1' },
+        { id: 'gpt-5.5', label: 'gpt-5.5' },
+        { id: 'o4-mini', label: 'o4-mini' },
+        { id: 'o3', label: 'o3' },
+        { id: 'o1', label: 'o1' },
+        { id: 'gpt-4o', label: 'gpt-4o' },
+        { id: 'gpt-4o-mini', label: 'gpt-4o-mini' },
+      ],
+    });
+    renderSettingsDialog({
+      apiProtocol: 'openai',
+      apiKey: 'sk-openai',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4.1-mini',
+      apiProviderBaseUrl: 'https://api.openai.com/v1',
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'OpenAI' }));
+    expect(await screen.findByText('✓ Loaded 8 models from your account.')).toBeTruthy();
+
+    const modelPicker = screen.getByRole('combobox', { name: 'Model' });
+    fireEvent.click(modelPicker);
+
+    const searchInput = screen.getByTestId('settings-byok-model-search') as HTMLInputElement;
+    fireEvent.change(searchInput, { target: { value: '5.5' } });
+
+    const modelPopover = screen.getByTestId('settings-byok-model-popover');
+    expect(
+      within(modelPopover).getAllByRole('option').map((option) => option.textContent?.trim()),
+    ).toEqual([
+      'gpt-4.1-mini · From your account',
+      'gpt-5.5 · From your account',
+      'Custom (type below)…',
+    ]);
   });
 
   it('fetches provider models, merges them into the picker, and preserves a custom current model', async () => {
@@ -829,13 +1023,16 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
       }),
       expect.any(AbortSignal),
     );
-    const select = screen.getByLabelText('Model') as HTMLSelectElement;
-    expect(Array.from(select.options).map((option) => option.value)).toEqual(
-      expect.arrayContaining(['remote-alpha', 'gpt-4o', '__custom__']),
-    );
+    const modelPicker = screen.getByRole('combobox', { name: 'Model' });
+    fireEvent.click(modelPicker);
+    const modelPopover = screen.getByTestId('settings-byok-model-popover');
     expect(
-      Array.from(select.options).some((option) => option.textContent === 'Remote Alpha (remote-alpha)'),
-    ).toBe(true);
+      within(modelPopover).getAllByRole('option').map((option) => option.textContent?.trim()),
+    ).toEqual(expect.arrayContaining([
+      'Remote Alpha (remote-alpha) · From your account',
+      'gpt-4o · From your account',
+      'Custom (type below)…',
+    ]));
     expect((screen.getByLabelText('Custom model id') as HTMLInputElement).value).toBe('custom-still-here');
   });
 
@@ -915,9 +1112,9 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
     fireEvent.change(screen.getByLabelText('API key'), {
       target: { value: 'sk-openai' },
     });
-    fireEvent.change(screen.getByLabelText('Model'), {
-      target: { value: '__custom__' },
-    });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Model' }));
+    const modelPopover = screen.getByTestId('settings-byok-model-popover');
+    fireEvent.click(within(modelPopover).getByRole('option', { name: 'Custom (type below)…' }));
 
     const customModelInput = screen.getByLabelText('Custom model id') as HTMLInputElement;
     expect(customModelInput).toBeTruthy();
@@ -954,7 +1151,7 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
       expect(JSON.parse(String(init?.body))).toMatchObject({
         mode: 'provider',
         protocol: 'anthropic',
-        apiKey: 'sk-test-provider',
+        apiKey: 'sk-ant-test-provider',
         baseUrl: 'https://api.anthropic.com',
         model: 'claude-sonnet-4-5',
       });
@@ -971,7 +1168,7 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    renderSettingsDialog({ apiKey: 'sk-test-provider' });
+    renderSettingsDialog({ apiKey: 'sk-ant-test-provider' });
 
     expect(screen.getByRole('button', { name: 'Test' })).toBeTruthy();
 
@@ -983,6 +1180,135 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
     await waitFor(() => {
       expect(screen.getByText(/Connected\. Replied in 42 ms/)).toBeTruthy();
     });
+    const testConnectionCalls = fetchMock.mock.calls.filter(
+      ([input]) => input.toString() === '/api/test/connection',
+    );
+    expect(testConnectionCalls).toHaveLength(1);
+  });
+
+  it('blocks an obvious OpenAI key in the Anthropic tab before testing', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (input.toString() === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`unexpected request: ${input.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderSettingsDialog({ apiKey: 'sk-openai-provider' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    expect(
+      screen.getByText('This looks like an OpenAI key, not an Anthropic key.'),
+    ).toBeTruthy();
+    await waitFor(() => {
+      const testConnectionCalls = fetchMock.mock.calls.filter(
+        ([input]) => input.toString() === '/api/test/connection',
+      );
+      expect(testConnectionCalls).toHaveLength(0);
+    });
+    expect(analyticsTrackMock).toHaveBeenCalledWith(
+      'settings_byok_test_result',
+      expect.objectContaining({
+        page_name: 'settings',
+        area: 'execution_model',
+        provider_id: 'anthropic',
+        result: 'failed',
+        error_code: 'api_key_wrong_protocol',
+        error_kind: 'api_key_wrong_protocol',
+        field_missing: 'none',
+        config_key_changed: false,
+        success_after_action: false,
+        duration_ms: 0,
+      }),
+      undefined,
+    );
+  });
+
+  it('sends a cleaned API key when the pasted value has trailing newline/zero-width characters', async () => {
+    let sentApiKey: unknown;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      expect(url).toBe('/api/test/connection');
+      sentApiKey = JSON.parse(String(init?.body)).apiKey;
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          kind: 'ok',
+          latencyMs: 7,
+          model: 'claude-sonnet-4-5',
+          sample: 'pong',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    // Leading zero-width char + trailing newline/tab — the exact shape a
+    // pasted key picks up from a docs code block or a terminal copy.
+    renderSettingsDialog({ apiKey: '\u200Bsk-ant-test-provider\n\t' });
+
+    fireEvent.blur(screen.getByLabelText('API key'));
+
+    // The auto-test must survive the apiKey-cleanup re-render: if it fired in
+    // the blur tick it would be dropped by the stale-revision guard and the
+    // success state would never reach the UI.
+    await waitFor(() => {
+      expect(screen.getByText(/Connected\. Replied in 7 ms/)).toBeTruthy();
+    });
+    const testConnectionCalls = fetchMock.mock.calls.filter(
+      ([input]) => input.toString() === '/api/test/connection',
+    );
+    expect(testConnectionCalls).toHaveLength(1);
+    // The malformed value must never reach the wire.
+    expect(sentApiKey).toBe('sk-ant-test-provider');
+  });
+
+  it('shows a BYOK API key cleaned notice after blur cleanup', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      expect(url).toBe('/api/test/connection');
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          kind: 'ok',
+          latencyMs: 7,
+          model: 'claude-sonnet-4-5',
+          sample: 'pong',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderSettingsDialog();
+
+    const apiKeyInput = screen.getByLabelText('API key') as HTMLInputElement;
+    fireEvent.change(apiKeyInput, {
+      target: { value: ' \u200Bsk-ant-test-provider\n' },
+    });
+    fireEvent.blur(apiKeyInput);
+
+    await waitFor(() => {
+      expect(apiKeyInput.value).toBe('sk-ant-test-provider');
+    });
+    expect(screen.getByText(en['settings.apiKeyCleaned'])).toBeTruthy();
     const testConnectionCalls = fetchMock.mock.calls.filter(
       ([input]) => input.toString() === '/api/test/connection',
     );
@@ -1022,7 +1348,7 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    renderSettingsDialog({ apiKey: 'sk-test-provider' });
+    renderSettingsDialog({ apiKey: 'sk-ant-test-provider' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Test' }));
     expect(await screen.findByRole('button', { name: 'Retry test' })).toBeTruthy();
@@ -1034,6 +1360,104 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
       ([input]) => input.toString() === '/api/test/connection',
     );
     expect(testConnectionCalls).toHaveLength(2);
+  });
+
+  it('marks a successful BYOK test after a config edit as success after action', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      expect(url).toBe('/api/test/connection');
+      const body = JSON.parse(String(init?.body)) as { apiKey?: string };
+      return new Response(
+        JSON.stringify(
+          body.apiKey === 'sk-ant-fixed'
+            ? {
+                ok: true,
+                kind: 'ok',
+                latencyMs: 20,
+                model: 'claude-sonnet-4-5',
+                sample: 'pong',
+              }
+            : {
+                ok: false,
+                kind: 'auth_failed',
+                latencyMs: 18,
+                model: 'claude-sonnet-4-5',
+              },
+        ),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderSettingsDialog({ apiKey: 'sk-ant-stale' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+    expect(await screen.findByRole('button', { name: 'Retry test' })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('API key'), {
+      target: { value: 'sk-ant-fixed' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    expect(await screen.findByText(/Connected\. Replied in 20 ms/)).toBeTruthy();
+    expect(analyticsTrackMock).toHaveBeenCalledWith(
+      'settings_byok_test_result',
+      expect.objectContaining({
+        page_name: 'settings',
+        area: 'execution_model',
+        provider_id: 'anthropic',
+        result: 'success',
+        field_missing: 'none',
+        config_key_changed: true,
+        success_after_action: true,
+      }),
+      undefined,
+    );
+  });
+
+  it('focuses the model field when the BYOK test returns model not found', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      expect(url).toBe('/api/test/connection');
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          kind: 'not_found_model',
+          latencyMs: 18,
+          model: 'missing-model',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderSettingsDialog({
+      apiProtocol: 'openai',
+      apiKey: 'sk-openai',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'missing-model',
+      apiProviderBaseUrl: 'https://api.openai.com/v1',
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'OpenAI' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    expect(await screen.findByText("Model 'missing-model' not found on this endpoint.")).toBeTruthy();
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByLabelText('Custom model id'));
+    });
   });
 });
 
@@ -1102,6 +1526,48 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
       }),
       {},
     );
+  });
+
+  it('filters long Local CLI model lists in Settings without hiding the current selection', () => {
+    renderSettingsDialog(
+      { mode: 'daemon', agentId: 'codex', agentModels: { codex: { model: 'gpt-4.1-mini' } } },
+      {
+        agents: [
+          {
+            ...availableAgents[0]!,
+            modelsSource: 'live',
+            models: [
+              { id: 'default', label: 'Default' },
+              { id: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+              { id: 'gpt-4.1', label: 'gpt-4.1' },
+              { id: 'gpt-5.5', label: 'gpt-5.5' },
+              { id: 'o4-mini', label: 'o4-mini' },
+              { id: 'o3', label: 'o3' },
+              { id: 'o1', label: 'o1' },
+              { id: 'gpt-4o', label: 'gpt-4o' },
+              { id: 'gpt-4o-mini', label: 'gpt-4o-mini' },
+            ],
+          },
+        ],
+      },
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI/i }));
+    const codexCard = screen.getByRole('button', { name: /Codex CLI/i });
+    fireEvent.click(codexCard);
+
+    const modelPicker = screen.getByRole('combobox', {
+      name: en['settings.modelPicker'],
+    });
+    fireEvent.click(modelPicker);
+
+    const searchInput = screen.getByTestId('settings-agent-model-search-codex') as HTMLInputElement;
+    fireEvent.change(searchInput, { target: { value: '5.5' } });
+
+    const modelPopover = screen.getByTestId('settings-agent-model-popover-codex');
+    expect(
+      within(modelPopover).getAllByRole('option').map((option) => option.textContent?.trim()),
+    ).toEqual(['gpt-4.1-mini', 'gpt-5.5', 'Custom (type below)…']);
   });
 
   it('labels live CLI model metadata in the model picker', () => {
@@ -1174,12 +1640,14 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
 
     const modelPickers = screen.getAllByRole('combobox', {
       name: en['settings.modelPicker'],
-    }) as HTMLSelectElement[];
+    });
     expect(modelPickers).toHaveLength(1);
-    expect(modelPickers[0]?.value).toBe('glm-5');
+    expect(modelPickers[0]?.textContent).toContain('GLM 5');
+    fireEvent.click(modelPickers[0]!);
+    const modelPopover = screen.getByTestId('settings-agent-model-popover-amr');
     expect(
-      Array.from(modelPickers[0]?.options ?? []).map((option) => option.value),
-    ).toEqual(['glm-5', 'glm-5.1']);
+      within(modelPopover).getAllByRole('option').map((option) => option.textContent?.trim()),
+    ).toEqual(['GLM 5', 'GLM 5.1']);
     expect(screen.queryByLabelText(en['settings.modelCustomLabel'])).toBeNull();
   });
 
@@ -1723,8 +2191,8 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Sign out' })).toBeTruthy();
+      expect(screen.getByText('late@example.com')).toBeTruthy();
     });
-    expect(screen.getByText('late@example.com')).toBeTruthy();
   });
 
   it('renders the signed-in AMR account state inside Settings without leaking vela branding', async () => {
@@ -2402,7 +2870,10 @@ describe('SettingsDialog MCP server interactions', () => {
     });
     expect(screen.getByText(/\[mcp_servers\.open-design\]/i)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: /Codex/i }));
+    // Scope to the picker trigger ("Codex" + the TOML method chip) so
+    // we don't collide with the new one-click "Install in Codex" /
+    // "Remove from Codex" button on the same panel.
+    fireEvent.click(screen.getByRole('button', { name: /Codex.*TOML/i }));
     fireEvent.click(screen.getByRole('option', { name: /Cursor/i }));
 
     await waitFor(() => {
