@@ -155,12 +155,14 @@ describe('project file management routes', () => {
       tabs: string[];
       active: string | null;
       hasSavedState: boolean;
+      updatedAt?: number;
     };
-    expect(nextTabs).toEqual({
+    expect(nextTabs).toMatchObject({
       tabs: ['pages/index.html'],
       active: 'pages/index.html',
       hasSavedState: true,
     });
+    expect(typeof nextTabs.updatedAt).toBe('number');
 
     const commentsResp = await fetch(
       `${baseUrl}/api/projects/${projectId}/conversations/${conversationId}/comments`,

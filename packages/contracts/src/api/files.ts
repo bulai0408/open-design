@@ -56,6 +56,10 @@ export interface ProjectFilesResponse {
   files: ProjectFile[];
 }
 
+export interface ProjectFoldersResponse {
+  folders: ProjectFolder[];
+}
+
 export type ProjectExportManifestFileRole =
   | 'entry'
   | 'artifact'
@@ -103,9 +107,15 @@ export interface ProjectFileResponse {
   file: ProjectFile;
 }
 
+export interface ProjectFolderResponse {
+  folder: ProjectFolder;
+}
+
 export interface UploadProjectFilesResponse extends ProjectFilesResponse {}
 
 export interface DeleteProjectFileResponse extends OkResponse {}
+
+export interface DeleteProjectFolderResponse extends OkResponse {}
 
 export interface RenameProjectFileRequest {
   from: string;

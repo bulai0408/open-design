@@ -20,6 +20,7 @@ import {
 } from 'react';
 import {
   defaultScenarioPluginIdForProjectMetadata,
+  type ChatSessionMode,
   type ConnectorDetail,
   type InstalledPluginRecord,
 } from '@open-design/contracts';
@@ -34,6 +35,7 @@ import {
   trackOnboardingRuntimeScanResult,
   trackPageView,
 } from '../analytics/events';
+import { recordAmrEntry, type AmrEntryAttribution } from '../analytics/amr-attribution';
 import {
   clearOnboardingSessionId,
   getOrCreateOnboardingSessionId,
@@ -76,6 +78,10 @@ import { DesignSystemsTab } from './DesignSystemsTab';
 import { EntryNavRail, type EntryView as EntryViewKind } from './EntryNavRail';
 import { UpdaterPopup } from './UpdaterPopup';
 import { GithubStarBadge } from './GithubStarBadge';
+import {
+  formatDiscordPresenceCount,
+  useDiscordPresence,
+} from './useDiscordPresence';
 import { HomeView } from './HomeView';
 import {
   createPluginAuthoringHandoff,
@@ -87,6 +93,10 @@ import { Icon } from './Icon';
 import { AgentIcon } from './AgentIcon';
 import { IntegrationsView, type IntegrationTab } from './IntegrationsView';
 import { InlineModelSwitcher } from './InlineModelSwitcher';
+import {
+  EntrySettingsMenu,
+  type EntrySettingsSection,
+} from './EntrySettingsMenu';
 import { NewProjectModal } from './NewProjectModal';
 import { PluginsView } from './PluginsView';
 import type { CreateInput, CreateTab, ImportClaudeDesignOutcome } from './NewProjectPanel';
@@ -115,11 +125,15 @@ import {
   AMR_LOGIN_POLL_INTERVAL_MS,
   amrLoginPollOutcome,
 } from './amrLoginPolling';
+import { AnimatePresence } from 'motion/react';
 import { renderModelOptions } from './modelOptions';
 import {
   providerModelsCacheKey,
   type ProviderModelsCache,
 } from './providerModelsCache';
+
+const DISCORD_URL = 'https://discord.gg/mHAjSMV6gz';
+const X_URL = 'https://x.com/nexudotio';
 
 // The topbar chips (GitHub star, model switcher, Use everywhere)
 // collapse into the settings dropdown when the viewport gets
@@ -218,8 +232,6 @@ function defaultPluginInputsForCreate(
   };
 }
 
-// Theme options exposed in the avatar-popover appearance submenu.
-
 interface Props {
   skills: SkillSummary[];
   designTemplates: SkillSummary[];
@@ -264,6 +276,7 @@ interface Props {
       pluginId?: string;
       appliedPluginSnapshotId?: string;
       pluginInputs?: Record<string, unknown>;
+      conversationMode?: ChatSessionMode;
       autoSendFirstMessage?: boolean;
       pendingFiles?: File[];
     },
@@ -299,24 +312,7 @@ interface Props {
   onOpenDesignSystem?: (id: string) => void;
   onDesignSystemsRefresh?: () => Promise<void> | void;
   onPersistComposioKey: (composio: AppConfig['composio']) => Promise<void> | void;
-  onOpenSettings: (
-    section?:
-      | 'execution'
-      | 'media'
-      | 'composio'
-      | 'orbit'
-      | 'integrations'
-      | 'mcpClient'
-      | 'language'
-      | 'appearance'
-      | 'notifications'
-      | 'pet'
-      | 'projectLocations'
-      | 'library'
-      | 'about'
-      | 'memory'
-      | 'designSystems',
-  ) => void;
+  onOpenSettings: (section?: EntrySettingsSection) => void;
   onCompleteOnboarding: () => void;
 }
 
@@ -350,6 +346,22 @@ function navElementForView(
     default:
       return null;
   }
+}
+
+// Tab views stay mounted (so previews/thumbnails survive a tab switch) but the
+// inactive ones must leave the accessibility tree and tab order — otherwise
+// keyboard users tab into off-screen controls and screen readers announce
+// several pages at once. `content-visibility: hidden` only skips paint, so the
+// inactive wrapper also gets `inert` (drops it from focus + a11y) and
+// `aria-hidden`. React renders `inert={false}` as no attribute and
+// `inert={true}` as the real boolean attribute, so toggling on `!active` is
+// enough — the active view stays fully interactive.
+function inactiveViewProps(active: boolean) {
+  return {
+    style: active ? undefined : ({ contentVisibility: 'hidden' } as const),
+    inert: !active,
+    'aria-hidden': !active,
+  };
 }
 
 export function EntryShell({
@@ -400,6 +412,7 @@ export function EntryShell({
   onCompleteOnboarding,
 }: Props) {
   const t = useT();
+  const discordPresence = useDiscordPresence();
   // Each entry sub-view (home / projects / design-systems) is its own
   // URL now, so the browser back/forward buttons work and a deep link
   // to /design-systems lands on that section. We derive the active
@@ -408,6 +421,10 @@ export function EntryShell({
   const view: EntryViewKind = route.kind === 'home' ? route.view : 'home';
   const [previewSystemId, setPreviewSystemId] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  // The entry nav rail is collapsed by default (Manus-style) so the entry
+  // view opens clean and full-width; the panel toggle in the topbar opens it
+  // as an overlay that dismisses on selection / backdrop click / Escape.
+  const [railOpen, setRailOpen] = useState(false);
   const [localProviderModelsCache, setLocalProviderModelsCache] =
     useState<ProviderModelsCache>({});
   const hasSharedProviderModelsCache =
@@ -425,6 +442,14 @@ export function EntryShell({
   const [integrationTab, setIntegrationTab] = useState<IntegrationTab>(integrationInitialTab);
   const [homePromptHandoff, setHomePromptHandoff] = useState<HomePromptHandoff | null>(null);
   const analytics = useAnalytics();
+  const discordOnlineLabel = discordPresence
+    ? t('entry.discordOnlineLabel', {
+        count: formatDiscordPresenceCount(discordPresence.onlineCount),
+      })
+    : null;
+  const discordAriaLabel = discordOnlineLabel
+    ? t('entry.discordAriaWithOnline', { online: discordOnlineLabel })
+    : t('entry.discordAria');
   function changeView(next: EntryViewKind) {
     const navElement = navElementForView(next);
     if (navElement) {
@@ -526,6 +551,11 @@ export function EntryShell({
         ? { contextConnectors: payload.contextConnectors }
         : {}),
       ...(payload.workingDir ? { userWorkingDir: payload.workingDir } : {}),
+      ...(payload.examplePromptContext ? {
+        examplePrompt: true,
+        examplePromptTitle: payload.examplePromptContext.title,
+        examplePromptBrief: payload.examplePromptContext.brief,
+      } : {}),
     };
     onCreateProject({
       name,
@@ -538,9 +568,11 @@ export function EntryShell({
         ? { appliedPluginSnapshotId: payload.appliedPluginSnapshotId }
         : {}),
       ...(payload.pluginInputs ? { pluginInputs: payload.pluginInputs } : {}),
+      ...(payload.conversationMode ? { conversationMode: payload.conversationMode } : {}),
       ...(payload.attachments && payload.attachments.length > 0
         ? { pendingFiles: payload.attachments }
         : {}),
+      ...(payload.workingDirToken ? { userWorkingDirToken: payload.workingDirToken } : {}),
       autoSendFirstMessage: true,
     });
   }
@@ -551,15 +583,11 @@ export function EntryShell({
   }
 
   const avatarMenu = (
-    <button
-      type="button"
-      className="settings-icon-btn"
-      onClick={() => onOpenSettings()}
-      title={t('entry.openSettingsTitle')}
-      aria-label={t('entry.openSettingsAria')}
-    >
-      <Icon name="settings" size={17} />
-    </button>
+    <EntrySettingsMenu
+      config={config}
+      onThemeChange={onThemeChange}
+      onOpenSettings={onOpenSettings}
+    />
   );
 
 
@@ -588,40 +616,69 @@ export function EntryShell({
     );
   }
 
+  const executionSwitcher = (
+    <InlineModelSwitcher
+      config={config}
+      agents={agents}
+      providerModelsCache={activeProviderModelsCache}
+      onProviderModelsCacheChange={activeSetProviderModelsCache}
+      compact={view === 'home'}
+      daemonLive={daemonLive}
+      onModeChange={onModeChange}
+      onAgentChange={onAgentChange}
+      onAgentModelChange={onAgentModelChange}
+      onApiProtocolChange={onApiProtocolChange}
+      onApiModelChange={onApiModelChange}
+      onOpenSettings={onOpenSettings}
+    />
+  );
+
   return (
     <div className="entry-shell entry-shell--no-header">
-      <div className="entry">
+      <div className={`entry${railOpen ? ' entry--rail-open' : ''}`}>
         <EntryNavRail
           view={view}
           onViewChange={changeView}
           onNewProject={() => openNewProject()}
+          open={railOpen}
+          onClose={() => setRailOpen(false)}
         />
         <main className="entry-main entry-main--scroll">
           <div className="entry-main__topbar">
-            <div className="entry-main__topbar-chips">
+            <button
+              type="button"
+              className="entry-rail-toggle"
+              onClick={() => setRailOpen((prev) => !prev)}
+              aria-label={t('entry.navExpand')}
+              aria-expanded={railOpen}
+              data-testid="entry-rail-toggle"
+            >
+              <Icon name="panel-left" size={20} />
+            </button>
+            <div className="entry-main__topbar-chips entry-main__topbar-chips--icon-only">
               <GithubStarBadge />
               <a
                 className="entry-discord-badge"
-                href="https://discord.gg/mHAjSMV6gz"
-                aria-label="Join the Open Design Discord"
-                title="Join the Open Design Discord"
+                href={DISCORD_URL}
+                aria-label={discordAriaLabel}
+                title={discordAriaLabel}
+                data-tooltip={discordAriaLabel}
                 data-testid="entry-discord-badge"
               >
                 <Icon name="discord" size={14} className="entry-discord-badge__icon" />
-                <span className="entry-discord-badge__label">Join Discord</span>
+                <span className="entry-discord-badge__label">{t('entry.discordLabel')}</span>
+                {discordOnlineLabel ? (
+                  <>
+                    <span className="entry-discord-badge__sep" aria-hidden>
+                      ·
+                    </span>
+                    <span className="entry-discord-badge__online">
+                      {discordOnlineLabel}
+                    </span>
+                  </>
+                ) : null}
               </a>
-              <InlineModelSwitcher
-                config={config}
-                agents={agents}
-                providerModelsCache={activeProviderModelsCache}
-                daemonLive={daemonLive}
-                onModeChange={onModeChange}
-                onAgentChange={onAgentChange}
-                onAgentModelChange={onAgentModelChange}
-                onApiProtocolChange={onApiProtocolChange}
-                onApiModelChange={onApiModelChange}
-                onOpenSettings={onOpenSettings}
-              />
+              {view === 'home' ? null : executionSwitcher}
               <button
                 type="button"
                 className="use-everywhere-chip"
@@ -633,7 +690,7 @@ export function EntryShell({
                   });
                   openIntegrationTab('use-everywhere');
                 }}
-                title={t('entry.useEverywhereTitle')}
+                data-tooltip={t('entry.useEverywhereTitle')}
                 aria-label={t('entry.useEverywhereAria')}
                 data-testid="entry-use-everywhere-button"
               >
@@ -653,7 +710,7 @@ export function EntryShell({
               view === 'home' ? '' : ' entry-main__inner--wide'
             }`}
           >
-            {view === 'home' ? (
+            <div data-testid="entry-view-home" data-active={view === 'home' ? 'true' : 'false'} {...inactiveViewProps(view === 'home')}>
               <HomeView
                 projects={projects}
                 projectsLoading={projectsLoading}
@@ -663,12 +720,11 @@ export function EntryShell({
                 onOpenProject={onOpenProject}
                 onViewAllProjects={() => changeView('projects')}
                 onBrowseRegistry={() => changeView('plugins')}
+                onOpenIntegrations={() => openIntegrationTab('connectors')}
+                onOpenMcp={() => openIntegrationTab('mcp')}
+                onImportFolder={onImportFolder}
+                onImportFolderResponse={onImportFolderResponse}
                 onOpenNewProject={(tab) => {
-                  // Stage B of plugin-driven-flow-plan: the rail's
-                  // "From template" chip wires through here so the
-                  // existing modal-based create flow still owns the
-                  // template picker UI. Future tabs (e.g. live-artifact
-                  // import) can reuse the same callback.
                   openNewProject(tab);
                 }}
                 promptHandoff={homePromptHandoff}
@@ -676,10 +732,11 @@ export function EntryShell({
                 skillsLoading={skillsLoading}
                 connectors={connectors}
                 promptTemplates={promptTemplates}
+                executionSwitcher={view === 'home' ? executionSwitcher : null}
               />
-            ) : null}
-            {view === 'projects' ? (
-              projectsLoading || skillsLoading || designSystemsLoading ? (
+            </div>
+            <div data-testid="entry-view-projects" data-active={view === 'projects' ? 'true' : 'false'} {...inactiveViewProps(view === 'projects')}>
+              {projectsLoading || skillsLoading || designSystemsLoading ? (
                 <CenteredLoader label={t('common.loading')} />
               ) : (
                 <div className="entry-section">
@@ -697,25 +754,25 @@ export function EntryShell({
                     onNewProject={() => openNewProject()}
                   />
                 </div>
-              )
-            ) : null}
-            {view === 'tasks' ? (
+              )}
+            </div>
+            <div data-testid="entry-view-tasks" data-active={view === 'tasks' ? 'true' : 'false'} {...inactiveViewProps(view === 'tasks')}>
               <TasksView
                 skills={skills}
                 designTemplates={designTemplates}
                 connectors={connectors}
                 connectorsLoading={connectorsLoading}
               />
-            ) : null}
-            {view === 'plugins' ? (
+            </div>
+            <div data-testid="entry-view-plugins" data-active={view === 'plugins' ? 'true' : 'false'} {...inactiveViewProps(view === 'plugins')}>
               <PluginsView
                 onCreatePlugin={startPluginAuthoring}
                 onUsePlugin={usePluginFromLibrary}
                 onCreatePluginShareProject={onCreatePluginShareProject}
               />
-            ) : null}
-            {view === 'design-systems' ? (
-              designSystemsLoading ? (
+            </div>
+            <div data-testid="entry-view-design-systems" data-active={view === 'design-systems' ? 'true' : 'false'} {...inactiveViewProps(view === 'design-systems')}>
+              {designSystemsLoading ? (
                 <CenteredLoader label={t('common.loading')} />
               ) : (
                 <div className="entry-section">
@@ -733,8 +790,8 @@ export function EntryShell({
                     onPreview={(id) => setPreviewSystemId(id)}
                   />
                 </div>
-              )
-            ) : null}
+              )}
+            </div>
             {view === 'integrations' ? (
               <IntegrationsView
                 config={config}
@@ -746,12 +803,14 @@ export function EntryShell({
           </div>
         </main>
       </div>
-      {previewSystem ? (
-        <DesignSystemPreviewModal
-          system={previewSystem}
-          onClose={() => setPreviewSystemId(null)}
-        />
-      ) : null}
+      <AnimatePresence>
+        {previewSystem ? (
+          <DesignSystemPreviewModal
+            system={previewSystem}
+            onClose={() => setPreviewSystemId(null)}
+          />
+        ) : null}
+      </AnimatePresence>
       <NewProjectModal
         open={newProjectOpen}
         initialTab={newProjectInitialTab}
@@ -833,7 +892,7 @@ function OnboardingView({
   const [cliScanStatus, setCliScanStatus] = useState<'idle' | 'scanning' | 'done'>('idle');
   const [amrStatus, setAmrStatus] = useState<VelaLoginStatus | null>(null);
   const [amrLoginPending, setAmrLoginPending] = useState(false);
-  const [amrLoginError, setAmrLoginError] = useState(false);
+  const [amrLoginError, setAmrLoginError] = useState<string | null>(null);
   const [visibleAgentIds, setVisibleAgentIds] = useState<string[]>([]);
   const [providerTestState, setProviderTestState] = useState<
     | { status: 'idle' }
@@ -1356,7 +1415,13 @@ function OnboardingView({
   }
   function handlePrimaryAction() {
     if (step === 0 && amrSelectedAndSignedOut) {
-      void handleAmrSignInToContinue();
+      const attribution = recordAmrEntry(
+        analytics.track,
+        'onboarding_amr_sign_in_continue',
+        new Date(),
+        { reuseExistingFrom: ['onboarding_amr_card'] },
+      );
+      void handleAmrSignInToContinue(attribution);
       return;
     }
     if (isLastStep) {
@@ -1385,10 +1450,12 @@ function OnboardingView({
     setStep((current) => current + 1);
   }
 
-  async function handleAmrSignInToContinue() {
+  async function handleAmrSignInToContinue(
+    attribution?: AmrEntryAttribution | null,
+  ) {
     if (amrLoginPending) return;
     amrLoginPollCancelledRef.current = false;
-    setAmrLoginError(false);
+    setAmrLoginError(null);
     setAmrLoginPending(true);
     try {
       const currentStatus = await fetchVelaLoginStatus();
@@ -1397,9 +1464,9 @@ function OnboardingView({
         setStep((current) => current + 1);
         return;
       }
-      const loginResult = await startVelaLogin();
+      const loginResult = await startVelaLogin(attribution);
       if (!loginResult.ok && !loginResult.alreadyRunning) {
-        setAmrLoginError(true);
+        setAmrLoginError(loginResult.error || t('settings.amrLoginErrorCompact'));
         return;
       }
       if (await pollAmrLoginCompletion()) {
@@ -1423,7 +1490,7 @@ function OnboardingView({
       if (outcome === 'signed-in') return true;
       if (outcome === 'stopped' || outcome === 'timed-out') {
         if (outcome === 'timed-out') void cancelVelaLogin();
-        setAmrLoginError(true);
+        setAmrLoginError(t('settings.amrLoginErrorCompact'));
         return false;
       }
     }
@@ -1689,6 +1756,7 @@ function OnboardingView({
                       featured
                       selected={runtime === 'amr'}
                       onClick={() => {
+                        recordAmrEntry(analytics.track, 'onboarding_amr_card');
                         setRuntime('amr');
                         onModeChange('daemon');
                         onAgentChange('amr');
@@ -1955,7 +2023,7 @@ function OnboardingView({
             <div className="onboarding-view__actions">
               {step === 0 && amrLoginError ? (
                 <span className="onboarding-view__action-status is-error" role="alert">
-                  {t('settings.amrLoginErrorCompact')}
+                  {amrLoginError}
                 </span>
               ) : null}
               <button
