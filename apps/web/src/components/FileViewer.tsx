@@ -6242,6 +6242,7 @@ function HtmlViewer({
     if (!ok) return false;
     setManualEditPanelPosition(null);
     setManualEditMode(false);
+    refreshSrcDocPreviewAfterManualEditExit();
     return true;
   }
 

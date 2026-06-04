@@ -120,6 +120,30 @@ function srcDocActivationMessages(calls: readonly (readonly unknown[])[]) {
     });
 }
 
+async function currentActiveSrcDocFrame(
+  container: HTMLElement,
+  previousFrame?: HTMLIFrameElement,
+) {
+  const frame = await waitFor(() => {
+    const activeFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement | null;
+    expect(activeFrame).not.toBeNull();
+    expect(activeFrame?.getAttribute('data-od-active')).toBe('true');
+    if (previousFrame) expect(activeFrame).not.toBe(previousFrame);
+    return activeFrame!;
+  });
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  return waitFor(() => {
+    const activeFrame = container.querySelector('iframe[data-od-render-mode="srcdoc"]') as HTMLIFrameElement | null;
+    expect(activeFrame).not.toBeNull();
+    expect(activeFrame?.getAttribute('data-od-active')).toBe('true');
+    if (previousFrame) expect(activeFrame).not.toBe(previousFrame);
+    return activeFrame!;
+  });
+}
+
 function previewNavigationRequestId(calls: readonly (readonly unknown[])[]) {
   const request = [...calls]
     .reverse()
@@ -957,7 +981,7 @@ describe('FileViewer SVG artifacts', () => {
     expect(activatedHtml).toContain('data-od-edit-bridge');
   });
 
-  it('keeps the srcDoc edit transport active after canceling manual edit', async () => {
+  it('remounts the srcDoc transport after canceling manual edit', async () => {
     const file = baseFile({
       name: 'page.html',
       path: 'page.html',
@@ -988,20 +1012,30 @@ describe('FileViewer SVG artifacts', () => {
     const editFrame = await waitFor(() => {
       const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
       expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
-      expect(frame.srcdoc).toContain('data-od-edit-bridge');
       return frame;
+    });
+    const editPostMessageSpy = vi.spyOn(editFrame.contentWindow!, 'postMessage');
+    fireEvent.load(editFrame);
+    await waitFor(() => {
+      const activatedHtml = srcDocActivationMessages(editPostMessageSpy.mock.calls).at(-1)?.html ?? '';
+      expect(activatedHtml).toContain('data-od-edit-bridge');
     });
 
     fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
 
     await waitFor(() => expect(screen.getByTestId('manual-edit-mode-toggle').getAttribute('aria-pressed')).toBe('false'));
-    const previewFrame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+    const previewFrame = await currentActiveSrcDocFrame(container, editFrame);
     const urlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement | null;
+    const previewPostMessageSpy = vi.spyOn(previewFrame.contentWindow!, 'postMessage');
+    fireEvent.load(previewFrame);
 
-    expect(previewFrame).toBe(editFrame);
-    expect(previewFrame.getAttribute('data-od-render-mode')).toBe('srcdoc');
-    expect(previewFrame.srcdoc).toContain('data-od-edit-bridge');
+    expect(previewFrame.getAttribute('src')).toContain('odSrcdocTransport=1');
     expect(urlFrame?.getAttribute('data-od-active')).toBe('false');
+    await waitFor(() => {
+      const activatedHtml = srcDocActivationMessages(previewPostMessageSpy.mock.calls).at(-1)?.html ?? '';
+      expect(activatedHtml).toContain('data-od-selection-bridge');
+      expect(activatedHtml).toContain('data-od-edit-bridge');
+    });
   });
 
   it('keeps the manual edit inspector pinned after clicking a target', async () => {
@@ -1622,7 +1656,7 @@ describe('FileViewer SVG artifacts', () => {
     }), '*');
   });
 
-  it('restores bridge navigation when returning to URL-loaded preview mode', async () => {
+  it('restores bridge navigation after remounting the srcDoc transport', async () => {
     const file = baseFile({
       name: 'page.html',
       path: 'page.html',
@@ -1647,8 +1681,6 @@ describe('FileViewer SVG artifacts', () => {
       />,
     );
 
-    const urlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement;
-
     fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
 
     const srcDocFrame = await waitFor(() => {
@@ -1671,22 +1703,17 @@ describe('FileViewer SVG artifacts', () => {
 
     fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
 
-    await waitFor(() => {
-      expect(urlFrame.getAttribute('data-od-active')).toBe('true');
-    });
-    const activeUrlFrame = container.querySelector('iframe[data-od-render-mode="url-load"]') as HTMLIFrameElement;
-    const urlPostMessageSpy = vi.spyOn(activeUrlFrame.contentWindow!, 'postMessage');
-    urlPostMessageSpy.mockClear();
-    fireEvent.load(activeUrlFrame);
+    const remountedSrcDocFrame = await currentActiveSrcDocFrame(container, srcDocFrame);
+    const srcDocPostMessageSpy = vi.spyOn(remountedSrcDocFrame.contentWindow!, 'postMessage');
+    fireEvent.load(remountedSrcDocFrame);
 
     await waitFor(() => {
-      expect(urlPostMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'od:preview-navigation-restore',
+      expect(srcDocActivationMessages(srcDocPostMessageSpy.mock.calls).at(-1)?.navigation).toEqual(expect.objectContaining({
         pathname: '/api/projects/project-1/raw/page.html/editor',
         search: '?panel=layers',
         hash: '#shape-3',
         state: { panel: 'layers' },
-      }), '*');
+      }));
     });
   });
 
@@ -3488,7 +3515,12 @@ describe('FileViewer tweaks toolbar', () => {
       expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
       return frame;
     });
-    expect(srcDocFrame.srcdoc).toContain('data-od-selection-bridge');
+    const postMessageSpy = vi.spyOn(srcDocFrame.contentWindow!, 'postMessage');
+    fireEvent.load(srcDocFrame);
+    await waitFor(() => {
+      const activatedHtml = srcDocActivationMessages(postMessageSpy.mock.calls).at(-1)?.html ?? '';
+      expect(activatedHtml).toContain('data-od-selection-bridge');
+    });
   });
 
   it('lets Draw direct send emit a queued annotation while a task is running', async () => {
