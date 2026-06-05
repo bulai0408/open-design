@@ -65,6 +65,8 @@ import type {
 import { decideAutoOpenAfterWrite } from './auto-open-file';
 import { ChatPane } from './ChatPane';
 import type { ChatErrorNoticeValue } from './ChatErrorNotice';
+import { notifyConnectorsChanged } from './connectors-events';
+import { connectorAuthSnapshotChanged } from './connectors-state';
 import { FileWorkspace } from './FileWorkspace';
 import { Icon, type IconName } from './Icon';
 import { Spinner } from './Loading';
@@ -337,6 +339,8 @@ export function DesignSystemCreationFlow({
   const [githubAuthorizationUrl, setGithubAuthorizationUrl] = useState<string | null>(null);
   const githubConnectorRefreshId = useRef(0);
   const githubConnectorRequestInFlight = useRef(false);
+  const githubConnectorRef = useRef<ConnectorDetail | null>(null);
+  const githubConnectorLoadedRef = useRef(false);
   const embedded = chrome === 'embedded';
 
   // DS create page_view (v2 doc). Only fires for the standalone
@@ -389,6 +393,8 @@ export function DesignSystemCreationFlow({
       githubConnectorRefreshId.current += 1;
       githubConnectorRequestInFlight.current = false;
       setGithubConnector(null);
+      githubConnectorRef.current = null;
+      githubConnectorLoadedRef.current = false;
       setGithubConnectorLoading(false);
       setGithubConnectorError(null);
       setGithubAuthorizationPending(false);
@@ -403,7 +409,13 @@ export function DesignSystemCreationFlow({
     try {
       const { connector, timedOut } = await fetchGithubConnectorStatusWithTimeout();
       if (githubConnectorRefreshId.current !== refreshId) return;
+      const statusChanged =
+        githubConnectorLoadedRef.current &&
+        connectorAuthSnapshotChanged(githubConnectorRef.current, connector);
       setGithubConnector(connector);
+      githubConnectorRef.current = connector;
+      githubConnectorLoadedRef.current = true;
+      if (statusChanged) notifyConnectorsChanged();
       if (connector?.status === 'connected') {
         setGithubAuthorizationPending(false);
         setGithubAuthorizationUrl(null);
@@ -461,10 +473,15 @@ export function DesignSystemCreationFlow({
     try {
       const result = await connectConnector(GITHUB_CONNECTOR_ID);
       if (result.error) setGithubConnectorError(result.error);
-      if (result.connector) setGithubConnector(result.connector);
+      if (result.connector) {
+        setGithubConnector(result.connector);
+        githubConnectorRef.current = result.connector;
+        githubConnectorLoadedRef.current = true;
+      }
       if (result.auth?.redirectUrl) setGithubAuthorizationUrl(result.auth.redirectUrl);
       if (isPendingConnectorAuth(result.auth)) setGithubAuthorizationPending(true);
       if (result.auth?.kind === 'connected' || result.connector?.status === 'connected') {
+        notifyConnectorsChanged();
         setGithubConnectorError(null);
         setGithubAuthorizationPending(false);
         setGithubAuthorizationUrl(null);
@@ -482,7 +499,11 @@ export function DesignSystemCreationFlow({
     setGithubConnectorError(null);
     try {
       const connector = await disconnectConnector(GITHUB_CONNECTOR_ID);
+      const statusChanged = connector != null && connectorAuthSnapshotChanged(githubConnectorRef.current, connector);
       setGithubConnector(connector);
+      githubConnectorRef.current = connector;
+      githubConnectorLoadedRef.current = true;
+      if (statusChanged) notifyConnectorsChanged();
       setGithubAuthorizationPending(false);
       setGithubAuthorizationUrl(null);
     } catch (err) {
