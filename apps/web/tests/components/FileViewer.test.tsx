@@ -175,6 +175,31 @@ function slideMessages(calls: readonly (readonly unknown[])[]) {
     });
 }
 
+function mockIframeContentWindows(
+  onPostMessage?: (event: { frame: HTMLIFrameElement; message: unknown; win: Window }) => void,
+) {
+  const frameMessages: Array<{ frame: HTMLIFrameElement; message: unknown }> = [];
+  const frameWindows = new WeakMap<HTMLIFrameElement, Window>();
+  vi.spyOn(HTMLIFrameElement.prototype, 'contentWindow', 'get').mockImplementation(function (
+    this: HTMLIFrameElement,
+  ) {
+    const existing = frameWindows.get(this);
+    if (existing) return existing;
+    let win!: Window;
+    const postMessage = vi.fn((message: unknown) => {
+      frameMessages.push({ frame: this, message });
+      onPostMessage?.({ frame: this, message, win });
+    });
+    win = {
+      location: { replace: vi.fn() },
+      postMessage,
+    } as unknown as Window;
+    frameWindows.set(this, win);
+    return win;
+  });
+  return { frameMessages };
+}
+
 function testRect(left: number, top: number, width: number, height: number): DOMRect {
   return {
     x: left,
@@ -1512,7 +1537,7 @@ describe('FileViewer SVG artifacts', () => {
     });
   });
 
-  it('keeps Download -> Export Image reachable on a fresh deck and captures through srcdoc transport', async () => {
+  it('keeps Download -> Export Image reachable on a fresh deck and falls back through srcdoc transport', async () => {
     const file = baseFile({
       name: 'deck.html',
       path: 'deck.html',
@@ -1527,10 +1552,22 @@ describe('FileViewer SVG artifacts', () => {
         exports: ['html'],
       },
     });
-    requestPreviewSnapshotMock.mockResolvedValue({
-      dataUrl: 'data:image/png;base64,AAAA',
-      w: 100,
-      h: 80,
+    requestPreviewSnapshotMock.mockImplementation(async (iframe: HTMLIFrameElement) => {
+      if (iframe.getAttribute('data-od-render-mode') === 'url-load') return null;
+      return {
+        dataUrl: 'data:image/png;base64,AAAA',
+        w: 100,
+        h: 80,
+      };
+    });
+    mockIframeContentWindows(({ frame, message, win }) => {
+      const data = message as { type?: string };
+      if (frame.getAttribute('data-od-render-mode') === 'srcdoc' && data?.type === 'od:srcdoc-transport-activate') {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: win,
+          data: { type: 'od:srcdoc-transport-activated' },
+        }));
+      }
     });
 
     render(
@@ -1543,17 +1580,9 @@ describe('FileViewer SVG artifacts', () => {
       />,
     );
 
-    expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
+    const urlFrame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+    expect(urlFrame.getAttribute('data-od-render-mode')).toBe('url-load');
     const srcdocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
-    vi.spyOn(srcdocFrame.contentWindow!, 'postMessage').mockImplementation((message) => {
-      const data = message as { type?: string };
-      if (data?.type === 'od:srcdoc-transport-activate') {
-        window.dispatchEvent(new MessageEvent('message', {
-          source: srcdocFrame.contentWindow,
-          data: { type: 'od:srcdoc-transport-activated' },
-        }));
-      }
-    });
     fireEvent.load(srcdocFrame);
 
     fireEvent.click(screen.getByRole('button', { name: /download/i }));
@@ -1562,9 +1591,9 @@ describe('FileViewer SVG artifacts', () => {
     expect(screen.getByRole('dialog', { name: /export as image/i })).toBeTruthy();
 
     await waitFor(() => {
-      expect(requestPreviewSnapshotMock).toHaveBeenCalledTimes(1);
+      expect(requestPreviewSnapshotMock).toHaveBeenCalledWith(urlFrame, 1500);
       expect(requestPreviewSnapshotMock).toHaveBeenCalledWith(srcdocFrame, 1500);
-    });
+    }, { timeout: 4000 });
     expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
   });
 
@@ -1587,10 +1616,22 @@ describe('FileViewer SVG artifacts', () => {
       },
     });
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    requestPreviewSnapshotMock.mockResolvedValue({
-      dataUrl: 'data:image/png;base64,AAAA',
-      w: 100,
-      h: 80,
+    requestPreviewSnapshotMock.mockImplementation(async (iframe: HTMLIFrameElement) => {
+      if (iframe.getAttribute('data-od-render-mode') === 'url-load') return null;
+      return {
+        dataUrl: 'data:image/png;base64,AAAA',
+        w: 100,
+        h: 80,
+      };
+    });
+    const { frameMessages } = mockIframeContentWindows(({ frame, message, win }) => {
+      const data = message as { type?: string };
+      if (frame.getAttribute('data-od-render-mode') === 'srcdoc' && data?.type === 'od:srcdoc-transport-activate') {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: win,
+          data: { type: 'od:srcdoc-transport-activated' },
+        }));
+      }
     });
 
     function Host() {
@@ -1619,17 +1660,9 @@ describe('FileViewer SVG artifacts', () => {
 
     render(<Host />);
 
-    expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
+    const urlFrame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+    expect(urlFrame.getAttribute('data-od-render-mode')).toBe('url-load');
     const srcdocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
-    const postMessageSpy = vi.spyOn(srcdocFrame.contentWindow!, 'postMessage').mockImplementation((message) => {
-      const data = message as { type?: string };
-      if (data?.type === 'od:srcdoc-transport-activate') {
-        window.dispatchEvent(new MessageEvent('message', {
-          source: srcdocFrame.contentWindow,
-          data: { type: 'od:srcdoc-transport-activated' },
-        }));
-      }
-    });
     fireEvent.load(srcdocFrame);
 
     buildSrcdocMock.mockImplementation(() => {
@@ -1650,9 +1683,10 @@ describe('FileViewer SVG artifacts', () => {
     fireEvent.click(await screen.findByTestId('share-menu-export-image'));
 
     await waitFor(() => {
+      expect(requestPreviewSnapshotMock).toHaveBeenCalledWith(urlFrame, 1500);
       expect(requestPreviewSnapshotMock).toHaveBeenCalledWith(srcdocFrame, 1500);
-    });
-    const activations = srcDocActivationMessages(postMessageSpy.mock.calls);
+    }, { timeout: 4000 });
+    const activations = srcDocActivationMessages(frameMessages.map(({ message }) => [message] as const));
     expect(activations.at(-1)?.html).toContain('Recovered slide');
     expect(activations.at(-1)?.html).not.toBe('<!doctype html><html><body></body></html>');
   });
@@ -1672,10 +1706,19 @@ describe('FileViewer SVG artifacts', () => {
         exports: ['html'],
       },
     });
-    requestPreviewSnapshotMock.mockResolvedValue({
-      dataUrl: 'data:image/png;base64,AAAA',
-      w: 100,
-      h: 80,
+    requestPreviewSnapshotMock.mockResolvedValue(null);
+    mockIframeContentWindows(({ frame, message, win }) => {
+      const data = message as { type?: string };
+      if (frame.getAttribute('data-od-render-mode') === 'srcdoc' && data?.type === 'od:srcdoc-transport-activate') {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: win,
+          data: {
+            type: 'od:preview-error',
+            stage: 'srcdoc-transport-activate',
+            message: 'write failed',
+          },
+        }));
+      }
     });
 
     render(
@@ -1688,20 +1731,8 @@ describe('FileViewer SVG artifacts', () => {
       />,
     );
 
+    const urlFrame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
     const srcdocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
-    vi.spyOn(srcdocFrame.contentWindow!, 'postMessage').mockImplementation((message) => {
-      const data = message as { type?: string };
-      if (data?.type === 'od:srcdoc-transport-activate') {
-        window.dispatchEvent(new MessageEvent('message', {
-          source: srcdocFrame.contentWindow,
-          data: {
-            type: 'od:preview-error',
-            stage: 'srcdoc-transport-activate',
-            message: 'write failed',
-          },
-        }));
-      }
-    });
     fireEvent.load(srcdocFrame);
 
     fireEvent.click(screen.getByRole('button', { name: /download/i }));
@@ -1709,7 +1740,8 @@ describe('FileViewer SVG artifacts', () => {
 
     expect(screen.getByRole('dialog', { name: /export as image/i })).toBeTruthy();
     expect(await screen.findByText(/Image capture failed/i)).toBeTruthy();
-    expect(requestPreviewSnapshotMock).not.toHaveBeenCalled();
+    expect(requestPreviewSnapshotMock).toHaveBeenCalledWith(urlFrame, 1500);
+    expect(requestPreviewSnapshotMock).not.toHaveBeenCalledWith(srcdocFrame, 1500);
   });
 
   it('falls back to URL-load when srcdoc transport activation reports a write failure', async () => {
