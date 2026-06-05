@@ -14,6 +14,7 @@ import net from 'node:net';
 import {
   defaultScenarioPluginIdForProjectMetadata,
   type OpenDesignDiscordPresenceResponse,
+  PLUGIN_UNINSTALL_BUNDLED_CODE,
   PLUGIN_UNINSTALL_NOT_FOUND_CODE,
   type OpenDesignGithubLatestReleaseResponse,
   type OpenDesignGithubRepoResponse,
@@ -7098,6 +7099,15 @@ export async function startServer({
 
   app.post('/api/plugins/:id/uninstall', async (req, res) => {
     try {
+      const installed = getInstalledPlugin(db, req.params.id);
+      if (installed?.sourceKind === 'bundled') {
+        return res.status(409).json(PluginUninstallOutcomeSchema.parse({
+          ok: false,
+          code: PLUGIN_UNINSTALL_BUNDLED_CODE,
+          warnings: [],
+          message: `Plugin "${req.params.id}" was shipped bundled with the daemon and can only be removed by a daemon-image upgrade. The bundled boot walker re-registers bundled plugins on every boot.`,
+        }));
+      }
       const result = await uninstallPlugin(db, req.params.id, PLUGIN_REGISTRY_ROOTS);
       const warnings = typeof result.warning === 'string' && result.warning.trim().length > 0
         ? [result.warning.trim()]

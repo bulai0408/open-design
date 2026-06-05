@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { InstalledPluginRecord } from '@open-design/contracts';
 
 import { PluginsView } from '../../src/components/PluginsView';
+import { PluginCard } from '../../src/components/plugins-home/PluginCard';
 import { I18nProvider } from '../../src/i18n';
 
 function makePlugin(id: string, title: string): InstalledPluginRecord {
@@ -36,12 +37,47 @@ function makePlugin(id: string, title: string): InstalledPluginRecord {
   };
 }
 
+function makeBundledPlugin(id: string, title: string): InstalledPluginRecord {
+  const plugin = makePlugin(id, title);
+  return {
+    ...plugin,
+    sourceKind: 'bundled',
+    source: `github:nexu-io/open-design@main/plugins/_official/${id}`,
+    trust: 'bundled',
+  };
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
 describe('PluginsView uninstall', () => {
+  it('does not show uninstall affordances for bundled installed plugins', async () => {
+    const bundled = makeBundledPlugin('bundled-plugin', 'Bundled Plugin');
+
+    render(
+      <I18nProvider>
+        <PluginCard
+          record={bundled}
+          isActive={false}
+          isPending={false}
+          pendingAny={false}
+          isFeatured={false}
+          isSaved={false}
+          onUse={vi.fn()}
+          onOpenDetails={vi.fn()}
+          onSave={vi.fn()}
+          onUninstall={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getAllByText('Bundled Plugin').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Uninstall Bundled Plugin' })).toBeNull();
+    expect(screen.queryByTestId('plugins-home-uninstall-bundled-plugin')).toBeNull();
+  });
+
   it('uses localized plugin titles and strings in the uninstall flow', async () => {
     const plugin = makePlugin('localized-plugin', 'Raw English Plugin');
     plugin.manifest.title_i18n = {

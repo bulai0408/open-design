@@ -56,6 +56,36 @@ async function runCli(args: string[]): Promise<{
 }
 
 describe('POST /api/plugins/:id/uninstall', () => {
+  it('rejects bundled plugins with a typed conflict outcome', async () => {
+    const listResp = await fetch(`${baseUrl}/api/plugins`);
+    expect(listResp.status).toBe(200);
+    const listBody = await listResp.json() as {
+      plugins?: Array<{ id: string; sourceKind?: string }>;
+    };
+    const bundled = listBody.plugins?.find((plugin) => plugin.sourceKind === 'bundled');
+    expect(bundled?.id).toBeTruthy();
+
+    const resp = await fetch(`${baseUrl}/api/plugins/${encodeURIComponent(bundled!.id)}/uninstall`, {
+      method: 'POST',
+    });
+
+    expect(resp.status).toBe(409);
+    const body = await resp.json();
+    const parsed = PluginUninstallOutcomeSchema.parse(body);
+    expect(parsed).toMatchObject({
+      ok: false,
+      code: 'bundled-plugin',
+      warnings: [],
+    });
+    expect(parsed.message).toContain('bundled');
+
+    const afterResp = await fetch(`${baseUrl}/api/plugins`);
+    const afterBody = await afterResp.json() as {
+      plugins?: Array<{ id: string; sourceKind?: string }>;
+    };
+    expect(afterBody.plugins?.some((plugin) => plugin.id === bundled!.id)).toBe(true);
+  });
+
   it('returns the shared typed not-found outcome for a no-op uninstall', async () => {
     const resp = await fetch(`${baseUrl}/api/plugins/not-installed-plugin/uninstall`, {
       method: 'POST',

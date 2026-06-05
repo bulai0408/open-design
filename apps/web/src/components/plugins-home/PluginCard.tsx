@@ -78,6 +78,7 @@ export function PluginCard({
   const shareBusy = sharePendingAction !== null;
   const isBusy = isPending || isUninstalling || pendingAny || shareBusy;
   const useDisabled = isBusy;
+  const canUninstall = Boolean(onUninstall) && record.sourceKind !== 'bundled';
 
   function pickUseAction(action: PluginUseAction) {
     setUseMenuOpen(false);
@@ -115,11 +116,11 @@ export function PluginCard({
                 <Icon name="star" size={11} />
               </span>
             ) : null}
-            {onUninstall ? (
+            {canUninstall ? (
               <button
                 type="button"
                 className="plugins-home__icon-action plugins-home__icon-action--danger"
-                onClick={() => onUninstall(record)}
+                onClick={() => onUninstall?.(record)}
                 disabled={isBusy}
                 aria-label={t('pluginCard.uninstallAria', { title })}
                 title={t('pluginCard.uninstallTitle')}

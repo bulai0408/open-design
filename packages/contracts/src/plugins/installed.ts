@@ -72,9 +72,11 @@ export const PluginInstallOutcomeSchema = z.object({
 export type PluginInstallOutcome = z.infer<typeof PluginInstallOutcomeSchema>;
 
 export const PLUGIN_UNINSTALL_NOT_FOUND_CODE = 'plugin_not_found';
+export const PLUGIN_UNINSTALL_BUNDLED_CODE = 'bundled-plugin';
 
 export const PluginUninstallErrorCodeSchema = z.enum([
   PLUGIN_UNINSTALL_NOT_FOUND_CODE,
+  PLUGIN_UNINSTALL_BUNDLED_CODE,
 ]);
 
 export type PluginUninstallErrorCode = z.infer<typeof PluginUninstallErrorCodeSchema>;

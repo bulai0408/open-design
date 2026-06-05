@@ -23,4 +23,20 @@ describe('plugin installed contracts', () => {
       message: 'Plugin not found.',
     });
   });
+
+  it('defines an explicit bundled-plugin uninstall outcome for non-removable bundled plugins', () => {
+    const parsed = PluginUninstallOutcomeSchema.parse({
+      ok: false,
+      code: 'bundled-plugin',
+      warnings: [],
+      message: 'Bundled plugins are managed by daemon upgrades.',
+    });
+
+    expect(parsed).toEqual({
+      ok: false,
+      code: 'bundled-plugin',
+      warnings: [],
+      message: 'Bundled plugins are managed by daemon upgrades.',
+    });
+  });
 });

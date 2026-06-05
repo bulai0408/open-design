@@ -11,9 +11,9 @@
 // inside the repo so a daemon upgrade rotates them in lockstep with the
 // daemon code.
 //
-// `od plugin uninstall` of a bundled plugin is rejected by the
-// installer (a future patch); for now, removing the row leaves the
-// next boot to re-register, so it's safe.
+// `od plugin uninstall` / POST /api/plugins/:id/uninstall reject bundled
+// plugin rows. Removing one manually would only last until the next
+// daemon boot re-registers the authoritative bundled copy.
 //
 // The walker is idempotent: re-running it updates the manifest_json
 // + version column for any folder that changed since last boot,
