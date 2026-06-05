@@ -1501,6 +1501,7 @@ export function migratePreviewCommentFilePath(
                AND target.conversation_id = preview_comments.conversation_id
                AND target.file_path = ?
                AND target.element_id = preview_comments.element_id
+               AND target.slide_key = preview_comments.slide_key
           )`,
     ).run(projectId, oldPath, newPath);
     const updated = db.prepare(

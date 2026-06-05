@@ -53,6 +53,36 @@ describe('project file management routes', () => {
     expect(resp.status).toBe(200);
   }
 
+  async function postPreviewComment(
+    projectId: string,
+    conversationId: string,
+    filePath: string,
+    note: string,
+    slideIndex?: number,
+  ) {
+    const resp = await fetch(
+      `${baseUrl}/api/projects/${projectId}/conversations/${conversationId}/comments`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target: {
+            filePath,
+            elementId: 'hero',
+            selector: '#hero',
+            label: 'Hero',
+            text: 'Hello',
+            position: { x: 0, y: 0, width: 10, height: 10 },
+            htmlHint: '<main id="hero">',
+            ...(slideIndex === undefined ? {} : { slideIndex }),
+          },
+          note,
+        }),
+      },
+    );
+    expect(resp.status).toBe(200);
+  }
+
   function createFolder(projectId: string, folderPath: string) {
     return fetch(`${baseUrl}/api/projects/${projectId}/files/folders`, {
       method: 'POST',
@@ -207,6 +237,34 @@ describe('project file management routes', () => {
     const comments = (await commentsResp.json()) as { comments: Array<{ filePath: string }> };
     expect(comments.comments).toHaveLength(1);
     expect(comments.comments[0]!.filePath).toBe('pages/index.html');
+  });
+
+  it('preserves distinct preview comments that only differ by slide when moving a file', async () => {
+    const { projectId, conversationId } = await createProject();
+    await writeText(projectId, 'index.html', '<main id="hero">Hello</main>');
+
+    await postPreviewComment(projectId, conversationId, 'index.html', 'Slide A', 0);
+    await postPreviewComment(projectId, conversationId, 'pages/index.html', 'Slide B', 1);
+
+    await createFolder(projectId, 'pages');
+    const moved = await moveFile(projectId, 'index.html', 'pages');
+    expect(moved.status).toBe(200);
+
+    const commentsResp = await fetch(
+      `${baseUrl}/api/projects/${projectId}/conversations/${conversationId}/comments`,
+    );
+    const comments = (await commentsResp.json()) as {
+      comments: Array<{ filePath: string; note: string; slideIndex?: number }>;
+    };
+    expect(comments.comments).toHaveLength(2);
+    expect(comments.comments.map((comment) => ({
+      filePath: comment.filePath,
+      note: comment.note,
+      slideIndex: comment.slideIndex,
+    }))).toEqual([
+      { filePath: 'pages/index.html', note: 'Slide A', slideIndex: 0 },
+      { filePath: 'pages/index.html', note: 'Slide B', slideIndex: 1 },
+    ]);
   });
 
   it('rejects move target conflicts without overwriting', async () => {
