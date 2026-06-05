@@ -167,11 +167,11 @@ function srcDocActivationMessages(calls: readonly (readonly unknown[])[]) {
 function slideMessages(calls: readonly (readonly unknown[])[]) {
   return calls
     .map(([message]) => message)
-    .filter((message): message is { type: 'od:slide'; action: 'next' | 'prev' | 'first' | 'last' } => {
+    .filter((message): message is { type: 'od:slide'; action: 'next' | 'prev' | 'first' | 'last' | 'go'; index?: number } => {
       if (typeof message !== 'object' || message === null) return false;
-      const data = message as { type?: unknown; action?: unknown };
+      const data = message as { type?: unknown; action?: unknown; index?: unknown };
       return data.type === 'od:slide'
-        && (data.action === 'next' || data.action === 'prev' || data.action === 'first' || data.action === 'last');
+        && (data.action === 'next' || data.action === 'prev' || data.action === 'first' || data.action === 'last' || data.action === 'go');
     });
 }
 
@@ -1535,6 +1535,76 @@ describe('FileViewer SVG artifacts', () => {
       expect(srcDocActivationMessages(calls)).toEqual([]);
       expect(slideMessages(calls)).toEqual([{ type: 'od:slide', action: 'next' }]);
     });
+  });
+
+  it('requests the deck bridge before replaying a slideNavRequest on a fresh URL-loaded deck', async () => {
+    const file = baseFile({
+      name: 'queued-send-deck.html',
+      path: 'queued-send-deck.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'deck',
+        title: 'Deck',
+        entry: 'queued-send-deck.html',
+        renderer: 'deck-html',
+        exports: ['html'],
+      },
+    });
+    const frameMessages: Array<{ frame: HTMLIFrameElement; message: unknown }> = [];
+    vi.spyOn(HTMLIFrameElement.prototype, 'contentWindow', 'get').mockImplementation(function (
+      this: HTMLIFrameElement,
+    ) {
+      return {
+        location: { replace: vi.fn() },
+        postMessage: (message: unknown) => {
+          frameMessages.push({ frame: this, message });
+        },
+      } as unknown as Window;
+    });
+
+    const { rerender } = render(
+      <FileViewer
+        projectId="slide-nav-project"
+        projectKind="prototype"
+        file={file}
+        isDeck
+        liveHtml={'<html><body><section class="slide">one</section><section class="slide">two</section><section class="slide">three</section></body></html>'}
+      />,
+    );
+    const rawFrame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+    expect(rawFrame.getAttribute('data-od-render-mode')).toBe('url-load');
+
+    rerender(
+      <FileViewer
+        projectId="slide-nav-project"
+        projectKind="prototype"
+        file={file}
+        isDeck
+        liveHtml={'<html><body><section class="slide">one</section><section class="slide">two</section><section class="slide">three</section></body></html>'}
+        slideNavRequest={{ slideIndex: 2, nonce: 1701 }}
+      />,
+    );
+
+    const activeFrame = await waitFor(() => {
+      const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+      expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      return frame;
+    });
+    expect(activeFrame).not.toBe(rawFrame);
+    fireEvent.load(activeFrame);
+
+    await waitFor(() => {
+      const srcdocCalls = frameMessages
+        .filter(({ frame }) => frame === activeFrame)
+        .map(({ message }) => [message] as const);
+      expect(slideMessages(srcdocCalls)).toContainEqual({ type: 'od:slide', action: 'go', index: 2 });
+    });
+    const rawCalls = frameMessages
+      .filter(({ frame }) => frame === rawFrame)
+      .map(({ message }) => [message] as const);
+    expect(slideMessages(rawCalls)).toEqual([]);
   });
 
   it('keeps Download -> Export Image reachable on a fresh deck and falls back through srcdoc transport', async () => {

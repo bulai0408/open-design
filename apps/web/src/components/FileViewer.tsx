@@ -6502,19 +6502,23 @@ function HtmlViewer({
     return () => window.removeEventListener('message', onMessage);
   }, [inspectMode, isOurPreviewIframeSource]);
 
+  const requestDeckBridgeHandoff = useCallback((action: 'next' | 'prev' | 'first' | 'last' | null) => {
+    pendingDeckBridgeActionRef.current = action;
+    pendingPreviewSnapshotRef.current = null;
+    setSrcDocPreviewFailedSource(null);
+    setSrcDocWrapFailure(null);
+    setDeckBridgeRequested(true);
+  }, []);
+
   const postSlide = useCallback((action: 'next' | 'prev' | 'first' | 'last') => {
     if (useUrlLoadPreview && effectiveDeck && !deckBridgeRequested) {
-      pendingDeckBridgeActionRef.current = action;
-      pendingPreviewSnapshotRef.current = null;
-      if (srcDocPreviewFailedSource !== null) setSrcDocPreviewFailedSource(null);
-      if (srcDocWrapFailure !== null) setSrcDocWrapFailure(null);
-      setDeckBridgeRequested(true);
+      requestDeckBridgeHandoff(action);
       return;
     }
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
     win.postMessage({ type: 'od:slide', action }, '*');
-  }, [deckBridgeRequested, effectiveDeck, srcDocPreviewFailedSource, srcDocWrapFailure, useUrlLoadPreview]);
+  }, [deckBridgeRequested, effectiveDeck, requestDeckBridgeHandoff, useUrlLoadPreview]);
 
   function syncCachedSlideStateToIframe(target: HTMLIFrameElement | null = iframeRef.current) {
     const active = htmlPreviewSlideState.get(previewStateKey)?.active;
@@ -7391,8 +7395,20 @@ function HtmlViewer({
     const count = slideState?.count ?? cachedCount ?? target + 1;
     setSlideStateCached(previewStateKey, { active: target, count });
     setSlideState({ active: target, count });
+    if (useUrlLoadPreview) {
+      requestDeckBridgeHandoff(null);
+      return;
+    }
     syncCachedSlideStateToIframe();
-  }, [slideNavRequest?.nonce, slideNavRequest?.slideIndex, effectiveDeck, previewStateKey, slideState?.count]);
+  }, [
+    slideNavRequest?.nonce,
+    slideNavRequest?.slideIndex,
+    effectiveDeck,
+    previewStateKey,
+    requestDeckBridgeHandoff,
+    slideState?.count,
+    useUrlLoadPreview,
+  ]);
 
   const openDownloadMenu = () => {
     fireArtifactHeaderClick('share_dropdown');
