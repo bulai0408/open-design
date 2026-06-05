@@ -3,8 +3,9 @@
 // events. Phase 1 covers exactly the local-folder source path; tarball
 // arrival lands in Phase 2A.
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -104,6 +105,28 @@ describe('installFromLocalFolder', () => {
     const result = await uninstallPlugin(db, 'sample-plugin', { userPluginsRoot: pluginsRoot });
     expect(result.ok).toBe(true);
     expect(listInstalledPlugins(db)).toHaveLength(0);
+  });
+
+  it('preserves notFound when cleanup fails after the registry row is already missing', async () => {
+    const leftoverFolder = path.join(pluginsRoot, 'sample-plugin');
+    await mkdir(leftoverFolder, { recursive: true });
+    const originalRm = fsp.rm.bind(fsp);
+    const rmSpy = vi.spyOn(fsp, 'rm').mockImplementation(async (target, options) => {
+      if (target === leftoverFolder) {
+        throw new Error('permission denied');
+      }
+      return await originalRm(target, options);
+    });
+
+    try {
+      const result = await uninstallPlugin(db, 'sample-plugin', { userPluginsRoot: pluginsRoot });
+
+      expect(result.ok).toBe(false);
+      expect(result.notFound).toBe(true);
+      expect(result.warning).toContain(`Folder ${leftoverFolder} removal failed: permission denied`);
+    } finally {
+      rmSpy.mockRestore();
+    }
   });
 
   it('persists marketplace provenance and inherited trust for resolved installs', async () => {

@@ -790,11 +790,19 @@ export async function uninstallPlugin(
     if (fs.existsSync(folder)) {
       // Some platforms refuse to remove read-only files; surface a hint
       // instead of silently leaving stale on-disk state.
-      return { ok: removed, warning: `Folder ${folder} could not be removed` };
+      return {
+        ok: removed,
+        ...(!removed ? { notFound: true } : {}),
+        warning: `Folder ${folder} could not be removed`,
+      };
     }
     if (folderExisted) removedFolder = folder;
   } catch (err) {
-    return { ok: removed, warning: `Folder ${folder} removal failed: ${(err as Error).message}` };
+    return {
+      ok: removed,
+      ...(!removed ? { notFound: true } : {}),
+      warning: `Folder ${folder} removal failed: ${(err as Error).message}`,
+    };
   }
   if (!removed && !folderExisted) {
     return { ok: false, notFound: true };
