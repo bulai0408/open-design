@@ -807,15 +807,16 @@ function SkillDraftForm({
   const [filesError, setFilesError] = useState<string | null>(null);
 
   const addFiles = useCallback(
-    async (list: FileList | File[] | null) => {
+    async (
+      list: FileList | File[] | null,
+      options?: ReadFilesForUploadOptions,
+    ) => {
       const selected = Array.from(list ?? []);
       if (selected.length === 0) return;
       setFilesReading(true);
       setFilesError(null);
       try {
-        const uploaded = await Promise.all(
-          selected.map((file) => readFileForUpload(file)),
-        );
+        const uploaded = await readFilesForUpload(selected, options);
         setDraft((cur) => ({
           ...cur,
           files: mergeDraftFiles(cur.files, uploaded),
@@ -928,7 +929,9 @@ function SkillDraftForm({
               data-testid="skills-folder-input"
               {...directoryInputProps}
               onChange={(e) => {
-                void addFiles(e.currentTarget.files);
+                void addFiles(e.currentTarget.files, {
+                  stripDirectoryRoot: true,
+                });
                 e.currentTarget.value = '';
               }}
             />
@@ -1025,13 +1028,25 @@ const directoryInputProps = {
   directory: '',
 } as Record<string, string>;
 
-async function readFileForUpload(file: File): Promise<SkillWriteFileInput> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  return {
-    path: uploadRelativePath(file),
-    content: bytesToBase64(bytes),
-    encoding: 'base64',
-  };
+interface ReadFilesForUploadOptions {
+  stripDirectoryRoot?: boolean;
+}
+
+async function readFilesForUpload(
+  files: File[],
+  options?: ReadFilesForUploadOptions,
+): Promise<SkillWriteFileInput[]> {
+  const paths = uploadRelativePaths(files, options);
+  return Promise.all(
+    files.map(async (file, index) => {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      return {
+        path: paths[index] ?? uploadRelativePath(file),
+        content: bytesToBase64(bytes),
+        encoding: 'base64',
+      };
+    }),
+  );
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -1043,9 +1058,29 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+function uploadRelativePaths(
+  files: File[],
+  options?: ReadFilesForUploadOptions,
+): string[] {
+  const paths = files.map(uploadRelativePath);
+  if (!options?.stripDirectoryRoot) return paths;
+  const directoryRoot = selectedDirectoryRoot(paths);
+  if (!directoryRoot) return paths;
+  return paths.map((p) => p.slice(directoryRoot.length + 1));
+}
+
 function uploadRelativePath(file: File): string {
   const withRelativePath = file as File & { webkitRelativePath?: string };
   return withRelativePath.webkitRelativePath || file.name;
+}
+
+function selectedDirectoryRoot(paths: string[]): string | null {
+  const first = paths[0];
+  if (!first) return null;
+  const slash = first.indexOf('/');
+  if (slash <= 0) return null;
+  const root = first.slice(0, slash);
+  return paths.every((p) => p.startsWith(`${root}/`)) ? root : null;
 }
 
 function skillDraftFileSize(file: SkillWriteFileInput): number {

@@ -390,7 +390,7 @@ describe('SkillsSection', () => {
     });
   });
 
-  it('preserves nested side-file paths from folder selection', async () => {
+  it('strips the selected folder prefix from directory-picked side-file paths', async () => {
     const { fetchMock } = renderSkillsSection([]);
 
     fireEvent.click(await screen.findByTestId('skills-new'));
@@ -407,14 +407,22 @@ describe('SkillsSection', () => {
       type: 'text/markdown',
     });
     Object.defineProperty(nestedFile, 'webkitRelativePath', {
-      value: 'references/checklist.md',
+      value: 'my-skill/references/checklist.md',
+    });
+    const skillFile = new File(['# Folder Skill'], 'SKILL.md', {
+      type: 'text/markdown',
+    });
+    Object.defineProperty(skillFile, 'webkitRelativePath', {
+      value: 'my-skill/SKILL.md',
     });
 
     fireEvent.change(within(form).getByTestId('skills-folder-input'), {
-      target: { files: [nestedFile] },
+      target: { files: [nestedFile, skillFile] },
     });
 
-    await within(form).findByText('references/checklist.md');
+    const draftFiles = await within(form).findByTestId('skills-draft-files');
+    expect(within(draftFiles).getByText('references/checklist.md')).toBeTruthy();
+    expect(within(draftFiles).getByText('SKILL.md')).toBeTruthy();
     fireEvent.click(within(form).getByTestId('skills-save'));
 
     await waitFor(() => {
@@ -428,6 +436,11 @@ describe('SkillsSection', () => {
         {
           path: 'references/checklist.md',
           content: 'IyBDaGVja2xpc3Q=',
+          encoding: 'base64',
+        },
+        {
+          path: 'SKILL.md',
+          content: 'IyBGb2xkZXIgU2tpbGw=',
           encoding: 'base64',
         },
       ]);
