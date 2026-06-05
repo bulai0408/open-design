@@ -473,8 +473,8 @@ function hasQuotaStatusCode(details: string): boolean {
 function hasProviderQuotaSignal(details: string): boolean {
   return (
     /\b(?:resource[-_ ]?exhausted|rate[-_ ]?limit|too many requests|capacity on this model)\b/i.test(details) ||
-    /\b(?:openai|anthropic|claude|gemini|google|vertex|generativelanguage|openrouter|model|provider|api)\b[^\n]{0,120}\b(?:quota|exhausted|capacity)\b/i.test(details) ||
-    /\b(?:quota|exhausted|capacity)\b[^\n]{0,120}\b(?:openai|anthropic|claude|gemini|google|vertex|generativelanguage|openrouter|model|provider|api)\b/i.test(details)
+    /\b(?:openai|anthropic|claude|gemini|google|vertex|generativelanguage|openrouter|provider)\b[^\n]{0,120}\b(?:quota|exhausted|capacity)\b/i.test(details) ||
+    /\b(?:quota|exhausted|capacity)\b[^\n]{0,120}\b(?:openai|anthropic|claude|gemini|google|vertex|generativelanguage|openrouter|provider)\b/i.test(details)
   );
 }
 

@@ -995,6 +995,49 @@ describe('streamViaDaemon', () => {
     expect(handlers.onDone).not.toHaveBeenCalled();
   });
 
+  it('does not classify local API cache quota errors as provider quota failures', async () => {
+    const handlers = createDaemonHandlers();
+    const stderr = [
+      'Error: API cache quota exceeded while writing artifacts',
+      '    at writeFile (file:///workspace/.od/artifacts/api-cache.json)',
+    ].join('\n');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ runId: 'run-1' }))
+        .mockResolvedValueOnce(
+          sseResponse(
+            [
+              'event: stderr',
+              `data: ${JSON.stringify({ chunk: stderr })}`,
+              '',
+              'event: end',
+              'data: {"code":1,"status":"failed"}',
+              '',
+              '',
+            ].join('\n'),
+          ),
+        ),
+    );
+
+    await streamViaDaemon({
+      agentId: 'mock',
+      history: [{ id: '1', role: 'user', content: 'hello' }],
+      systemPrompt: '',
+      signal: new AbortController().signal,
+      handlers,
+    });
+
+    const error = handlers.onError.mock.calls[0]?.[0] as Error & {
+      category?: string;
+      details?: string;
+    };
+    expect(error.category).toBe('agent_crashed');
+    expect(error.message).toBe('The agent process exited before finishing.');
+    expect(error.details).toBe(stderr);
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  });
+
   it('does not classify unrelated stack line 401 as an auth failure', async () => {
     const handlers = createDaemonHandlers();
     const stderr = [
