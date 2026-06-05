@@ -1753,6 +1753,13 @@ export const th: Dict = {
   'settings.memoryExtractionsRefresh': 'รีเฟรช',
   'settings.memoryExtractionsRefreshing': 'กำลังรีเฟรช…',
   'settings.skillsNoFiles': 'ไม่มีไฟล์ในโฟลเดอร์ทักษะนี้',
+  'settings.skillsSideFiles': 'ไฟล์ประกอบ',
+  'settings.skillsSideFilesDrop': 'วางไฟล์ที่นี่หรือเลือกไฟล์',
+  'settings.skillsSideFilesChooseFolder': 'เลือกโฟลเดอร์',
+  'settings.skillsSideFilesHint': 'เพิ่มเอกสารอ้างอิง สคริปต์ แอสเซ็ต หรือตัวอย่างที่ควรอยู่ข้าง SKILL.md',
+  'settings.skillsSideFilesReading': 'กำลังอ่านไฟล์ที่เลือก…',
+  'settings.skillsSideFilesReadError': 'ไม่สามารถอ่านไฟล์ที่เลือกได้',
+  'settings.skillsSideFilesRemove': 'ลบ {path}',
   'settings.skillsNameRequired': 'ต้องระบุชื่อทักษะ',
   'settings.skillsBodyRequired': 'ต้องระบุเนื้อหาทักษะ',
 

@@ -3,8 +3,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { I18nProvider, type Locale } from '../../src/i18n';
 import { SkillsSection } from '../../src/components/SkillsSection';
-import { I18nProvider } from '../../src/i18n';
 import type { AppConfig } from '../../src/types';
 import type { SkillSummary } from '@open-design/contracts';
 
@@ -43,7 +43,7 @@ function makeSkill(overrides: Partial<SkillSummary>): SkillSummary {
 function renderSkillsSection(
   skills: SkillSummary[],
   options?: {
-    locale?: 'en' | 'zh-CN';
+    locale?: Locale;
     onSkillsRefresh?: () => void | Promise<void>;
     onSkillsChanged?: (id?: string) => void;
   },
@@ -114,7 +114,7 @@ function renderSkillsSection(
     return new Response(JSON.stringify({}), { status: 404 });
   }) as typeof fetch;
 
-  const section = (
+  const tree = (
     <SkillsSection
       cfg={TEST_CONFIG}
       setCfg={setCfg}
@@ -122,10 +122,13 @@ function renderSkillsSection(
       onSkillsChanged={onSkillsChanged}
     />
   );
+
   render(
     options?.locale ? (
-      <I18nProvider initial={options.locale}>{section}</I18nProvider>
-    ) : section,
+      <I18nProvider initial={options.locale}>{tree}</I18nProvider>
+    ) : (
+      tree
+    ),
   );
   return {
     fetchMock: globalThis.fetch as ReturnType<typeof vi.fn>,
@@ -429,5 +432,27 @@ describe('SkillsSection', () => {
         },
       ]);
     });
+  });
+
+  it('localizes side-file upload controls', async () => {
+    renderSkillsSection([], { locale: 'zh-CN' });
+
+    fireEvent.click(await screen.findByTestId('skills-new'));
+    const form = await screen.findByTestId('skills-create-form');
+
+    expect(within(form).getByText('技能附加文件')).toBeTruthy();
+    expect(within(form).getByText('拖放文件到此处，或选择文件')).toBeTruthy();
+    expect(within(form).getByText('选择文件夹')).toBeTruthy();
+    expect(
+      within(form).getByText('添加应与 SKILL.md 放在一起的参考资料、脚本、资源或示例。'),
+    ).toBeTruthy();
+    expect(within(form).queryByText('Side files')).toBeNull();
+
+    fireEvent.change(within(form).getByTestId('skills-file-input'), {
+      target: { files: [new File(['# Reference'], 'reference.md')] },
+    });
+
+    await within(form).findByText('reference.md');
+    expect(within(form).getByTitle('移除 reference.md')).toBeTruthy();
   });
 });

@@ -822,13 +822,13 @@ function SkillDraftForm({
         }));
       } catch (err) {
         setFilesError(
-          err instanceof Error ? err.message : 'Could not read selected files.',
+          err instanceof Error ? err.message : t('settings.skillsSideFilesReadError'),
         );
       } finally {
         setFilesReading(false);
       }
     },
-    [setDraft],
+    [setDraft, t],
   );
 
   const removeFile = useCallback(
@@ -904,11 +904,11 @@ function SkillDraftForm({
         />
       </label>
       <div className="library-import-block skills-file-upload">
-        <span>Side files</span>
+        <span>{t('settings.skillsSideFiles')}</span>
         <div className="skills-file-pickers">
           <label className="skills-file-dropzone">
             <Icon name="file" size={14} />
-            <span>Drop files here or choose files</span>
+            <span>{t('settings.skillsSideFilesDrop')}</span>
             <input
               type="file"
               multiple
@@ -921,7 +921,7 @@ function SkillDraftForm({
           </label>
           <label className="skills-file-folder-picker">
             <Icon name="folder" size={14} />
-            <span>Choose folder</span>
+            <span>{t('settings.skillsSideFilesChooseFolder')}</span>
             <input
               type="file"
               multiple
@@ -944,7 +944,7 @@ function SkillDraftForm({
                   type="button"
                   className="icon-btn"
                   onClick={() => removeFile(file.path)}
-                  title={`Remove ${file.path}`}
+                  title={t('settings.skillsSideFilesRemove', { path: file.path })}
                   data-testid={`skills-file-remove-${file.path}`}
                 >
                   <Icon name="close" size={12} />
@@ -954,12 +954,13 @@ function SkillDraftForm({
           </ul>
         ) : (
           <p className="skills-file-upload-hint">
-            Add references, scripts, assets, or examples that should live next
-            to SKILL.md.
+            {t('settings.skillsSideFilesHint')}
           </p>
         )}
         {filesReading ? (
-          <p className="skills-file-upload-hint">Reading selected files…</p>
+          <p className="skills-file-upload-hint">
+            {t('settings.skillsSideFilesReading')}
+          </p>
         ) : null}
         {filesError ? (
           <div className="library-import-error" role="alert">
