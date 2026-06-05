@@ -1424,7 +1424,7 @@ describe('FileViewer SVG artifacts', () => {
     expect(markup).toContain('data-od-render-mode="srcdoc" data-od-active="false"');
   });
 
-  it('replays the first deck navigation after opting a fresh URL-loaded deck into srcDoc', async () => {
+  it('replays the first deck navigation after direct srcdoc load for a fresh URL-loaded deck', async () => {
     const file = baseFile({
       name: 'deck.html',
       path: 'deck.html',
@@ -1439,6 +1439,17 @@ describe('FileViewer SVG artifacts', () => {
         exports: ['html'],
       },
     });
+    const frameMessages: Array<{ frame: HTMLIFrameElement; message: unknown }> = [];
+    vi.spyOn(HTMLIFrameElement.prototype, 'contentWindow', 'get').mockImplementation(function (
+      this: HTMLIFrameElement,
+    ) {
+      return {
+        location: { replace: vi.fn() },
+        postMessage: (message: unknown) => {
+          frameMessages.push({ frame: this, message });
+        },
+      } as unknown as Window;
+    });
 
     render(
       <FileViewer
@@ -1451,23 +1462,24 @@ describe('FileViewer SVG artifacts', () => {
     );
 
     expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('data-od-render-mode')).toBe('url-load');
-    const srcdocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
-    const postMessageSpy = vi.spyOn(srcdocFrame.contentWindow!, 'postMessage');
-    canActivateSrcDocTransportMock.mockReturnValue(true);
-
+    const initialSrcdocFrame = screen.getByTestId('artifact-preview-frame-srcdoc') as HTMLIFrameElement;
     fireEvent.click(screen.getByRole('button', { name: 'Next slide' }));
 
     const activeFrame = await waitFor(() => {
       const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
       expect(frame.getAttribute('data-od-render-mode')).toBe('srcdoc');
+      expect(frame).not.toBe(initialSrcdocFrame);
       return frame;
     });
 
     fireEvent.load(activeFrame);
 
     await waitFor(() => {
-      expect(srcDocActivationMessages(postMessageSpy.mock.calls).length).toBeGreaterThan(0);
-      expect(slideMessages(postMessageSpy.mock.calls)).toEqual([{ type: 'od:slide', action: 'next' }]);
+      const calls = frameMessages
+        .filter(({ frame }) => frame === activeFrame)
+        .map(({ message }) => [message] as const);
+      expect(srcDocActivationMessages(calls)).toEqual([]);
+      expect(slideMessages(calls)).toEqual([{ type: 'od:slide', action: 'next' }]);
     });
   });
 

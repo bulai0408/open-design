@@ -8755,7 +8755,7 @@ function HtmlViewer({
                           }, '*');
                           replayInspectOverridesToIframe(frame);
                           syncBridgeModes(frame);
-                          if (!useUrlLoadPreview && activatedSrcDocTransport) replayPendingDeckBridgeAction(frame);
+                          if (!useUrlLoadPreview) replayPendingDeckBridgeAction(frame);
                           if (!useUrlLoadPreview && activatedSrcDocTransport) runPendingPreviewSnapshot(frame);
                           syncCachedSlideStateToIframe(frame);
                           if (!useUrlLoadPreview) restorePreviewScrollPosition();
