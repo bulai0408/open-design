@@ -16,6 +16,7 @@ import { projectSplitClassName, projectSplitStyle } from '../../src/components/P
 import {
   createProjectFolder,
   fetchProjectFileText,
+  moveProjectFile,
   uploadProjectFiles,
   writeProjectTextFile,
   fetchProjectFolders,
@@ -66,6 +67,7 @@ vi.mock('../../src/providers/registry', async () => {
     uploadProjectFiles: vi.fn(),
     writeProjectTextFile: vi.fn(),
     createProjectFolder: vi.fn(),
+    moveProjectFile: vi.fn(),
     fetchProjectFolders: vi.fn().mockResolvedValue([]),
   };
 });
@@ -123,6 +125,7 @@ const mockedFetchProjectFileText = vi.mocked(fetchProjectFileText);
 const mockedUploadProjectFiles = vi.mocked(uploadProjectFiles);
 const mockedWriteProjectTextFile = vi.mocked(writeProjectTextFile);
 const mockedCreateProjectFolder = vi.mocked(createProjectFolder);
+const mockedMoveProjectFile = vi.mocked(moveProjectFile);
 const mockedFetchProjectFolders = vi.mocked(fetchProjectFolders);
 
 let root: Root | null = null;
@@ -1566,6 +1569,57 @@ describe('FileWorkspace folder creation', () => {
       );
       expect(hasAssets).toBe(true);
     });
+  });
+});
+
+describe('FileWorkspace file moves', () => {
+  it('refreshes and remaps successful file moves before surfacing a later failure', async () => {
+    mockedMoveProjectFile
+      .mockResolvedValueOnce({
+        oldName: 'analysis.html',
+        newName: 'archive/analysis.html',
+        folder: 'archive',
+        file: workspaceFile('archive/analysis.html'),
+      })
+      .mockRejectedValueOnce(new Error('A file named notes.html already exists in archive.'));
+    vi.stubGlobal('prompt', vi.fn(() => 'archive'));
+    vi.stubGlobal('alert', vi.fn());
+    mockedFetchProjectFileText.mockResolvedValue('<main>Analysis</main>');
+
+    const onRefreshFiles = vi.fn(async () => undefined);
+    const onTabsStateChange = vi.fn();
+
+    render(
+      <FileWorkspace
+        projectId="project-1"
+        projectKind="prototype"
+        files={[workspaceFile('analysis.html'), workspaceFile('notes.html')]}
+        liveArtifacts={[]}
+        onRefreshFiles={onRefreshFiles}
+        isDeck={false}
+        tabsState={{ tabs: ['analysis.html', 'notes.html'], active: null }}
+        onTabsStateChange={onTabsStateChange}
+      />,
+    );
+
+    for (const name of ['analysis.html', 'notes.html']) {
+      const row = screen.getByTestId(`design-file-row-${name}`);
+      fireEvent.click(row.querySelector('.df-row-check')!);
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Move to folder' }));
+
+    await waitFor(() => {
+      expect(mockedMoveProjectFile).toHaveBeenCalledTimes(2);
+    });
+    expect(mockedMoveProjectFile).toHaveBeenNthCalledWith(1, 'project-1', 'analysis.html', 'archive');
+    expect(mockedMoveProjectFile).toHaveBeenNthCalledWith(2, 'project-1', 'notes.html', 'archive');
+    await waitFor(() => expect(onRefreshFiles).toHaveBeenCalledTimes(1));
+    expect(mockedFetchProjectFolders).toHaveBeenCalledWith('project-1');
+    expect(onTabsStateChange).toHaveBeenLastCalledWith({
+      tabs: ['archive/analysis.html', 'notes.html'],
+      active: null,
+    });
+    expect(window.alert).toHaveBeenCalledWith('A file named notes.html already exists in archive.');
   });
 });
 

@@ -1326,41 +1326,56 @@ export function FileWorkspace({
     folderPath: string,
   ): Promise<MoveProjectFileResponse[]> {
     const results: MoveProjectFileResponse[] = [];
+    let moveFailed = false;
+    let moveFailure: unknown;
+
     for (const name of names) {
-      results.push(await moveProjectFile(projectId, name, folderPath));
+      try {
+        results.push(await moveProjectFile(projectId, name, folderPath));
+      } catch (err) {
+        moveFailed = true;
+        moveFailure = err;
+        break;
+      }
     }
 
-    await onRefreshFiles();
-    await refreshProjectFolders();
+    if (results.length > 0) {
+      await onRefreshFiles();
+      await refreshProjectFolders();
 
-    const moveMap = new Map(results.map((result) => [result.oldName, result.newName]));
-    if (moveMap.size > 0) {
-      const nextTabs: string[] = [];
-      const seen = new Set<string>();
-      for (const name of persistedTabs) {
-        const nextName = moveMap.get(name) ?? name;
-        if (!seen.has(nextName)) {
-          seen.add(nextName);
-          nextTabs.push(nextName);
+      const moveMap = new Map(results.map((result) => [result.oldName, result.newName]));
+      if (moveMap.size > 0) {
+        const nextTabs: string[] = [];
+        const seen = new Set<string>();
+        for (const name of persistedTabs) {
+          const nextName = moveMap.get(name) ?? name;
+          if (!seen.has(nextName)) {
+            seen.add(nextName);
+            nextTabs.push(nextName);
+          }
         }
+        const nextActive = tabsState.active
+          ? moveMap.get(tabsState.active) ?? tabsState.active
+          : tabsState.active;
+        onTabsStateChange({ tabs: nextTabs, active: nextActive });
+        setActiveTab((current) => moveMap.get(current) ?? current);
+        setSketches((curr) => {
+          let changed = false;
+          const next = { ...curr };
+          for (const [oldName, newName] of moveMap) {
+            const entry = next[oldName];
+            if (!entry) continue;
+            delete next[oldName];
+            next[newName] = entry;
+            changed = true;
+          }
+          return changed ? next : curr;
+        });
       }
-      const nextActive = tabsState.active
-        ? moveMap.get(tabsState.active) ?? tabsState.active
-        : tabsState.active;
-      onTabsStateChange({ tabs: nextTabs, active: nextActive });
-      setActiveTab((current) => moveMap.get(current) ?? current);
-      setSketches((curr) => {
-        let changed = false;
-        const next = { ...curr };
-        for (const [oldName, newName] of moveMap) {
-          const entry = next[oldName];
-          if (!entry) continue;
-          delete next[oldName];
-          next[newName] = entry;
-          changed = true;
-        }
-        return changed ? next : curr;
-      });
+    }
+
+    if (moveFailed) {
+      throw moveFailure;
     }
 
     return results;
