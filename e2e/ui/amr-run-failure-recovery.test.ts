@@ -75,7 +75,7 @@ test('[P0] AMR auth failures offer Authorize & retry and open AMR authorization 
   await gotoProject(page, amr.projectId);
   await sendPrompt(page, 'AMR auth failure recovery smoke');
 
-  const authorizeAndRetry = page.getByTestId('generation-preview-authorize');
+  const authorizeAndRetry = page.getByRole('button', { name: /Authorize.*retry|授权并重试/i }).first();
   await expect(authorizeAndRetry).toBeVisible({ timeout: 15_000 });
   await authorizeAndRetry.click();
 
@@ -109,8 +109,8 @@ test('[P0] AMR insufficient-balance failures surface Top up AMR and keep Retry a
   await gotoProject(page, amr.projectId);
   await sendPrompt(page, 'AMR insufficient balance recovery smoke');
 
-  const topUp = page.getByTestId('generation-preview-recharge');
-  const retry = page.getByTestId('generation-preview-retry');
+  const topUp = page.getByRole('button', { name: /Top up AMR/i }).first();
+  const retry = page.getByRole('button', { name: /^Retry$/i }).first();
   await expect(topUp).toBeVisible({ timeout: 15_000 });
   await expect(retry).toBeVisible();
 
@@ -122,7 +122,7 @@ test('[P0] AMR insufficient-balance failures surface Top up AMR and keep Retry a
         () => (window as Window & { __openedUrls?: string[] }).__openedUrls ?? [],
       ),
     )
-    .toContain('https://open-design.ai/amr/wallet');
+    .toContainEqual(expect.stringMatching(/^https:\/\/open-design\.ai\/amr\/wallet(?:\?|$)/));
 });
 
 test('[P0] after an AMR failure the user can switch to Codex and complete a fresh run', async ({ page }) => {
@@ -224,8 +224,8 @@ test('[P0] upstream outages keep Retry available without promoting AMR', async (
 
   await gotoProject(page, projectId);
 
-  await expect(page.getByTestId('generation-preview-retry')).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByText(/Generation service unavailable/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Retry$/i }).first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/Generation service unavailable|model provider is temporarily unavailable/i).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /Switch to AMR & retry/i })).toHaveCount(0);
   await expect(page.getByText(/Model call failed/i)).toHaveCount(0);
 });
@@ -303,9 +303,9 @@ test('[P0] antigravity rate limits offer terminal model switching without promot
 
   await gotoProject(page, projectId);
 
-  const launchTerminal = page.getByTestId('generation-preview-launch-terminal');
+  const launchTerminal = page.getByRole('button', { name: /Switch model in terminal/i }).first();
   await expect(launchTerminal).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByTestId('generation-preview-retry')).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Retry$/i }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /Switch to AMR & retry/i })).toHaveCount(0);
 
   await launchTerminal.click();
