@@ -1,0 +1,274 @@
+name: self-hosted-mac-dmg
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_repository:
+        description: "Upstream owner/repo to merge before building."
+        required: true
+        type: string
+        default: nexu-io/open-design
+      upstream_ref:
+        description: "Upstream branch, tag, or SHA to merge before building."
+        required: true
+        type: string
+        default: main
+      target_branch:
+        description: "Fork branch to update and build."
+        required: true
+        type: string
+        default: main
+      release_version:
+        description: "Optional app version override. Empty uses apps/packaged version plus selfhost run number."
+        required: false
+        type: string
+        default: ""
+      namespace:
+        description: "tools-pack namespace for this fork build."
+        required: true
+        type: string
+        default: self-hosted
+      mac_sign_mode:
+        description: "macOS signing mode."
+        required: true
+        type: choice
+        options:
+          - "no"
+          - "sign-only"
+          - "notarize"
+        default: "no"
+      smoke_mode:
+        description: "Packaged runtime smoke coverage."
+        required: true
+        type: choice
+        options:
+          - skip
+          - core
+          - full
+        default: skip
+      require_vela_cli:
+        description: "Fail the build if the bundled Vela CLI cannot be resolved."
+        required: true
+        type: boolean
+        default: false
+      create_release:
+        description: "Create or update a GitHub Release with the DMG."
+        required: true
+        type: boolean
+        default: true
+  schedule:
+    # Periodically merge upstream/main into the fork default branch, then build
+    # a macOS arm64 DMG. Fork owners can adjust or disable this cadence.
+    - cron: "17 18 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: self-hosted-mac-dmg-${{ github.event_name == 'workflow_dispatch' && inputs.target_branch || github.event.repository.default_branch }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync fork with upstream
+    if: github.repository != 'nexu-io/open-design'
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.sync.outputs.branch }}
+      commit: ${{ steps.sync.outputs.commit }}
+      release_version: ${{ steps.sync.outputs.release_version }}
+      short_commit: ${{ steps.sync.outputs.short_commit }}
+      tag_name: ${{ steps.sync.outputs.tag_name }}
+      upstream_ref: ${{ steps.sync.outputs.upstream_ref }}
+      upstream_repository: ${{ steps.sync.outputs.upstream_repository }}
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream
+        id: sync
+        env:
+          INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
+          INPUT_TARGET_BRANCH: ${{ inputs.target_branch }}
+          INPUT_UPSTREAM_REF: ${{ inputs.upstream_ref }}
+          INPUT_UPSTREAM_REPOSITORY: ${{ inputs.upstream_repository }}
+        run: |
+          set -euo pipefail
+
+          default_branch="$(jq -r '.repository.default_branch' "$GITHUB_EVENT_PATH")"
+          target_branch="${INPUT_TARGET_BRANCH:-$default_branch}"
+          upstream_repository="${INPUT_UPSTREAM_REPOSITORY:-nexu-io/open-design}"
+          upstream_ref="${INPUT_UPSTREAM_REF:-main}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin "$target_branch"
+          git checkout -B "$target_branch" "origin/$target_branch"
+
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "https://github.com/$upstream_repository.git"
+          git fetch upstream "$upstream_ref"
+
+          before="$(git rev-parse HEAD)"
+          upstream_sha="$(git rev-parse FETCH_HEAD)"
+          echo "Merging $upstream_repository@$upstream_ref ($upstream_sha) into $target_branch"
+          if ! git merge --no-edit "$upstream_sha"; then
+            echo "::error::Upstream merge conflicted. Resolve locally, push $target_branch, then rerun this workflow."
+            exit 1
+          fi
+
+          after="$(git rev-parse HEAD)"
+          if [ "$after" != "$before" ]; then
+            git push origin "HEAD:$target_branch"
+          else
+            echo "No upstream changes to push."
+          fi
+
+          base_version="$(node -e 'const fs = require("node:fs"); const pkg = JSON.parse(fs.readFileSync("apps/packaged/package.json", "utf8")); process.stdout.write(pkg.version);')"
+          release_version="${INPUT_RELEASE_VERSION:-$base_version-selfhost.$GITHUB_RUN_NUMBER}"
+          short_commit="$(git rev-parse --short=12 HEAD)"
+          safe_version="$(printf '%s' "$release_version" | tr -c 'A-Za-z0-9._-' '-')"
+          tag_name="self-hosted-mac-v${safe_version}-${short_commit}"
+
+          {
+            echo "branch=$target_branch"
+            echo "commit=$after"
+            echo "release_version=$release_version"
+            echo "short_commit=$short_commit"
+            echo "tag_name=$tag_name"
+            echo "upstream_ref=$upstream_ref"
+            echo "upstream_repository=$upstream_repository"
+          } >> "$GITHUB_OUTPUT"
+
+  build_mac_arm64:
+    name: Build macOS arm64 DMG
+    needs: sync
+    if: github.repository != 'nexu-io/open-design'
+    runs-on: macos-14
+    outputs:
+      dmg_name: ${{ steps.assets.outputs.dmg_name }}
+    steps:
+      - name: Checkout synced fork commit
+        uses: actions/checkout@v6.0.2
+        with:
+          ref: ${{ needs.sync.outputs.commit }}
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.33.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve build settings
+        env:
+          INPUT_MAC_SIGN_MODE: ${{ inputs.mac_sign_mode }}
+          INPUT_NAMESPACE: ${{ inputs.namespace }}
+          INPUT_REQUIRE_VELA_CLI: ${{ inputs.require_vela_cli }}
+          INPUT_SMOKE_MODE: ${{ inputs.smoke_mode }}
+        run: |
+          set -euo pipefail
+          {
+            echo "RELEASE_NAMESPACE=${INPUT_NAMESPACE:-self-hosted}"
+            echo "RELEASE_SIGN_MODE=${INPUT_MAC_SIGN_MODE:-no}"
+            echo "RELEASE_SMOKE_MODE=${INPUT_SMOKE_MODE:-skip}"
+            echo "REQUIRE_VELA_CLI=${INPUT_REQUIRE_VELA_CLI:-false}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build macOS DMG
+        env:
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_NOTARY_KEYCHAIN_PROFILE: ${{ secrets.APPLE_NOTARY_KEYCHAIN_PROFILE }}
+          APPLE_SIGNING_CERTIFICATE_BASE64: ${{ secrets.APPLE_SIGNING_CERTIFICATE_BASE64 }}
+          APPLE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          BUILD_JSON_PATH: ${{ runner.temp }}/release-build/mac_arm64/build.json
+          BUILD_LOG_PATH: ${{ runner.temp }}/release-build/mac_arm64/build.log
+          MAC_COMPRESSION: normal
+          RELEASE_BUILD_TARGET: dmg
+          RELEASE_OUTPUTS_PATH: ${{ runner.temp }}/release-build/mac_arm64/outputs.json
+          RELEASE_REPORT_DIR: ${{ runner.temp }}/release-report/mac_arm64
+          RELEASE_TARGET: mac_arm64
+          RELEASE_VERSION: ${{ needs.sync.outputs.release_version }}
+          RELEASE_WORK_DIR: ${{ runner.temp }}/release-work/mac_arm64
+          TOOLS_PACK_CACHE_DIR: ${{ runner.temp }}/tools-pack-cache
+          TOOLS_PACK_DIR: ${{ runner.temp }}/tools-pack
+        run: bash .github/workflow/scripts/release/build-platform.sh
+
+      - name: Stage release assets
+        id: assets
+        env:
+          BUILD_JSON_PATH: ${{ runner.temp }}/release-build/mac_arm64/build.json
+          RELEASE_ASSETS_DIR: ${{ runner.temp }}/self-hosted-release-assets
+          RELEASE_VERSION: ${{ needs.sync.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RELEASE_ASSETS_DIR"
+          dmg_path="$(node -e 'const fs = require("node:fs"); const build = JSON.parse(fs.readFileSync(process.env.BUILD_JSON_PATH, "utf8")); if (!build.dmgPath) throw new Error("build JSON did not include dmgPath"); process.stdout.write(build.dmgPath);')"
+          dmg_name="Open-Design-self-hosted-${RELEASE_VERSION}-mac-arm64.dmg"
+          cp "$dmg_path" "$RELEASE_ASSETS_DIR/$dmg_name"
+          cp "$BUILD_JSON_PATH" "$RELEASE_ASSETS_DIR/mac-arm64-build.json"
+          {
+            echo "asset_dir=$RELEASE_ASSETS_DIR"
+            echo "dmg_name=$dmg_name"
+            echo "dmg_path=$RELEASE_ASSETS_DIR/$dmg_name"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: open-design-self-hosted-mac-arm64
+          path: ${{ steps.assets.outputs.asset_dir }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create or update GitHub Release
+        env:
+          ASSET_DIR: ${{ steps.assets.outputs.asset_dir }}
+          CREATE_RELEASE: ${{ inputs.create_release }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: ${{ needs.sync.outputs.branch }}
+          RELEASE_COMMIT: ${{ needs.sync.outputs.commit }}
+          RELEASE_TAG: ${{ needs.sync.outputs.tag_name }}
+          RELEASE_VERSION: ${{ needs.sync.outputs.release_version }}
+          UPSTREAM_REF: ${{ needs.sync.outputs.upstream_ref }}
+          UPSTREAM_REPOSITORY: ${{ needs.sync.outputs.upstream_repository }}
+        run: |
+          set -euo pipefail
+          create_release="${CREATE_RELEASE:-true}"
+          if [ "$create_release" != "true" ]; then
+            echo "Skipping GitHub Release creation."
+            exit 0
+          fi
+
+          notes_path="$RUNNER_TEMP/self-hosted-release-notes.md"
+          cat > "$notes_path" <<EOF
+          Self-hosted macOS arm64 DMG for Open Design.
+
+          - version: $RELEASE_VERSION
+          - branch: $RELEASE_BRANCH
+          - commit: $RELEASE_COMMIT
+          - upstream: $UPSTREAM_REPOSITORY@$UPSTREAM_REF
+
+          This release was produced by the self-hosted fork workflow. It does not publish to the official Open Design R2 release feed.
+          EOF
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$ASSET_DIR"/* --clobber
+          else
+            gh release create "$RELEASE_TAG" "$ASSET_DIR"/* \
+              --target "$RELEASE_COMMIT" \
+              --title "Open Design self-hosted macOS $RELEASE_VERSION" \
+              --notes-file "$notes_path"
+          fi
