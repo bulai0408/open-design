@@ -7,6 +7,8 @@
 // uses native lazy loading so off-screen cards do not eagerly render.
 
 import { useEffect, useState } from 'react';
+import { isVisualStabilityMode } from '../../../utils/visualStability';
+import { workspaceResourceUrl } from '../../../collab/workspace-identity';
 import type { DesignPreviewSpec } from '../preview';
 
 interface Props {
@@ -15,10 +17,14 @@ interface Props {
 }
 
 export function DesignSystemSurface({ preview, inView }: Props) {
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState(() => isVisualStabilityMode());
 
   useEffect(() => {
     if (!preview.designSystemId) return;
+    if (isVisualStabilityMode()) {
+      setReady(true);
+      return;
+    }
     if (!inView) {
       setReady(false);
       return;
@@ -34,7 +40,10 @@ export function DesignSystemSurface({ preview, inView }: Props) {
           {ready ? (
             <iframe
               title={`${preview.brand} showcase preview`}
-              src={`/api/design-systems/${encodeURIComponent(preview.designSystemId)}/showcase`}
+              src={workspaceResourceUrl(
+                `/api/design-systems/${encodeURIComponent(preview.designSystemId)}/showcase`,
+                preview.workspaceContext,
+              )}
               sandbox="allow-scripts"
               loading="lazy"
               tabIndex={-1}

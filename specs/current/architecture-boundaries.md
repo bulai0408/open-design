@@ -2,11 +2,11 @@
 
 ## Purpose
 
-This document defines the architectural boundaries for the local Open Design app. These boundaries are architectural constraints; some enforcement details can be implemented later through the relevant roadmap workstreams.
+This document defines the architectural boundaries for the local OpenDesign app. These boundaries are architectural constraints; some enforcement details can be implemented later through the relevant roadmap workstreams.
 
 ## Product Shape
 
-Open Design is a local-first application. The near-term Electron version is a shell around the same `apps/web` and `apps/daemon` architecture.
+OpenDesign is a local-first application. The near-term Electron version is a shell around the same `apps/web` and `apps/daemon` architecture.
 
 Electron does not introduce a separate privileged application layer. The web layer and daemon keep the same responsibilities in browser and Electron modes.
 
@@ -16,7 +16,7 @@ Electron does not introduce a separate privileged application layer. The web lay
 
 `apps/web` must not directly access local privileged capabilities:
 
-- `.od` state
+- daemon-managed state
 - SQLite storage
 - workspace filesystem reads or writes
 - agent CLI processes
@@ -29,7 +29,7 @@ The web layer communicates with daemon-owned capabilities through API DTOs and s
 
 `apps/daemon` is the sole local capability server. It owns privileged local runtime behavior:
 
-- `.od` state
+- daemon-managed state
 - SQLite storage, schema, migrations, and storage layout
 - workspace filesystem access
 - agent CLI invocation

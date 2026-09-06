@@ -6,15 +6,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatPane } from '../../src/components/ChatPane';
 import { trackRunFailedToastSurfaceView } from '../../src/analytics/events';
-import type { ChatMessage, Conversation } from '../../src/types';
+import type { AppConfig, ChatMessage, Conversation } from '../../src/types';
+
+const translate = (key: string, vars?: Record<string, string | number>) => {
+  if (vars && Object.keys(vars).length > 0) {
+    return `${key} ${Object.values(vars).join(' ')}`;
+  }
+  return key;
+};
 
 vi.mock('../../src/i18n', () => ({
-  useT: () => (key: string, vars?: Record<string, string | number>) => {
-    if (vars && Object.keys(vars).length > 0) {
-      return `${key} ${Object.values(vars).join(' ')}`;
-    }
-    return key;
-  },
+  useI18n: () => ({ locale: 'en', setLocale: () => undefined, t: translate }),
+  useT: () => translate,
 }));
 
 vi.mock('../../src/components/AssistantMessage', () => ({
@@ -141,6 +144,98 @@ describe('ChatPane session switcher', () => {
       assistant_message_id: 'msg-amr-balance',
       run_id: 'run-amr-balance',
     });
+  });
+
+  it('opens the profile-scoped console from the AMR recharge action', () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(
+      <ChatPane
+        messages={[
+          failedAssistantMessage({
+            id: 'msg-amr-balance',
+            runId: 'run-amr-balance',
+            code: 'AMR_INSUFFICIENT_BALANCE',
+            agentId: 'amr',
+          }),
+        ]}
+        streaming={false}
+        error={null}
+        projectId="project-1"
+        projectFiles={[]}
+        onEnsureProject={async () => 'project-1'}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        onRetry={vi.fn()}
+        conversations={[conversation({ id: 'conv-1', title: 'Current' })]}
+        activeConversationId="conv-1"
+        onSelectConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        config={{ agentCliEnv: { amr: { OPEN_DESIGN_AMR_PROFILE: 'test' } } } as unknown as AppConfig}
+      />,
+    );
+
+    const rechargeAction = screen.getByText('chat.amrError.rechargeCta');
+    const retryAction = screen.getByText('promptTemplates.retry');
+    expect(rechargeAction.parentElement).toBe(retryAction.parentElement);
+    expect(
+      rechargeAction.parentElement?.closest('[data-user-action-footer="true"]'),
+    ).toBeTruthy();
+
+    fireEvent.click(rechargeAction);
+
+    const [consoleUrl, target, features] = openSpy.mock.calls[0] ?? [];
+    expect(target).toBe('_blank');
+    expect(features).toBe('noopener,noreferrer');
+    const parsedConsoleUrl = new URL(String(consoleUrl));
+    // Top-up reports on the console dashboard now, not a wallet page.
+    expect(`${parsedConsoleUrl.origin}${parsedConsoleUrl.pathname}`).toBe(
+      'https://vela.powerformer.net/dashboard',
+    );
+    // The plain top-up entry must NOT carry the upgrade intent — it opens the
+    // console to add credit, not the plan catalog.
+    expect(parsedConsoleUrl.searchParams.get('billing')).toBeNull();
+    expect(parsedConsoleUrl.searchParams.get('od_entry_source')).toBe('chat_error_recharge');
+  });
+
+  it('opens public Pricing from the AMR tier upgrade action', () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(
+      <ChatPane
+        messages={[
+          failedAssistantMessage({
+            id: 'msg-amr-upgrade',
+            runId: 'run-amr-upgrade',
+            code: 'AMR_TIER_UPGRADE_REQUIRED',
+            agentId: 'amr',
+          }),
+        ]}
+        streaming={false}
+        error={null}
+        projectId="project-1"
+        projectFiles={[]}
+        onEnsureProject={async () => 'project-1'}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        onRetry={vi.fn()}
+        conversations={[conversation({ id: 'conv-1', title: 'Current' })]}
+        activeConversationId="conv-1"
+        onSelectConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        config={{ agentCliEnv: { amr: { OPEN_DESIGN_AMR_PROFILE: 'test' } } } as unknown as AppConfig}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('chat.amrBalanceGate.plansCta'));
+
+    const [plansUrl, target, features] = openSpy.mock.calls[0] ?? [];
+    expect(target).toBe('_blank');
+    expect(features).toBe('noopener,noreferrer');
+    const parsedPlansUrl = new URL(String(plansUrl));
+    expect(`${parsedPlansUrl.origin}${parsedPlansUrl.pathname}`).toBe(
+      'https://open-design.ai/pricing/',
+    );
+    expect(parsedPlansUrl.searchParams.get('billing')).toBeNull();
+    expect(parsedPlansUrl.searchParams.get('od_entry_source')).toBe('chat_error_upgrade');
   });
 });
 

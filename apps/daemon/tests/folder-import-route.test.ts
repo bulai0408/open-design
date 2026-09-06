@@ -1,11 +1,18 @@
 import type http from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { chmod, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import JSZip from 'jszip';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { startServer } from '../src/server.js';
+import {
+  resetDesktopAuthForTests,
+  setDesktopAuthSecret,
+  signDesktopImportToken,
+  startServer,
+} from '../src/server.js';
 
 describe('POST /api/import/folder', () => {
   let server: http.Server;
@@ -22,6 +29,7 @@ describe('POST /api/import/folder', () => {
   });
 
   afterEach(() => {
+    resetDesktopAuthForTests();
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -37,12 +45,28 @@ describe('POST /api/import/folder', () => {
     return d;
   }
 
-  async function importFolder(body: unknown) {
+  async function importFolder(body: unknown, headers: Record<string, string> = {}) {
     return fetch(`${baseUrl}/api/import/folder`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify(body),
     });
+  }
+
+  function workspaceHeaders(
+    workspaceId: string,
+    workspaceMemberId: string,
+  ): Record<string, string> {
+    return {
+      'x-od-workspace-id': workspaceId,
+      'x-od-workspace-type': 'team',
+      'x-od-workspace-member-id': workspaceMemberId,
+      'x-od-workspace-role': 'member',
+      'x-od-workspace-lifecycle-state': 'active',
+      'x-od-workspace-member-status': 'active',
+      'x-od-workspace-can-share-projects': 'true',
+      'x-od-workspace-can-write-synced-files': 'true',
+    };
   }
 
   async function withSandboxMode<T>(run: () => Promise<T>): Promise<T> {
@@ -53,6 +77,20 @@ describe('POST /api/import/folder', () => {
     } finally {
       if (previous == null) delete process.env.OD_SANDBOX_MODE;
       else process.env.OD_SANDBOX_MODE = previous;
+    }
+  }
+
+  async function withSandboxImportAllowedRoots<T>(
+    roots: string[],
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const previous = process.env.OD_SANDBOX_IMPORT_ALLOWED_ROOTS;
+    process.env.OD_SANDBOX_IMPORT_ALLOWED_ROOTS = roots.join(path.delimiter);
+    try {
+      return await run();
+    } finally {
+      if (previous == null) delete process.env.OD_SANDBOX_IMPORT_ALLOWED_ROOTS;
+      else process.env.OD_SANDBOX_IMPORT_ALLOWED_ROOTS = previous;
     }
   }
 
@@ -84,6 +122,113 @@ describe('POST /api/import/folder', () => {
     expect(typeof tabs.updatedAt).toBe('number');
   });
 
+  it('atomically binds a folder import to the exact request workspace and not workspace B', async () => {
+    const folder = makeFolder();
+    await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+    const headersA = workspaceHeaders('workspace-folder-a', 'member-folder-a');
+
+    const resp = await importFolder({ baseDir: folder }, headersA);
+    expect(resp.status).toBe(200);
+    const body = (await resp.json()) as { project: { id: string } };
+
+    const detail = await fetch(
+      `${baseUrl}/api/projects/${body.project.id}`,
+      { headers: headersA },
+    );
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toMatchObject({
+      project: {
+        id: body.project.id,
+        workspaceId: 'workspace-folder-a',
+      },
+    });
+
+    const workspaceA = await fetch(
+      `${baseUrl}/api/workspaces/workspace-folder-a/projects?view=drafts`,
+      { headers: headersA },
+    );
+    expect(workspaceA.status).toBe(200);
+    const projectsA = (await workspaceA.json()) as {
+      projects: Array<{ project: { id: string } }>;
+    };
+    expect(projectsA.projects.map((item) => item.project.id)).toContain(body.project.id);
+
+    const headersB = workspaceHeaders('workspace-folder-b', 'member-folder-b');
+    const workspaceB = await fetch(
+      `${baseUrl}/api/workspaces/workspace-folder-b/projects?view=drafts`,
+      { headers: headersB },
+    );
+    expect(workspaceB.status).toBe(200);
+    const projectsB = (await workspaceB.json()) as {
+      projects: Array<{ project: { id: string } }>;
+    };
+    expect(projectsB.projects.map((item) => item.project.id)).not.toContain(body.project.id);
+  });
+
+  it('validates an imported project skill inside the exact request workspace before inserting rows', async () => {
+    const folder = makeFolder();
+    await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+    const headers = workspaceHeaders('workspace-folder-skill', 'member-folder-skill');
+    const beforeResponse = await fetch(
+      `${baseUrl}/api/workspaces/workspace-folder-skill/projects?view=drafts`,
+      { headers },
+    );
+    const before = (await beforeResponse.json()) as {
+      projects: Array<{ project: { id: string } }>;
+    };
+
+    const response = await importFolder(
+      { baseDir: folder, skillId: 'skill-that-does-not-exist' },
+      headers,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'SKILL_NOT_FOUND' },
+    });
+    const afterResponse = await fetch(
+      `${baseUrl}/api/workspaces/workspace-folder-skill/projects?view=drafts`,
+      { headers },
+    );
+    const after = (await afterResponse.json()) as {
+      projects: Array<{ project: { id: string } }>;
+    };
+    expect(after.projects).toEqual(before.projects);
+  });
+
+  it('atomically binds a Claude Design import to the exact request workspace', async () => {
+    const zip = new JSZip();
+    zip.file('index.html', '<!doctype html><title>Claude import</title>');
+    const archive = await zip.generateAsync({ type: 'uint8array' });
+    const form = new FormData();
+    form.append(
+      'file',
+      new Blob([archive], { type: 'application/zip' }),
+      'claude-workspace.zip',
+    );
+    const headers = workspaceHeaders('workspace-claude-a', 'member-claude-a');
+
+    const resp = await fetch(`${baseUrl}/api/import/claude-design`, {
+      method: 'POST',
+      headers,
+      body: form,
+    });
+    expect(resp.status).toBe(200);
+    const body = (await resp.json()) as { project: { id: string } };
+
+    const detail = await fetch(
+      `${baseUrl}/api/projects/${body.project.id}`,
+      { headers },
+    );
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toMatchObject({
+      project: {
+        id: body.project.id,
+        workspaceId: 'workspace-claude-a',
+      },
+    });
+  });
+
   it('rejects folder imports in sandbox mode', async () => {
     await withSandboxMode(async () => {
       const folder = makeFolder();
@@ -94,6 +239,483 @@ describe('POST /api/import/folder', () => {
       const body = (await resp.json()) as { error?: { message?: string } };
       expect(body.error?.message).toMatch(/OD_SANDBOX_MODE/i);
     });
+  });
+
+  it('allows sandbox folder imports under an explicit import root', async () => {
+    await withSandboxMode(async () => {
+      const root = makeFolder();
+      const folder = path.join(root, 'job-clone');
+      await mkdir(folder, { recursive: true });
+      await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+
+      await withSandboxImportAllowedRoots([root], async () => {
+        const resp = await importFolder({ baseDir: folder });
+        expect(resp.status).toBe(200);
+        const body = (await resp.json()) as {
+          project: { id: string; metadata?: { baseDir?: string; importedFrom?: string } };
+          entryFile: string | null;
+        };
+        expect(body.project.metadata?.baseDir).toBe(await realpath(folder));
+        expect(body.project.metadata?.importedFrom).toBe('folder');
+        expect(body.entryFile).toBe('index.html');
+
+        const filesResp = await fetch(`${baseUrl}/api/projects/${body.project.id}/files`);
+        expect(filesResp.status).toBe(200);
+        const filesBody = (await filesResp.json()) as { files: Array<{ name: string }> };
+        expect(filesBody.files.map((file) => file.name)).toContain('index.html');
+      });
+    });
+  });
+
+  it('rejects sandbox folder imports outside the explicit import roots', async () => {
+    await withSandboxMode(async () => {
+      const allowedRoot = makeFolder();
+      const folder = makeFolder();
+      await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+
+      await withSandboxImportAllowedRoots([allowedRoot], async () => {
+        const resp = await importFolder({ baseDir: folder });
+        expect(resp.status).toBe(400);
+        const body = (await resp.json()) as { error?: { message?: string } };
+        expect(body.error?.message).toMatch(/OD_SANDBOX_IMPORT_ALLOWED_ROOTS/i);
+      });
+    });
+  });
+
+  it('rejects relative sandbox import allowed roots', async () => {
+    await withSandboxMode(async () => {
+      const folder = makeFolder();
+      await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+
+      await withSandboxImportAllowedRoots(['tmp'], async () => {
+        const resp = await importFolder({ baseDir: folder });
+        expect(resp.status).toBe(400);
+        const body = (await resp.json()) as { error?: { message?: string } };
+        expect(body.error?.message).toMatch(/OD_SANDBOX_IMPORT_ALLOWED_ROOTS.*absolute/i);
+      });
+    });
+  });
+
+  it('rejects unauthenticated orchestrator scratch provenance outside sandbox import roots', async () => {
+    await withSandboxMode(async () => {
+      const folder = makeFolder();
+      await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+
+      const importResp = await importFolder({
+        baseDir: folder,
+        orchestratorWorkspace: {
+          kind: 'scratch',
+          sourceLabel: 'checkout:main',
+          sourceRef: 'main@abc123',
+          baseRevision: 'abc123',
+          writeback: 'external',
+        },
+      });
+      expect(importResp.status).toBe(400);
+      const body = (await importResp.json()) as { error?: { message?: string } };
+      expect(body.error?.message).toMatch(/OD_SANDBOX_IMPORT_ALLOWED_ROOTS/i);
+    });
+  });
+
+  it('persists trusted orchestrator scratch provenance for sandbox folder imports without an explicit import root', async () => {
+    await withSandboxMode(async () => {
+      const folder = makeFolder();
+      await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+      const secret = randomBytes(32);
+      setDesktopAuthSecret(secret);
+      try {
+        const exp = new Date(Date.now() + 30_000).toISOString();
+        const token = signDesktopImportToken(secret, folder, {
+          nonce: `scratch-${Date.now()}`,
+          exp,
+        });
+
+        const importResp = await importFolder(
+          {
+            baseDir: folder,
+            orchestratorWorkspace: {
+              kind: 'scratch',
+              sourceLabel: 'checkout:main',
+              sourceRef: 'main@abc123',
+              baseRevision: 'abc123',
+              writeback: 'external',
+            },
+          },
+          { 'x-od-desktop-import-token': token },
+        );
+        expect(importResp.status).toBe(200);
+        const { project } = (await importResp.json()) as {
+          project: {
+            id: string;
+            metadata?: {
+              baseDir?: string;
+              orchestratorWorkspace?: Record<string, unknown>;
+            };
+          };
+        };
+        expect(project.metadata?.baseDir).toBe(await realpath(folder));
+        expect(project.metadata?.orchestratorWorkspace).toEqual({
+          kind: 'scratch',
+          sourceLabel: 'checkout:main',
+          sourceRef: 'main@abc123',
+          baseRevision: 'abc123',
+          writeback: 'external',
+        });
+
+        const patchResp = await fetch(`${baseUrl}/api/projects/${project.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ metadata: { kind: 'prototype', skipDiscoveryBrief: true } }),
+        });
+        expect(patchResp.status).toBe(200);
+        const patchBody = (await patchResp.json()) as {
+          project: {
+            metadata?: {
+              orchestratorWorkspace?: Record<string, unknown>;
+              skipDiscoveryBrief?: boolean;
+            };
+          };
+        };
+        expect(patchBody.project.metadata?.skipDiscoveryBrief).toBe(true);
+        expect(patchBody.project.metadata?.orchestratorWorkspace).toEqual({
+          kind: 'scratch',
+          sourceLabel: 'checkout:main',
+          sourceRef: 'main@abc123',
+          baseRevision: 'abc123',
+          writeback: 'external',
+        });
+
+        const filesResp = await fetch(`${baseUrl}/api/projects/${project.id}/files`);
+        expect(filesResp.status).toBe(200);
+        const filesBody = (await filesResp.json()) as { files: Array<{ name: string }> };
+        expect(filesBody.files.map((file) => file.name)).toContain('index.html');
+
+        const runResp = await fetch(`${baseUrl}/api/runs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: 'missing-agent',
+            projectId: project.id,
+            message: 'Inspect the scratch workspace.',
+          }),
+        });
+        expect(runResp.status).toBe(202);
+        const runBody = (await runResp.json()) as { runId?: string };
+        expect(runBody.runId).toBeTruthy();
+
+        const resultPackageResp = await fetch(
+          `${baseUrl}/api/runs/${runBody.runId}/result-package`,
+        );
+        expect(resultPackageResp.status).toBe(200);
+        const resultPackage = (await resultPackageResp.json()) as {
+          schema?: string;
+          run?: { id?: string; projectId?: string };
+          workspace?: {
+            storage?: { kind?: string; baseDir?: string };
+            provenance?: { kind?: string; writeback?: string; sourceRef?: string };
+          };
+          project?: { id?: string; fileCount?: number };
+          artifacts?: Array<{
+            file?: string;
+            kind?: string;
+            title?: string;
+            manifest?: { metadata?: { inferred?: boolean } };
+          }>;
+        };
+        expect(resultPackage.schema).toBe('open-design.run-result-package.v1');
+        expect(resultPackage.run).toMatchObject({ id: runBody.runId, projectId: project.id });
+        expect(resultPackage.workspace).toMatchObject({
+          storage: {
+            kind: 'folder-backed',
+            baseDir: await realpath(folder),
+          },
+          provenance: {
+            kind: 'orchestrator-scratch',
+            sourceRef: 'main@abc123',
+            writeback: 'external',
+          },
+        });
+        expect(resultPackage.project).toMatchObject({ id: project.id, fileCount: 1 });
+        expect(resultPackage.artifacts).toEqual([
+          expect.objectContaining({
+            file: 'index.html',
+            kind: 'html',
+            title: 'index.html',
+            manifest: expect.objectContaining({
+              metadata: expect.objectContaining({ inferred: true }),
+            }),
+          }),
+        ]);
+      } finally {
+        resetDesktopAuthForTests();
+      }
+    });
+  });
+
+  it('rejects malformed orchestrator workspace metadata on folder import', async () => {
+    const folder = makeFolder();
+    await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+
+    const resp = await importFolder({
+      baseDir: folder,
+      orchestratorWorkspace: { kind: 'bogus' },
+    });
+    expect(resp.status).toBe(400);
+    const body = (await resp.json()) as { error?: { message?: string } };
+    expect(body.error?.message).toMatch(/orchestratorWorkspace\.kind/i);
+  });
+
+  it('rejects malformed orchestrator workspace metadata on working-dir replacement', async () => {
+    const folder = makeFolder();
+    await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+    const importResp = await importFolder({ baseDir: folder });
+    expect(importResp.status).toBe(200);
+    const { project } = (await importResp.json()) as { project: { id: string } };
+
+    const nextFolder = makeFolder();
+    await writeFile(path.join(nextFolder, 'index.html'), '<!doctype html>');
+    const replaceResp = await fetch(`${baseUrl}/api/projects/${project.id}/working-dir`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        baseDir: nextFolder,
+        orchestratorWorkspace: { kind: 'scratch', source_reference: 'typo' },
+      }),
+    });
+    expect(replaceResp.status).toBe(400);
+    const body = (await replaceResp.json()) as { error?: { message?: string } };
+    expect(body.error?.message).toMatch(/unsupported field: source_reference/i);
+  });
+
+  it('requires the exact explicit Workspace member before replacing a bound project working directory', async () => {
+    const originalFolder = makeFolder();
+    await writeFile(path.join(originalFolder, 'index.html'), '<!doctype html><title>original</title>');
+    const ownerHeaders = workspaceHeaders('workspace-working-dir', 'member-working-dir-owner');
+    const importResp = await importFolder({ baseDir: originalFolder }, ownerHeaders);
+    expect(importResp.status).toBe(200);
+    const { project } = (await importResp.json()) as {
+      project: { id: string; metadata?: { baseDir?: string } };
+    };
+
+    const unauthorizedFolder = makeFolder();
+    await writeFile(path.join(unauthorizedFolder, 'index.html'), '<!doctype html><title>denied</title>');
+    const deniedResp = await fetch(`${baseUrl}/api/projects/${project.id}/working-dir`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...workspaceHeaders('workspace-working-dir', 'member-working-dir-teammate'),
+      },
+      body: JSON.stringify({ baseDir: unauthorizedFolder }),
+    });
+    expect(deniedResp.status).toBe(403);
+    await expect(deniedResp.json()).resolves.toMatchObject({
+      error: { code: 'WORKSPACE_PROJECT_PERMISSION_DENIED' },
+    });
+
+    const afterDenied = await fetch(
+      `${baseUrl}/api/projects/${project.id}`,
+      { headers: ownerHeaders },
+    );
+    expect(afterDenied.status).toBe(200);
+    await expect(afterDenied.json()).resolves.toMatchObject({
+      project: {
+        id: project.id,
+        metadata: { baseDir: project.metadata?.baseDir },
+      },
+    });
+
+    const ownerFolder = makeFolder();
+    await writeFile(path.join(ownerFolder, 'index.html'), '<!doctype html><title>owner</title>');
+    const allowedResp = await fetch(`${baseUrl}/api/projects/${project.id}/working-dir`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...ownerHeaders },
+      body: JSON.stringify({ baseDir: ownerFolder }),
+    });
+    expect(allowedResp.status).toBe(200);
+    await expect(allowedResp.json()).resolves.toMatchObject({
+      project: { id: project.id, metadata: { baseDir: await realpath(ownerFolder) } },
+    });
+  });
+
+  it('clears scratch provenance when replacing a working directory without new provenance', async () => {
+    const scratchFolder = makeFolder();
+    await writeFile(path.join(scratchFolder, 'index.html'), '<!doctype html>');
+    const importResp = await importFolder({
+      baseDir: scratchFolder,
+      orchestratorWorkspace: {
+        kind: 'scratch',
+        sourceRef: 'main@abc123',
+        writeback: 'external',
+      },
+    });
+    expect(importResp.status).toBe(200);
+    const { project } = (await importResp.json()) as { project: { id: string } };
+
+    const localFolder = makeFolder();
+    await writeFile(path.join(localFolder, 'index.html'), '<!doctype html>');
+    const replaceResp = await fetch(`${baseUrl}/api/projects/${project.id}/working-dir`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseDir: localFolder }),
+    });
+    expect(replaceResp.status).toBe(200);
+    const replaceBody = (await replaceResp.json()) as {
+      project: { metadata?: { orchestratorWorkspace?: unknown } };
+    };
+    expect(replaceBody.project.metadata?.orchestratorWorkspace).toBeUndefined();
+
+    const runResp = await fetch(`${baseUrl}/api/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: 'missing-agent',
+        projectId: project.id,
+        message: 'Inspect the local workspace.',
+      }),
+    });
+    expect(runResp.status).toBe(202);
+    const runBody = (await runResp.json()) as { runId?: string };
+    const statusResp = await fetch(`${baseUrl}/api/runs/${runBody.runId}`);
+    expect(statusResp.status).toBe(200);
+    const statusBody = (await statusResp.json()) as {
+      workspace?: { provenance?: { kind?: string; writeback?: string } };
+    };
+    expect(statusBody.workspace?.provenance).toEqual({
+      kind: 'user-local',
+      writeback: 'in-place',
+    });
+  });
+
+  it('fails result-package when a folder-backed workspace cannot be enumerated', async () => {
+    const folder = makeFolder();
+    await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+    const importResp = await importFolder({ baseDir: folder });
+    expect(importResp.status).toBe(200);
+    const { project } = (await importResp.json()) as { project: { id: string } };
+
+    const runResp = await fetch(`${baseUrl}/api/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: 'missing-agent',
+        projectId: project.id,
+        message: 'Inspect the local workspace.',
+      }),
+    });
+    expect(runResp.status).toBe(202);
+    const runBody = (await runResp.json()) as { runId?: string };
+
+    rmSync(folder, { recursive: true, force: true });
+    const resultPackageResp = await fetch(
+      `${baseUrl}/api/runs/${runBody.runId}/result-package`,
+    );
+    expect(resultPackageResp.status).toBe(500);
+    const body = (await resultPackageResp.json()) as {
+      error?: { code?: string; message?: string };
+    };
+    expect(body.error?.code).toBe('WORKSPACE_ENUMERATION_FAILED');
+    expect(body.error?.message).toMatch(/ENOENT|no such file/i);
+  });
+
+  it('returns an empty result-package for an od-owned run before files exist', async () => {
+    const projectResp = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: `tmp-${Date.now()}`,
+        name: 'Empty OD-owned project',
+        metadata: { kind: 'prototype' },
+      }),
+    });
+    expect(projectResp.status).toBe(200);
+    const { project } = (await projectResp.json()) as { project: { id: string } };
+
+    const runResp = await fetch(`${baseUrl}/api/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: 'missing-agent',
+        projectId: project.id,
+        message: 'Inspect the empty project.',
+      }),
+    });
+    expect(runResp.status).toBe(202);
+    const runBody = (await runResp.json()) as { runId?: string };
+
+    const resultPackageResp = await fetch(
+      `${baseUrl}/api/runs/${runBody.runId}/result-package`,
+    );
+    expect(resultPackageResp.status).toBe(200);
+    const resultPackage = (await resultPackageResp.json()) as {
+      workspace?: { storage?: { kind?: string; baseDir?: string | null } };
+      project?: { fileCount?: number };
+      artifacts?: unknown[];
+    };
+    expect(resultPackage.workspace?.storage).toEqual({
+      kind: 'od-owned',
+      baseDir: null,
+    });
+    expect(resultPackage.project?.fileCount).toBe(0);
+    expect(resultPackage.artifacts).toEqual([]);
+  });
+
+  it('keeps result-package files aligned with the run workspace snapshot after working-dir swaps', async () => {
+    const scratchFolder = makeFolder();
+    await writeFile(path.join(scratchFolder, 'index.html'), '<!doctype html><p>scratch</p>');
+    const importResp = await importFolder({
+      baseDir: scratchFolder,
+      orchestratorWorkspace: {
+        kind: 'scratch',
+        sourceRef: 'main@abc123',
+        writeback: 'external',
+      },
+    });
+    expect(importResp.status).toBe(200);
+    const { project } = (await importResp.json()) as { project: { id: string } };
+
+    const runResp = await fetch(`${baseUrl}/api/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: 'missing-agent',
+        projectId: project.id,
+        message: 'Inspect the scratch workspace.',
+      }),
+    });
+    expect(runResp.status).toBe(202);
+    const runBody = (await runResp.json()) as { runId?: string };
+
+    const localFolder = makeFolder();
+    await writeFile(path.join(localFolder, 'local-only.html'), '<!doctype html><p>local</p>');
+    const replaceResp = await fetch(`${baseUrl}/api/projects/${project.id}/working-dir`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseDir: localFolder }),
+    });
+    expect(replaceResp.status).toBe(200);
+
+    const resultPackageResp = await fetch(
+      `${baseUrl}/api/runs/${runBody.runId}/result-package`,
+    );
+    expect(resultPackageResp.status).toBe(200);
+    const resultPackage = (await resultPackageResp.json()) as {
+      workspace?: {
+        storage?: { kind?: string; baseDir?: string };
+        provenance?: { kind?: string; sourceRef?: string };
+      };
+      artifacts?: Array<{ file?: string }>;
+    };
+    expect(resultPackage.workspace).toMatchObject({
+      storage: {
+        kind: 'folder-backed',
+        baseDir: await realpath(scratchFolder),
+      },
+      provenance: {
+        kind: 'orchestrator-scratch',
+        sourceRef: 'main@abc123',
+      },
+    });
+    expect(resultPackage.artifacts?.map((artifact) => artifact.file)).toEqual(['index.html']);
   });
 
   it('rejects sandbox runs for imported folders before creating a run', async () => {
@@ -357,6 +979,25 @@ describe('POST /api/import/folder', () => {
       `${baseUrl}/api/projects/${project.id}/archive?root=docs`,
     );
     expect(archive.status).toBe(400);
+  });
+
+  it('does not follow descendant file symlinks while streaming an imported-folder archive', async () => {
+    const real = makeFolder();
+    const outside = makeFolder();
+    await writeFile(path.join(real, 'index.html'), '<!doctype html>');
+    await writeFile(path.join(outside, 'secret.txt'), 'must not enter archive');
+    try {
+      symlinkSync(path.join(outside, 'secret.txt'), path.join(real, 'secret-link.txt'));
+    } catch {
+      return;
+    }
+    const importResp = await importFolder({ baseDir: real });
+    const { project } = (await importResp.json()) as { project: { id: string } };
+    const archive = await fetch(`${baseUrl}/api/projects/${project.id}/archive`);
+
+    expect(archive.status).toBe(200);
+    const zip = await JSZip.loadAsync(await archive.arrayBuffer());
+    expect(Object.keys(zip.files)).not.toContain('secret-link.txt');
   });
 
   // Regression for the patch-metadata wipe. updateProject() replaces

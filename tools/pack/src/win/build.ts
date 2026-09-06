@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-import { ToolPackCache } from "../cache.js";
-import type { ToolPackConfig } from "../config.js";
+import { ToolPackCache } from "../cache/index.js";
+import type { ToolPackConfig } from "../config/index.js";
 import {
   collectWorkspaceTarballs,
   createWinPackagedAppCacheKey,
@@ -12,11 +12,12 @@ import {
 } from "./app.js";
 import { PRODUCT_NAME } from "./constants.js";
 import { pathExists } from "./fs.js";
-import { runElectronBuilder } from "./builder.js";
+import { materializeCachedUnpackedForInstaller, runElectronBuilder } from "./builder.js";
 import {
   readBuiltAppManifest,
   readPackagedVersion,
 } from "./manifest.js";
+import { buildWinLauncherPayloadArchive } from "./payload.js";
 import { resolveWinPaths } from "./paths.js";
 import {
   collectWinSizeReport,
@@ -64,6 +65,7 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
   const segments: WinPackTiming[] = [];
   const hasNsisTarget = shouldBuildWinNsisInstaller(config.to);
   const hasZipTarget = shouldBuildWinPortableZip(config.to);
+  const hasLauncherPayloadTarget = hasNsisTarget || hasZipTarget;
   const runPhase = async <T>(phase: string, task: () => Promise<T>): Promise<T> => {
     const startedAt = Date.now();
     logWinBuildProgress("phase:start", { phase });
@@ -94,16 +96,22 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
       await rm(paths.setupZipPath, { force: true });
     }
   });
-  await runPhase("workspace-build", async () => {
-    await ensureWinWorkspaceBuild(config, cache);
-  });
+  const workspaceBuildKey = await runPhase("workspace-build", async () => ensureWinWorkspaceBuild(config, cache));
   const resourceTree = await runPhase("resource-tree", async () =>
-    prepareResourceTree(config, paths, cache, { materialize: config.to !== "dir" })
+    prepareResourceTree(
+      config,
+      paths,
+      cache,
+      { bundleAgentRuntimes: true, materialize: config.to !== "dir" },
+      workspaceBuildKey,
+    )
   );
   await runPhase("win-icon", async () => {
     await copyWinIcon(paths);
   });
-  const tarballs = await runPhase("workspace-tarballs", async () => collectWorkspaceTarballs(config, paths, cache));
+  const tarballs = await runPhase("workspace-tarballs", async () =>
+    collectWorkspaceTarballs(config, paths, cache, workspaceBuildKey)
+  );
   const packagedAppKey = await createWinPackagedAppCacheKey(config, tarballs.key, tarballs.tarballs);
   let packagedAppRoot: string | null = null;
   await runPhase("electron-builder", async () => {
@@ -118,13 +126,29 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
   await runPhase("latest-yml", async () => {
     await writeLocalLatestYml(config, paths);
   });
-  const builtApp = await readBuiltAppManifest(paths);
+  let builtApp = await readBuiltAppManifest(paths);
+  if (hasLauncherPayloadTarget) {
+    builtApp = await runPhase("payload-unpacked-materialize", async () => {
+      if (builtApp == null) throw new Error("cannot build Windows launcher payload without a built app manifest");
+      const packagedVersion = await readPackagedVersion(config);
+      return builtApp.unpackedRoot === paths.unpackedRoot
+        ? materializeCachedUnpackedForInstaller(paths, packagedVersion)
+        : materializeCachedUnpackedForInstaller(builtApp.unpackedRoot, paths, packagedVersion);
+    });
+    await runPhase("payload-artifact", async () => {
+      if (builtApp == null) throw new Error("cannot build Windows launcher payload without a built app manifest");
+      segments.push(...await buildWinLauncherPayloadArchive(config, paths, builtApp, cache, {
+        seedFromInstallerPayload: hasNsisTarget,
+      }));
+    });
+  }
   const sizeReport = await runPhase("size-report", async () => collectWinSizeReport(config, paths, builtApp));
   return {
     blockmapPath: (await pathExists(paths.blockmapPath)) ? paths.blockmapPath : null,
     installerPath: hasNsisTarget && await pathExists(paths.setupPath) ? paths.setupPath : null,
     latestYmlPath: hasNsisTarget && await pathExists(paths.latestYmlPath) ? paths.latestYmlPath : null,
     outputRoot: config.roots.output.namespaceRoot,
+    payloadPath: (await pathExists(paths.launcherPayloadPath)) ? paths.launcherPayloadPath : null,
     portableZipPath: hasZipTarget && await pathExists(paths.setupZipPath) ? paths.setupZipPath : null,
     resourceRoot: builtApp == null ? paths.resourceRoot : join(builtApp.unpackedRoot, "resources", "open-design"),
     runtimeNamespaceRoot: config.roots.runtime.namespaceRoot,

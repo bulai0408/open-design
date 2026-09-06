@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
 import {
   buildManualEditBridge,
+  buildManualEditBridgeStyle,
+  buildManualEditKeyboardGuard,
   isMeaningfulManualEditElement,
   isManualEditHostNode,
   isSourceMappableManualEditElement,
@@ -243,7 +245,7 @@ describe('manual edit bridge target normalization', () => {
     dom.window.close();
   });
 
-  it('does not expose path targets unless they carry a source path marker', () => {
+  it('does not expose runtime-only path targets unless they carry a source marker', () => {
     const dom = new JSDOM('<main><h1>Runtime title</h1><p data-od-source-path="path-0-1">Source text</p></main>');
     const runtimeTitle = dom.window.document.querySelector('h1')!;
     const sourceText = dom.window.document.querySelector('p')!;
@@ -257,10 +259,586 @@ describe('manual edit bridge target normalization', () => {
     const bridge = buildManualEditBridge(true);
 
     expect(bridge).toContain('targets.push(targetFrom(nodes[i], false))');
-    expect(bridge).toContain("target: targetFrom(el, true)");
+    expect(bridge).toContain('targetFrom(el, true)');
     expect(bridge).toContain('if (!isSourceMappable(nodes[i])) continue;');
     expect(bridge).toContain('return el;');
     expect(bridge).not.toContain('if (isPrimaryTarget(el)) return el;');
+  });
+
+  it('selects and announces ordinary HTML elements after srcdoc source-path annotation', () => {
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><section data-od-source-path="path-0-0"><h1 data-od-source-path="path-0-0-0">Plain title</h1><p data-od-source-path="path-0-0-1">Plain body</p></section></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('h1') as HTMLElement;
+    title.getBoundingClientRect = () => ({
+      x: 0, y: 0, width: 160, height: 36,
+      top: 0, right: 160, bottom: 36, left: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const postMessage = vi.spyOn(dom.window.parent, 'postMessage');
+
+    title.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+    title.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    expect(title.getAttribute('data-od-runtime-id')).toBe('path-0-0-0');
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'od-edit-hover',
+      target: expect.objectContaining({ id: 'path-0-0-0', label: 'Plain title' }),
+    }, '*');
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'od-edit-select',
+      target: expect.objectContaining({ id: 'path-0-0-0', kind: 'text' }),
+    }, '*');
+
+    dom.window.close();
+  });
+
+  it('ignores runtime-inserted elements that are not present in source', () => {
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Source title</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const runtimePill = dom.window.document.createElement('span');
+    runtimePill.className = 'status-pill ready';
+    runtimePill.textContent = 'Brand ready';
+    dom.window.document.body.appendChild(runtimePill);
+    const postMessage = vi.spyOn(dom.window.parent, 'postMessage');
+
+    runtimePill.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+    runtimePill.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    expect(runtimePill.hasAttribute('data-od-runtime-id')).toBe(false);
+    expect(postMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'od-edit-hover',
+    }), '*');
+    expect(postMessage).toHaveBeenCalledWith({ type: 'od-edit-background' }, '*');
+
+    dom.window.close();
+  });
+
+  it('selects runtime-inserted brand kit elements that carry stable data-od-id markers', () => {
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><div id="root"></div></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.createElement('h1');
+    title.setAttribute('data-od-id', 'brand-name');
+    title.setAttribute('data-od-edit', 'text');
+    title.textContent = 'Runtime brand';
+    title.getBoundingClientRect = () => ({
+      x: 0, y: 0, width: 180, height: 42,
+      top: 0, right: 180, bottom: 42, left: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    dom.window.document.getElementById('root')?.appendChild(title);
+    const postMessage = vi.spyOn(dom.window.parent, 'postMessage');
+
+    title.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+    title.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'od-edit-hover',
+      target: expect.objectContaining({ id: 'brand-name', label: 'Runtime brand' }),
+    }, '*');
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'od-edit-select',
+      target: expect.objectContaining({ id: 'brand-name', kind: 'text' }),
+    }, '*');
+
+    dom.window.close();
+  });
+
+  it('adds stable ids to legacy runtime brand kit elements before selection', () => {
+    const dom = new JSDOM(
+      `<script id="od-brand-payload" type="application/json">{"brand":{"name":"Runtime brand"}}</script><main data-od-source-path="path-0"><div id="root"></div></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.createElement('h1');
+    title.className = 'kit-title';
+    title.textContent = 'Runtime brand';
+    title.getBoundingClientRect = () => ({
+      x: 0, y: 0, width: 180, height: 42,
+      top: 0, right: 180, bottom: 42, left: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    dom.window.document.getElementById('root')?.appendChild(title);
+    const postMessage = vi.spyOn(dom.window.parent, 'postMessage');
+
+    title.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+    title.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    expect(title.getAttribute('data-od-id')).toBe('brand-name');
+    expect(title.getAttribute('data-od-edit')).toBe('text');
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'od-edit-hover',
+      target: expect.objectContaining({ id: 'brand-name', label: 'Runtime brand' }),
+    }, '*');
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'od-edit-select',
+      target: expect.objectContaining({ id: 'brand-name', kind: 'text' }),
+    }, '*');
+
+    dom.window.close();
+  });
+
+  it('draws hover reference guides through the hovered element edges without a selection', () => {
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Plain title</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('h1') as HTMLElement;
+    title.getBoundingClientRect = () => ({
+      x: 10, y: 20, width: 160, height: 36,
+      top: 20, right: 170, bottom: 56, left: 10,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    title.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+
+    const layer = dom.window.document.querySelector('[data-od-edit-guides-layer]')!;
+    expect(layer).not.toBeNull();
+    const box = layer.querySelector('.od-edit-guide-box-hover') as HTMLElement;
+    expect(box).not.toBeNull();
+    expect(box.style.left).toBe('10px');
+    expect(box.style.top).toBe('20px');
+    expect(box.style.width).toBe('160px');
+    expect(box.style.height).toBe('36px');
+    const verticals = Array.from(
+      layer.querySelectorAll('.od-edit-guide-line-v.od-edit-guide-line-reference'),
+    ) as HTMLElement[];
+    expect(verticals.map((line) => line.style.left)).toEqual(['10px', '170px']);
+    const horizontals = Array.from(
+      layer.querySelectorAll('.od-edit-guide-line-h.od-edit-guide-line-reference'),
+    ) as HTMLElement[];
+    expect(horizontals.map((line) => line.style.top)).toEqual(['20px', '56px']);
+
+    dom.window.close();
+  });
+
+  it('draws the same element hover guides again after edit mode exits and re-enters', () => {
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Plain title</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('h1') as HTMLElement;
+    title.getBoundingClientRect = () => ({
+      x: 10, y: 20, width: 160, height: 36,
+      top: 20, right: 170, bottom: 56, left: 10,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    title.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+    const layer = dom.window.document.querySelector('[data-od-edit-guides-layer]')!;
+    expect(layer.children.length).toBeGreaterThan(0);
+
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-mode', enabled: false },
+    }));
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-mode', enabled: true },
+    }));
+    expect(layer.children.length).toBe(0);
+
+    title.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+    expect(layer.querySelector('.od-edit-guide-box-hover')).not.toBeNull();
+
+    dom.window.close();
+  });
+
+  it('recovers hover guides from pointer movement inside an element after edit mode re-enters', () => {
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Plain title</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('h1') as HTMLElement;
+    title.getBoundingClientRect = () => ({
+      x: 10, y: 20, width: 160, height: 36,
+      top: 20, right: 170, bottom: 56, left: 10,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    title.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+    const layer = dom.window.document.querySelector('[data-od-edit-guides-layer]')!;
+
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-mode', enabled: false },
+    }));
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-mode', enabled: true },
+    }));
+    expect(layer.children.length).toBe(0);
+
+    // Electron can preserve the iframe's pointer hit target while the toolbar
+    // toggles edit mode. In that case movement within the same element emits
+    // pointermove but no fresh pointerover.
+    title.dispatchEvent(new dom.window.Event('pointermove', { bubbles: true }));
+    expect(layer.querySelector('.od-edit-guide-box-hover')).not.toBeNull();
+
+    dom.window.close();
+  });
+
+  it('hands same-project HTML links to the host instead of losing the srcDoc edit bridge', () => {
+    const posts: Array<{ type?: string; fileName?: string }> = [];
+    const dom = new JSDOM(
+      `<base href="http://localhost/api/projects/project-1/raw/today.html"><main data-od-source-path="path-0"><a href="discover.html?variant=a">Discover</a></main>${buildManualEditBridge(false)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string; fileName?: string });
+    }) as typeof dom.window.parent.postMessage;
+    const link = dom.window.document.querySelector('a')!;
+    const click = new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+
+    link.dispatchEvent(click);
+
+    expect(click.defaultPrevented).toBe(true);
+    expect(posts).toContainEqual({
+      type: 'od:preview-open-file',
+      fileName: 'discover.html',
+      search: '?variant=a',
+      hash: '',
+    });
+
+    dom.window.close();
+  });
+
+  it('hands capability-scoped preview links to the host without losing their project path', () => {
+    const posts: Array<{ type?: string; fileName?: string }> = [];
+    const dom = new JSDOM(
+      `<base href="http://localhost/api/projects/project-1/preview/scope-1/pages/"><main data-od-source-path="path-0"><a href="profile.html?variant=a">Profile</a></main>${buildManualEditBridge(false)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string; fileName?: string });
+    }) as typeof dom.window.parent.postMessage;
+    const link = dom.window.document.querySelector('a')!;
+    const click = new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+
+    link.dispatchEvent(click);
+
+    expect(click.defaultPrevented).toBe(true);
+    expect(posts).toContainEqual({
+      type: 'od:preview-open-file',
+      fileName: 'pages/profile.html',
+      search: '?variant=a',
+      hash: '',
+    });
+
+    dom.window.close();
+  });
+
+  it('keeps a nested preview directory inside the project-relative link path', () => {
+    const posts: Array<{ type?: string; fileName?: string }> = [];
+    const dom = new JSDOM(
+      `<base href="http://localhost/api/projects/project-1/preview/scope-1/preview/pages/index.html"><main data-od-source-path="path-0"><a href="profile.html">Profile</a></main>${buildManualEditBridge(false)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string; fileName?: string });
+    }) as typeof dom.window.parent.postMessage;
+    const link = dom.window.document.querySelector('a')!;
+    const click = new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+
+    link.dispatchEvent(click);
+
+    expect(click.defaultPrevented).toBe(true);
+    expect(posts).toContainEqual({
+      type: 'od:preview-open-file',
+      fileName: 'preview/pages/profile.html',
+      search: '',
+      hash: '',
+    });
+
+    dom.window.close();
+  });
+
+  it('drag-repositions an element via pointer drag and posts od-edit-drag-commit', () => {
+    const posts: Array<{ type?: string; id?: string; transform?: string }> = [];
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Drag me</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('h1') as HTMLElement;
+    title.getBoundingClientRect = () => ({
+      x: 10, y: 20, width: 160, height: 36, top: 20, right: 170, bottom: 56, left: 10, toJSON: () => ({}),
+    } as DOMRect);
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string; id?: string; transform?: string });
+    }) as typeof dom.window.parent.postMessage;
+
+    const pointer = (type: string, x: number, y: number) =>
+      title.dispatchEvent(new dom.window.MouseEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true }));
+    pointer('pointerdown', 100, 100);
+    pointer('pointermove', 130, 120); // dx=30, dy=20 — past the 4px threshold
+    pointer('pointerup', 130, 120);
+
+    // The element carries a live inline translate reflecting the drag delta…
+    expect(title.style.transform).toContain('translate(30px, 20px)');
+    // …and the host is told to persist that translate.
+    const commit = posts.find((message) => message.type === 'od-edit-drag-commit');
+    expect(commit).toMatchObject({ id: 'path-0-0' });
+    expect(commit?.transform).toContain('translate(30px, 20px)');
+
+    dom.window.close();
+  });
+
+  it('treats a sub-threshold press as a click, not a drag (no transform, no commit)', () => {
+    const posts: Array<{ type?: string }> = [];
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Tap me</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('h1') as HTMLElement;
+    title.getBoundingClientRect = () => ({
+      x: 10, y: 20, width: 160, height: 36, top: 20, right: 170, bottom: 56, left: 10, toJSON: () => ({}),
+    } as DOMRect);
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string });
+    }) as typeof dom.window.parent.postMessage;
+
+    const pointer = (type: string, x: number, y: number) =>
+      title.dispatchEvent(new dom.window.MouseEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true }));
+    pointer('pointerdown', 100, 100);
+    pointer('pointermove', 102, 101); // 2px — under the threshold
+    pointer('pointerup', 102, 101);
+
+    expect(title.style.transform).toBe('');
+    expect(posts.some((message) => message.type === 'od-edit-drag-commit')).toBe(false);
+
+    dom.window.close();
+  });
+
+  it('clears hover reference guides when the pointer leaves all targets', () => {
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Plain title</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('h1') as HTMLElement;
+    title.getBoundingClientRect = () => ({
+      x: 10, y: 20, width: 160, height: 36,
+      top: 20, right: 170, bottom: 56, left: 10,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    title.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+    const layer = dom.window.document.querySelector('[data-od-edit-guides-layer]')!;
+    expect(layer.children.length).toBeGreaterThan(0);
+
+    dom.window.document.body.dispatchEvent(new dom.window.Event('pointermove', { bubbles: true }));
+    expect(layer.children.length).toBe(0);
+
+    dom.window.close();
+  });
+
+  it('clears hover reference guides on the host hover-reset signal', () => {
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Plain title</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('h1') as HTMLElement;
+    title.getBoundingClientRect = () => ({
+      x: 10, y: 20, width: 160, height: 36,
+      top: 20, right: 170, bottom: 56, left: 10,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    title.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+    const layer = dom.window.document.querySelector('[data-od-edit-guides-layer]')!;
+    expect(layer.children.length).toBeGreaterThan(0);
+
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-hover-reset' },
+    }));
+    expect(layer.children.length).toBe(0);
+
+    dom.window.close();
+  });
+
+  it('restores the last hover reference guides for capture via od-edit-guides-restore', () => {
+    const posts: Array<{ type?: string; id?: string | null; restored?: boolean }> = [];
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Plain title</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('h1') as HTMLElement;
+    title.getBoundingClientRect = () => ({
+      x: 10, y: 20, width: 160, height: 36,
+      top: 20, right: 170, bottom: 56, left: 10,
+      toJSON: () => ({}),
+    } as DOMRect);
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string; id?: string | null; restored?: boolean });
+    }) as typeof dom.window.parent.postMessage;
+
+    title.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', { data: { type: 'od-edit-hover-reset' } }));
+    const layer = dom.window.document.querySelector('[data-od-edit-guides-layer]')!;
+    expect(layer.children.length).toBe(0);
+
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-guides-restore', id: 'cap-1', maxAgeMs: 60000 },
+    }));
+
+    expect(layer.querySelectorAll('.od-edit-guide-line-reference').length).toBe(4);
+    expect(layer.querySelector('.od-edit-guide-box-hover')).not.toBeNull();
+    const result = posts.find((message) => message.type === 'od-edit-guides-restore:result');
+    // Restored from memory (hover already cleared) → not live: the host owes
+    // a post-capture hover-reset.
+    expect(result).toMatchObject({ id: 'cap-1', restored: true, live: false });
+
+    // The host's post-capture hover-reset must clear the restored guides again.
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', { data: { type: 'od-edit-hover-reset' } }));
+    expect(layer.children.length).toBe(0);
+
+    dom.window.close();
+  });
+
+  it('does not restore guides when the hover memory is older than maxAgeMs', async () => {
+    const posts: Array<{ type?: string; restored?: boolean }> = [];
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Plain title</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('h1') as HTMLElement;
+    title.getBoundingClientRect = () => ({
+      x: 10, y: 20, width: 160, height: 36,
+      top: 20, right: 170, bottom: 56, left: 10,
+      toJSON: () => ({}),
+    } as DOMRect);
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string; restored?: boolean });
+    }) as typeof dom.window.parent.postMessage;
+
+    title.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', { data: { type: 'od-edit-hover-reset' } }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-guides-restore', maxAgeMs: 5 },
+    }));
+
+    const layer = dom.window.document.querySelector('[data-od-edit-guides-layer]')!;
+    expect(layer.children.length).toBe(0);
+    const result = posts.find((message) => message.type === 'od-edit-guides-restore:result');
+    expect(result).toMatchObject({ restored: false });
+
+    dom.window.close();
+  });
+
+  it('reports restored:false when no hover ever happened', () => {
+    const posts: Array<{ type?: string; restored?: boolean }> = [];
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Plain title</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string; restored?: boolean });
+    }) as typeof dom.window.parent.postMessage;
+
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-guides-restore', maxAgeMs: 60000 },
+    }));
+
+    const layer = dom.window.document.querySelector('[data-od-edit-guides-layer]');
+    expect(layer?.children.length ?? 0).toBe(0);
+    const result = posts.find((message) => message.type === 'od-edit-guides-restore:result');
+    expect(result).toMatchObject({ restored: false });
+
+    dom.window.close();
+  });
+
+  it('re-renders guides on restore while a hover is still live', () => {
+    const posts: Array<{ type?: string; restored?: boolean }> = [];
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Plain title</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('h1') as HTMLElement;
+    title.getBoundingClientRect = () => ({
+      x: 10, y: 20, width: 160, height: 36,
+      top: 20, right: 170, bottom: 56, left: 10,
+      toJSON: () => ({}),
+    } as DOMRect);
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string; restored?: boolean });
+    }) as typeof dom.window.parent.postMessage;
+
+    title.dispatchEvent(new dom.window.Event('pointerover', { bubbles: true }));
+
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-guides-restore', maxAgeMs: 60000 },
+    }));
+
+    const layer = dom.window.document.querySelector('[data-od-edit-guides-layer]')!;
+    expect(layer.querySelectorAll('.od-edit-guide-line-reference').length).toBe(4);
+    const result = posts.find((message) => message.type === 'od-edit-guides-restore:result');
+    // Hover is still active → live: the host must NOT clear the guides after
+    // the capture or they'd vanish under the stationary cursor.
+    expect(result).toMatchObject({ restored: true, live: true });
+
+    dom.window.close();
+  });
+
+  it('posts the screenshot hotkey on a double Command tap but not on the both-Metas chord', () => {
+    const posts: Array<{ type?: string }> = [];
+    const dom = new JSDOM(
+      `<main data-od-source-path="path-0"><h1 data-od-source-path="path-0-0">Plain title</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    dom.window.parent.postMessage = ((message: unknown) => {
+      posts.push(message as { type?: string });
+    }) as typeof dom.window.parent.postMessage;
+    // Real key events target the focused element and pass documentElement on
+    // the way — the detector deliberately sits there to escape the keyboard
+    // guard's window/document wrapping, so dispatch from <body>, not window.
+    const keydown = (key: string, code: string) =>
+      dom.window.document.body.dispatchEvent(
+        new dom.window.KeyboardEvent('keydown', { key, code, bubbles: true }),
+      );
+    const keyup = (code: string) =>
+      dom.window.document.body.dispatchEvent(
+        new dom.window.KeyboardEvent('keyup', { key: 'Meta', code, bubbles: true }),
+      );
+
+    // Both-Metas chord (module capture gesture) must NOT fire the hotkey.
+    keydown('Meta', 'MetaLeft');
+    keydown('Meta', 'MetaRight');
+    keyup('MetaLeft');
+    keyup('MetaRight');
+    expect(posts.some((message) => message.type === 'od-edit-screenshot-hotkey')).toBe(false);
+
+    // A Meta chord like ⌘C cancels the pending tap.
+    keydown('Meta', 'MetaLeft');
+    keydown('c', 'KeyC');
+    keyup('MetaLeft');
+    keydown('Meta', 'MetaLeft');
+    keyup('MetaLeft');
+    expect(posts.some((message) => message.type === 'od-edit-screenshot-hotkey')).toBe(false);
+
+    // Clear the pending tap left by the block above before the real gesture.
+    keydown('Escape', 'Escape');
+
+    // Two quick bare taps fire exactly once.
+    keydown('Meta', 'MetaLeft');
+    keyup('MetaLeft');
+    keydown('Meta', 'MetaLeft');
+    keyup('MetaLeft');
+    expect(posts.filter((message) => message.type === 'od-edit-screenshot-hotkey').length).toBe(1);
+
+    dom.window.close();
   });
 
   it('prefers the deepest source-mapped child over an annotated group on hover', async () => {
@@ -293,6 +871,21 @@ describe('manual edit bridge target normalization', () => {
     expect(bridge).toContain("type: 'od-edit-preview-style-applied'");
     expect(bridge).toContain('version: Number(version) || 0, ok: true');
     expect(bridge).toContain("ok: false, error: 'Target not found'");
+  });
+
+  it('renders selection chrome through the guides layer instead of element outlines', () => {
+    const style = buildManualEditBridgeStyle();
+
+    // Hover/selection feedback moved off per-element outlines (which artifact
+    // CSS resets could override) and onto a fixed, top-of-stack guides layer.
+    expect(style).toContain('html[data-od-edit-mode] [data-od-edit-selected] {\n  outline: none !important;');
+    expect(style).toContain('[data-od-edit-guides-layer] {');
+    expect(style).toContain('z-index: 2147483646');
+    expect(style).toContain('pointer-events: none');
+    expect(style).toContain('[data-od-edit-guides-layer] .od-edit-guide-box-hover');
+    expect(style).toContain('[data-od-edit-guides-layer] .od-edit-guide-box-selected');
+    expect(style).toContain('[data-od-edit-guides-layer] .od-edit-guide-handle');
+    expect(style).toContain('[data-od-edit-guides-layer] .od-edit-guide-measure');
   });
 
   it('moves the runtime selected marker between selected targets', () => {
@@ -364,7 +957,7 @@ describe('manual edit bridge target normalization', () => {
     expect(bridge).toContain("display.indexOf('flex') >= 0 || display.indexOf('grid') >= 0");
   });
 
-  it('turns text targets into inline editors and commits changed text', () => {
+  it('turns text targets into inline editors and commits changed text on explicit finish', () => {
     const dom = new JSDOM(
       `<main><h1 data-od-id="title">Original title</h1></main>${buildManualEditBridge(true)}`,
       { runScripts: 'dangerously', url: 'http://localhost' },
@@ -389,7 +982,10 @@ describe('manual edit bridge target normalization', () => {
     }, '*');
 
     title.textContent = 'Edited title';
-    title.dispatchEvent(new dom.window.FocusEvent('blur', { bubbles: false }));
+
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-text-finish', commit: true },
+    }));
 
     expect(title.hasAttribute('contenteditable')).toBe(false);
     expect(title.hasAttribute('data-od-editing')).toBe(false);
@@ -398,6 +994,85 @@ describe('manual edit bridge target normalization', () => {
       id: 'title',
       value: 'Edited title',
     }, '*');
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'od-edit-text-session',
+      id: 'title',
+      active: false,
+      committed: true,
+      changed: true,
+    }, '*');
+
+    dom.window.close();
+  });
+
+  // #3646 focus-loss half: once editing, blurring the iframe (e.g. moving the
+  // pointer to the host's floating inspector) must NOT end the session or
+  // commit. Only an explicit finish (Enter/Escape/od-edit-text-finish) commits.
+  it('keeps the inline edit active on blur and commits only on explicit finish', () => {
+    const dom = new JSDOM(
+      `<main><h1 data-od-id="title">Original title</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('[data-od-id="title"]') as HTMLElement;
+    const postMessage = vi.spyOn(dom.window.parent, 'postMessage');
+
+    title.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 8,
+      clientY: 8,
+    }));
+    title.textContent = 'Edited title';
+    title.dispatchEvent(new dom.window.FocusEvent('blur', { bubbles: false }));
+
+    // Blur is no longer a commit trigger — the session stays live.
+    expect(title.getAttribute('contenteditable')).toBe('plaintext-only');
+    expect(title.getAttribute('data-od-editing')).toBe('true');
+    expect(postMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'od-edit-text-commit',
+    }), '*');
+
+    // The host drives the commit explicitly.
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      data: { type: 'od-edit-text-finish', commit: true },
+    }));
+
+    expect(title.hasAttribute('contenteditable')).toBe(false);
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'od-edit-text-commit',
+      id: 'title',
+      value: 'Edited title',
+    }, '*');
+
+    dom.window.close();
+  });
+
+  // #3646 / review fix: clicking empty background while editing must commit and
+  // end the session (and tell the host), so host and iframe never desync.
+  it('commits an in-flight inline edit when clicking empty background', () => {
+    const dom = new JSDOM(
+      `<main><h1 data-od-id="title">Original</h1></main>${buildManualEditBridge(true)}`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const title = dom.window.document.querySelector('[data-od-id="title"]') as HTMLElement;
+    const postMessage = vi.spyOn(dom.window.parent, 'postMessage');
+
+    title.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+    title.textContent = 'Edited';
+    dom.window.document.body.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'od-edit-text-commit',
+      id: 'title',
+      value: 'Edited',
+    }, '*');
+    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'od-edit-text-session',
+      id: 'title',
+      active: false,
+    }), '*');
+    expect(postMessage).toHaveBeenCalledWith({ type: 'od-edit-background' }, '*');
+    expect(title.hasAttribute('contenteditable')).toBe(false);
 
     dom.window.close();
   });
@@ -422,6 +1097,182 @@ describe('manual edit bridge target normalization', () => {
     expect(postMessage).not.toHaveBeenCalledWith(expect.objectContaining({
       type: 'od-edit-text-commit',
     }), '*');
+
+    dom.window.close();
+  });
+
+  it('removes a window keydown listener registered with the original callback, so the wrapper is not left firing', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const listener = vi.fn();
+
+    dom.window.addEventListener('keydown', listener);
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    dom.window.removeEventListener('keydown', listener);
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    dom.window.close();
+  });
+
+  it('removes a document keydown listener registered with the original callback, so the wrapper is not left firing', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const listener = vi.fn();
+
+    dom.window.document.addEventListener('keydown', listener);
+    dom.window.document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    dom.window.document.removeEventListener('keydown', listener);
+    dom.window.document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    dom.window.close();
+  });
+
+  it('treats duplicate addEventListener with the same callback and capture as a no-op, matching native behavior', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const listener = vi.fn();
+
+    dom.window.addEventListener('keydown', listener, true);
+    dom.window.addEventListener('keydown', listener, true); // duplicate — should be no-op
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1); // fires once, not twice
+
+    dom.window.removeEventListener('keydown', listener, true); // single remove clears it
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1); // no longer fires
+
+    dom.window.close();
+  });
+
+  it('matches the capture flag when removing a wrapped keydown listener', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const bubbleListener = vi.fn();
+    const captureListener = vi.fn();
+
+    dom.window.addEventListener('keydown', bubbleListener, false);
+    dom.window.addEventListener('keydown', captureListener, true);
+
+    dom.window.removeEventListener('keydown', bubbleListener, false);
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(bubbleListener).not.toHaveBeenCalled();
+    expect(captureListener).toHaveBeenCalledTimes(1);
+
+    dom.window.close();
+  });
+
+  it('cleans up wrapped entry after a once:true listener fires, allowing re-registration', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const listener = vi.fn();
+
+    dom.window.addEventListener('keydown', listener, { once: true, capture: true });
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1); // once fires once
+
+    // After once fires, the browser removed the handler; re-adding the same callback should work
+    dom.window.addEventListener('keydown', listener, { once: true, capture: true });
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'b' }));
+    expect(listener).toHaveBeenCalledTimes(2); // re-registered and fired again
+
+    dom.window.close();
+  });
+
+  it('cleans up wrapped entry when an AbortSignal aborts, allowing re-registration', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const listener = vi.fn();
+    const controller = new dom.window.AbortController();
+
+    dom.window.addEventListener('keydown', listener, { signal: controller.signal, capture: true });
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    controller.abort(); // browser removes the handler; our bookkeeping must also drop the entry
+
+    // Re-adding the same callback/capture should now succeed (not be treated as a duplicate)
+    const controller2 = new dom.window.AbortController();
+    dom.window.addEventListener('keydown', listener, { signal: controller2.signal, capture: true });
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'b' }));
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    dom.window.close();
+  });
+
+  it('allows re-adding a once listener after it was suppressed by the edit guard', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const listener = vi.fn();
+
+    // Set editingEl so shouldBlock() returns true for events inside it
+    const editable = dom.window.document.createElement('div');
+    editable.setAttribute('data-od-editing', 'true');
+    dom.window.document.body.appendChild(editable);
+    (dom.window as any).__odEditGuard.editingEl = editable;
+
+    // Register a once listener on window (capture phase) — dispatch from inside editable so guard suppresses it
+    dom.window.addEventListener('keydown', listener, { once: true, capture: true });
+    editable.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+    expect(listener).not.toHaveBeenCalled(); // suppressed by guard
+
+    // The once handler was consumed (both by browser and our bookkeeping)
+    // Re-adding the same callback should work
+    (dom.window as any).__odEditGuard.editingEl = null; // clear guard so next event fires
+    dom.window.addEventListener('keydown', listener, { once: true, capture: true });
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'b' }));
+    expect(listener).toHaveBeenCalledTimes(1); // re-registered and fired
+
+    dom.window.close();
+  });
+
+  it('does not leave a stale entry when addEventListener is called with an already-aborted signal', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const listener = vi.fn();
+    const controller = new dom.window.AbortController();
+    controller.abort(); // already aborted before registration
+
+    // Registering with an already-aborted signal should not leave a stale entry
+    dom.window.addEventListener('keydown', listener, { signal: controller.signal, capture: true });
+
+    // The listener should not fire (browser ignores registration with aborted signal)
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).not.toHaveBeenCalled();
+
+    // Re-registering the same callback/capture should succeed (not be blocked by a stale dedup entry)
+    dom.window.addEventListener('keydown', listener, { capture: true });
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'b' }));
+    expect(listener).toHaveBeenCalledTimes(1);
 
     dom.window.close();
   });

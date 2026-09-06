@@ -8,6 +8,10 @@ const CLAUDE_FALLBACK_MODELS = [
   { id: 'sonnet', label: 'Sonnet (alias)' },
   { id: 'opus', label: 'Opus (alias)' },
   { id: 'haiku', label: 'Haiku (alias)' },
+  { id: 'fable', label: 'Fable (alias)' },
+  { id: 'claude-opus-5', label: 'claude-opus-5' },
+  { id: 'claude-sonnet-5', label: 'claude-sonnet-5' },
+  { id: 'claude-fable-5', label: 'claude-fable-5' },
   { id: 'claude-opus-4-5', label: 'claude-opus-4-5' },
   { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5' },
   { id: 'claude-haiku-4-5', label: 'claude-haiku-4-5' },
@@ -23,6 +27,10 @@ export const claudeAgentDef = {
     // — issue #235) get auto-detected without writing wrapper scripts.
     fallbackBins: ['openclaude'],
     versionArgs: ['--version'],
+    authProbe: {
+      args: ['auth', 'status'],
+      timeoutMs: 5000,
+    },
     helpArgs: ['-p', '--help'],
     capabilityFlags: {
       // Flag string -> capability key. After probing `--help`, we set
@@ -31,6 +39,8 @@ export const claudeAgentDef = {
       // subcommand, so we probe `claude -p --help` instead of `claude --help`.
       // Fixes issue #430: --add-dir never detected because it wasn't in global help.
       '--include-partial-messages': 'partialMessages',
+      '--forward-subagent-text': 'forwardSubagentText',
+      '--agents': 'customAgents',
       '--add-dir': 'addDir',
     },
     // `claude` has no list-models subcommand. Prefer local mmd/MMS routes
@@ -48,12 +58,10 @@ export const claudeAgentDef = {
     buildArgs: (_prompt, _imagePaths, extraAllowedDirs = [], options = {}, runtimeContext = {}) => {
       const caps = agentCapabilities.get('claude') || {};
       // `--input-format stream-json` lets the daemon stream multiple JSONL
-      // messages into stdin instead of closing it after the initial prompt.
-      // This is what lets us answer Claude's `AskUserQuestion` tool calls
-      // with a real `tool_result` block — without it claude-code auto errors
-      // the tool because it cannot prompt the user interactively in headless
-      // mode, and the model falls back to a markdown duplicate of the same
-      // options.
+      // messages into stdin instead of closing it after the initial prompt,
+      // keeping the turn open so the daemon can stream further user messages
+      // mid-conversation. Paired with `--output-format stream-json` so the
+      // adapter parses structured events (see claude-stream.ts).
       const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
       // `--include-partial-messages` lands richer streaming events but only
       // exists in newer Claude Code builds. Older installs reject it with
@@ -61,8 +69,37 @@ export const claudeAgentDef = {
       if (caps.partialMessages) {
         args.push('--include-partial-messages');
       }
+      if (runtimeContext.observeNativeChildBehavior === true) {
+        if (!caps.forwardSubagentText) {
+          throw new TypeError(
+            'Claude native Child behavior observation requires advertised --forward-subagent-text support.',
+          );
+        }
+        args.push('--forward-subagent-text');
+      }
       if (options.model && options.model !== 'default') {
         args.push('--model', options.model);
+      }
+      const nativeBindings = runtimeContext.nativeBuildPackageBindings ?? [];
+      if (nativeBindings.length > 0) {
+        if (!caps.customAgents) {
+          throw new TypeError(
+            'Claude native Build Package execution requires advertised --agents support.',
+          );
+        }
+        if (
+          new Set(nativeBindings.map(({ nativeAgentHandle }) => nativeAgentHandle)).size
+            !== nativeBindings.length
+        ) {
+          throw new TypeError('Claude native Build Package handles must be unique.');
+        }
+        args.push('--agents', JSON.stringify(Object.fromEntries(nativeBindings.map((binding) => [
+          binding.nativeAgentHandle,
+          {
+            description: 'Execute one daemon-bound OD Next Build Package.',
+            prompt: 'Execute only the task supplied by the parent Agent. Do not spawn another subagent.',
+          },
+        ]))));
       }
       const dirs = (extraAllowedDirs || []).filter(
         (d) => typeof d === 'string' && d.length > 0,

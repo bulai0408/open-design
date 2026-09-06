@@ -1,13 +1,15 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ToolPackCache } from "../src/cache.js";
-import type { ToolPackConfig } from "../src/config.js";
-import { prepareResourceTree } from "../src/win/resources.js";
-import type { WinPaths } from "../src/win/types.js";
+import { ToolPackCache } from "@/cache/index.js";
+import type { ToolPackConfig } from "@/config/index.js";
+import { prepareResourceTree } from "@/win/resources.js";
+import type { WinPaths } from "@/win/types.js";
+
+const RESOURCE_TREE_CACHE_TEST_TIMEOUT_MS = 15_000;
 
 async function writeFakeOpenCodeCompanion(
   source: string,
@@ -52,12 +54,85 @@ async function createWorkspaceFixture(workspaceRoot: string): Promise<void> {
   await mkdir(join(workspaceRoot, "prompt-templates", "image"), {
     recursive: true,
   });
+  await mkdir(join(workspaceRoot, "data", "plugin-previews"), {
+    recursive: true,
+  });
+  await writeFile(
+    join(workspaceRoot, "data", "plugin-previews", "manifest.json"),
+    "{\"previews\":{}}\n",
+    "utf8",
+  );
   await mkdir(join(workspaceRoot, "plugins", "registry", "official"), {
     recursive: true,
   });
 }
 
+async function createDshRuntimeFixture(workspaceRoot: string): Promise<void> {
+  const packageRoot = join(workspaceRoot, "packages", "dsh-runtime");
+  await mkdir(join(packageRoot, "dist", "types"), { recursive: true });
+  await writeFile(
+    join(packageRoot, "package.json"),
+    `${JSON.stringify({
+      name: "@open-design/dsh-runtime",
+      version: "0.1.0",
+      files: ["dist"],
+    }, null, 2)}\n`,
+    "utf8",
+  );
+  await writeFile(join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");
+  await writeFile(
+    join(packageRoot, "dist", "types", "index.d.ts"),
+    "export {};\n",
+    "utf8",
+  );
+}
+
 describe("prepareResourceTree", () => {
+  it("bundles the DeepSeek Harness runtime into the Windows resource tree", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-win-dsh-runtime-"));
+    const workspaceRoot = join(root, "workspace");
+    const resourceRoot = join(root, "materialized", "open-design");
+    const cache = new ToolPackCache(join(root, "cache"));
+    const config = { workspaceRoot } as ToolPackConfig;
+    const paths = { resourceRoot } as WinPaths;
+
+    try {
+      await createWorkspaceFixture(workspaceRoot);
+      await createDshRuntimeFixture(workspaceRoot);
+
+      await prepareResourceTree(
+        config,
+        paths,
+        cache,
+        { bundleAgentRuntimes: true, materialize: true },
+        "workspace-build-dsh-v1",
+      );
+
+      const runtimeRoot = join(resourceRoot, "agent-runtimes", "deepseek-harness");
+      const manifest = JSON.parse(
+        await readFile(join(runtimeRoot, "manifest.json"), "utf8"),
+      ) as {
+        file: string;
+        packageName: string;
+        schemaVersion: number;
+        sha256: string;
+        version: string;
+      };
+      const tarballs = (await readdir(runtimeRoot)).filter((entry) => entry.endsWith(".tgz"));
+
+      expect(manifest).toMatchObject({
+        file: tarballs[0],
+        packageName: "@open-design/dsh-runtime",
+        schemaVersion: 1,
+        version: "0.1.0",
+      });
+      expect(manifest.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(tarballs).toHaveLength(1);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }, RESOURCE_TREE_CACHE_TEST_TIMEOUT_MS);
+
   it("invalidates the Windows resource tree cache when design templates change", async () => {
     const root = await mkdtemp(join(tmpdir(), "open-design-win-resources-"));
     const workspaceRoot = join(root, "workspace");
@@ -102,7 +177,53 @@ describe("prepareResourceTree", () => {
     } finally {
       await rm(root, { force: true, recursive: true });
     }
-  });
+  }, RESOURCE_TREE_CACHE_TEST_TIMEOUT_MS);
+
+  it("invalidates the Windows resource tree cache when the plugin-preview manifest changes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-win-previews-"));
+    const workspaceRoot = join(root, "workspace");
+    const resourceRoot = join(root, "materialized", "open-design");
+    const cache = new ToolPackCache(join(root, "cache"));
+    const config = { workspaceRoot } as ToolPackConfig;
+    const paths = { resourceRoot } as WinPaths;
+    const manifestPath = join(
+      workspaceRoot,
+      "data",
+      "plugin-previews",
+      "manifest.json",
+    );
+    const materializedManifestPath = join(
+      resourceRoot,
+      "data",
+      "plugin-previews",
+      "manifest.json",
+    );
+
+    try {
+      await createWorkspaceFixture(workspaceRoot);
+      await writeFile(manifestPath, "{\"previews\":{\"a\":1}}\n", "utf8");
+
+      await prepareResourceTree(config, paths, cache, { materialize: true });
+
+      await expect(readFile(materializedManifestPath, "utf8")).resolves.toBe(
+        "{\"previews\":{\"a\":1}}\n",
+      );
+
+      await writeFile(manifestPath, "{\"previews\":{\"a\":2}}\n", "utf8");
+
+      await prepareResourceTree(config, paths, cache, { materialize: true });
+
+      await expect(readFile(materializedManifestPath, "utf8")).resolves.toBe(
+        "{\"previews\":{\"a\":2}}\n",
+      );
+      expect(cache.report().entries.map((entry) => entry.status)).toEqual([
+        "miss",
+        "miss",
+      ]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }, RESOURCE_TREE_CACHE_TEST_TIMEOUT_MS);
 
   it("copies a configured Vela CLI binary into the Windows resource tree", async () => {
     const root = await mkdtemp(join(tmpdir(), "open-design-win-vela-"));
@@ -206,5 +327,5 @@ describe("prepareResourceTree", () => {
       else process.env.OPEN_DESIGN_VELA_CLI_BIN = originalVelaBin;
       await rm(root, { force: true, recursive: true });
     }
-  });
+  }, RESOURCE_TREE_CACHE_TEST_TIMEOUT_MS);
 });

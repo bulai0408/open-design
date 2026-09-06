@@ -99,13 +99,15 @@ describe('ChatComposer /search command', () => {
     await waitFor(() => expect(screen.getByText('designs/landing.html')).toBeTruthy());
     fireEvent.click(screen.getByText('designs/landing.html'));
 
-    await waitFor(() => expect(screen.getByTestId('staged-attachments').textContent).toContain('landing.html'));
+    await waitFor(() => expect(screen.getByTestId('staged-contexts').textContent).toContain('landing.html'));
 
     fireEvent.change(screen.getByTestId('chat-file-input'), {
       target: { files: [new File(['pasted'], 'pasted.png', { type: 'image/png' })] },
     });
 
-    await waitFor(() => expect(screen.getByTestId('staged-attachments').textContent).toContain('pasted.png'));
+    // Image chips are thumbnail-only; the name is exposed through the
+    // preview trigger's aria-label rather than chip text.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Preview pasted.png' })).toBeTruthy());
     fireEvent.click(screen.getByTestId('chat-send'));
 
     await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
@@ -255,12 +257,12 @@ describe('ChatComposer /search command', () => {
     await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
     expect(mockedUploadProjectFiles).toHaveBeenCalledWith('project-1', [
       expect.objectContaining({ name: 'drawing.png', type: 'image/png' }),
-    ]);
+    ], undefined, null);
     expect(onSend).toHaveBeenCalledWith(
       'please update this spot',
       [{ path: 'uploads/drawing.png', name: 'drawing.png', kind: 'image', order: 0 }],
       [],
-      undefined,
+      { entryFrom: 'mark' },
     );
   });
 
@@ -349,7 +351,7 @@ describe('ChatComposer /search command', () => {
 
     await waitFor(() => expect(mockedUploadProjectFiles).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(composerText()).toContain('review this before sending'));
-    expect(screen.getByText('drawing.png')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Preview drawing.png' })).toBeTruthy();
     expect(screen.queryByText('Visual mark')).toBeNull();
     expect(onSend).not.toHaveBeenCalled();
 
@@ -425,6 +427,54 @@ describe('ChatComposer /search command', () => {
     });
   });
 
+  it('tags entry_from=mark on a draw annotation sent while a run is streaming', async () => {
+    const onSend = vi.fn();
+    mockedUploadProjectFiles.mockResolvedValue({
+      uploaded: [{ path: 'uploads/drawing.png', name: 'drawing.png', kind: 'image' }],
+      failed: [],
+    });
+
+    const { rerender } = render(
+      <ChatComposer
+        projectId="project-1"
+        projectFiles={[]}
+        streaming
+        onEnsureProject={async () => 'project-1'}
+        onSend={onSend}
+        onStop={vi.fn()}
+      />,
+    );
+
+    window.dispatchEvent(new CustomEvent(ANNOTATION_EVENT, {
+      detail: {
+        file: new File(['drawing'], 'drawing.png', { type: 'image/png' }),
+        note: 'tighten this area',
+        action: 'send',
+        filePath: 'index.html',
+        markKind: 'stroke',
+        bounds: { x: 12, y: 24, width: 140, height: 80 },
+      },
+    }));
+
+    await waitFor(() => expect(mockedUploadProjectFiles).toHaveBeenCalledTimes(1));
+    expect(onSend).not.toHaveBeenCalled();
+
+    rerender(
+      <ChatComposer
+        projectId="project-1"
+        projectFiles={[]}
+        streaming={false}
+        onEnsureProject={async () => 'project-1'}
+        onSend={onSend}
+        onStop={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    const meta = onSend.mock.calls[0]![3];
+    expect(meta).toMatchObject({ entryFrom: 'mark' });
+  });
+
   it('previews a staged image attachment from its chip', async () => {
     const longName = 'drawing-2026-05-13T09-25-03-040Z-with-extra-long-name.png';
     render(
@@ -451,12 +501,16 @@ describe('ChatComposer /search command', () => {
     await waitFor(() => expect(screen.getByText(`uploads/${longName}`)).toBeTruthy());
     fireEvent.click(screen.getByText(`uploads/${longName}`));
 
-    const chip = screen.getByTestId('staged-attachments').querySelector('.staged-chip.staged-image');
+    const chip = screen.getByTestId('staged-contexts').querySelector('.staged-chip.staged-image');
     const previewTrigger = screen.getByRole('button', { name: `Preview ${longName}` });
     expect(chip?.contains(previewTrigger)).toBe(true);
     expect(chip?.contains(screen.getByRole('button', { name: `Remove ${longName}` }))).toBe(true);
     expect(previewTrigger.querySelector('img')).toBeTruthy();
-    expect(previewTrigger.querySelector('.staged-name')?.textContent).toBe(longName);
+    // Image chips are thumbnail-only (mirroring the home composer); the
+    // filename lives in the tooltip instead of chip text.
+    expect(previewTrigger.querySelector('.staged-name')).toBeNull();
+    expect(previewTrigger.getAttribute('title')).toBe(longName);
+    expect(chip?.classList.contains('staged-chip--image-file')).toBe(true);
 
     fireEvent.click(previewTrigger);
 
@@ -699,7 +753,7 @@ describe('ChatComposer /search command', () => {
     expect(activeFileStrip.textContent).toContain('site/index.html');
     expect(screen.getByTestId('chat-composer').className).toContain('composer-active-file-mode');
 
-    expect(screen.getAllByText('Ask Open Design to change index.html...').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Ask OpenDesign to change index.html...').length).toBeGreaterThan(0);
     await typeAndSettle('Make the hero clearer');
     fireEvent.click(screen.getByTestId('chat-send'));
 

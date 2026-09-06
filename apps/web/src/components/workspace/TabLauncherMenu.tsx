@@ -5,10 +5,27 @@ import type { Dict } from '../../i18n/types';
 import { Icon, type IconName } from '../Icon';
 import type { ProjectFile, ProjectFileKind } from '../../types';
 import type { WorkspaceContextItem } from '@open-design/contracts';
+import type { TabLauncherClickProps } from '@open-design/contracts/analytics';
 import type { LauncherAction, LauncherContext } from './tab-launcher';
 import styles from './TabLauncherMenu.module.css';
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
+
+// Create-new rows cycle through a small hue palette (one color per row) so
+// the icon column reads as a colorful menu instead of a uniform gray strip.
+const ACTION_ICON_COLORS = [
+  styles.iconBlue,
+  styles.iconGreen,
+  styles.iconAmber,
+  styles.iconRed,
+];
+
+// Page/area/project_id are filled by the host (FileWorkspace); the menu only
+// supplies the event-specific fields.
+export type TabLauncherTrackInput = Omit<
+  TabLauncherClickProps,
+  'page_name' | 'area' | 'project_id'
+>;
 
 interface Props {
   /** The "+" button the menu is anchored to (for fixed positioning). */
@@ -26,6 +43,8 @@ interface Props {
   /** Open the chosen file in a new tab (wired to FileWorkspace.openFile). */
   onOpenFile: (name: string) => void;
   onOpenTab?: (tabId: string) => void;
+  /** Fire a tab-launcher ui_click (host fills page/area/project_id). */
+  onTrack?: (input: TabLauncherTrackInput) => void;
   onClose: () => void;
 }
 
@@ -43,6 +62,7 @@ export function TabLauncherMenu({
   launcherContext,
   onOpenFile,
   onOpenTab,
+  onTrack,
   onClose,
 }: Props) {
   const t = useT();
@@ -134,13 +154,27 @@ export function TabLauncherMenu({
 
   const openSet = useMemo(() => new Set(openTabNames), [openTabNames]);
 
-  function chooseFile(name: string) {
-    onOpenFile(name);
+  // Fire once when the launcher opens (the menu mounts only while open).
+  useEffect(() => {
+    onTrack?.({ element: 'open' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function chooseFile(file: ProjectFile) {
+    onTrack?.({ element: 'open_file', file_kind: file.kind });
+    onOpenFile(file.name);
     onClose();
   }
 
   function chooseTab(item: WorkspaceContextItem) {
+    onTrack?.({ element: 'open_tab', tab_kind: item.kind });
     if (item.tabId) onOpenTab?.(item.tabId);
+    onClose();
+  }
+
+  function runLauncherAction(action: LauncherAction) {
+    onTrack?.({ element: 'create', action_id: action.id });
+    action.run(launcherContext);
     onClose();
   }
 
@@ -155,7 +189,7 @@ export function TabLauncherMenu({
       e.preventDefault();
       const file = results[selected] ?? null;
       if (file) {
-        chooseFile(file.name);
+        chooseFile(file);
         return;
       }
       const tabIndex = selected - results.length;
@@ -165,8 +199,7 @@ export function TabLauncherMenu({
       } else if (actions[0]) {
         // No file matches the query but "Create new" actions exist — Enter
         // triggers the first action so the keyboard path is never a dead end.
-        actions[0].run(launcherContext);
-        onClose();
+        runLauncherAction(actions[0]);
       }
     }
   }
@@ -204,7 +237,10 @@ export function TabLauncherMenu({
           <button
             type="button"
             className={`${styles.chip} ${kindFilter === 'all' ? styles.chipActive : ''}`}
-            onClick={() => setKindFilter('all')}
+            onClick={() => {
+              onTrack?.({ element: 'filter', kind_filter: 'all' });
+              setKindFilter('all');
+            }}
           >
             {t('workspace.allFiles')}
           </button>
@@ -213,7 +249,10 @@ export function TabLauncherMenu({
               key={kind}
               type="button"
               className={`${styles.chip} ${kindFilter === kind ? styles.chipActive : ''}`}
-              onClick={() => setKindFilter(kind)}
+              onClick={() => {
+                onTrack?.({ element: 'filter', kind_filter: kind });
+                setKindFilter(kind);
+              }}
             >
               {kindLabel(kind, t)}
             </button>
@@ -226,24 +265,21 @@ export function TabLauncherMenu({
           <section className={styles.section}>
             <div className={styles.sectionHeader}>{t('workspace.createNew')}</div>
             <ul className={styles.list}>
-              {actions.map((action) => (
+              {actions.map((action, index) => (
                 <li key={action.id}>
                   <button
                     type="button"
                     className={styles.row}
-                    onClick={() => {
-                      action.run(launcherContext);
-                      onClose();
-                    }}
+                    onClick={() => runLauncherAction(action)}
                   >
-                    <span className={styles.rowIcon} aria-hidden>
+                    <span
+                      className={`${styles.rowIcon} ${ACTION_ICON_COLORS[index % ACTION_ICON_COLORS.length]}`}
+                      aria-hidden
+                    >
                       <Icon name={action.iconName} size={15} />
                     </span>
                     <span className={styles.rowBody}>
                       <span className={styles.rowName}>{t(action.labelKey)}</span>
-                      {action.descriptionKey ? (
-                        <span className={styles.rowMeta}>{t(action.descriptionKey)}</span>
-                      ) : null}
                     </span>
                   </button>
                 </li>
@@ -265,19 +301,19 @@ export function TabLauncherMenu({
                       type="button"
                       className={`${styles.row} ${selectableIndex === selected ? styles.rowSelected : ''}`}
                       onMouseEnter={() => setSelected(selectableIndex)}
-                      onClick={() => chooseFile(file.name)}
+                      onClick={() => chooseFile(file)}
                       data-selectable-idx={selectableIndex}
                       data-testid="tab-launcher-result"
                     >
                       <span className={styles.rowIcon} aria-hidden>
                         <Icon name={kindIconName(file.kind)} size={15} />
                       </span>
+                      {/* Name only — the kind/size/mtime meta line was dropped
+                          (dogfood 2026-07-27): the icon and extension already
+                          say the kind, and the launcher is a jump list, not a
+                          file manager. */}
                       <span className={styles.rowBody}>
                         <span className={styles.rowName}>{file.name}</span>
-                        <span className={styles.rowMeta}>
-                          {kindLabel(file.kind, t)} · {formatBytes(file.size)} ·{' '}
-                          {formatRelativeTime(file.mtime, t)}
-                        </span>
                       </span>
                       {isOpen ? <span className={styles.rowOpen}>{t('workspace.tabOpen')}</span> : null}
                     </button>
@@ -309,9 +345,6 @@ export function TabLauncherMenu({
                       </span>
                       <span className={styles.rowBody}>
                         <span className={styles.rowName}>{item.label}</span>
-                        <span className={styles.rowMeta}>
-                          {workspaceContextKindLabel(item.kind)} · {workspaceContextMeta(item)}
-                        </span>
                       </span>
                       <span className={styles.rowOpen}>{t('workspace.tabOpen')}</span>
                     </button>
@@ -334,9 +367,9 @@ export function TabLauncherMenu({
 }
 
 // --- local helpers ---------------------------------------------------------
-// DesignFilesPanel keeps equivalent `humanBytes` / `relativeTime` /
-// `kindLabel` helpers but does not export them, so we keep tiny copies here
-// (same formatting contract) rather than widening that component's surface.
+// DesignFilesPanel keeps an equivalent `kindLabel` helper but does not export
+// it, so we keep a tiny copy here (same wording contract) rather than widening
+// that component's surface.
 
 function kindIconName(kind: ProjectFileKind): IconName {
   if (kind === 'html') return 'file-code';
@@ -362,37 +395,13 @@ function kindLabel(kind: ProjectFileKind, t: TranslateFn): string {
 function workspaceContextIconName(kind: WorkspaceContextItem['kind']): IconName {
   if (kind === 'browser') return 'globe';
   if (kind === 'design-files' || kind === 'folder') return 'folder';
+  if (kind === 'project') return 'folder';
+  if (kind === 'local-code') return 'terminal';
   if (kind === 'design-system') return 'blocks';
   if (kind === 'terminal') return 'terminal';
   if (kind === 'side-chat') return 'comment';
   if (kind === 'live-artifact') return 'file-code';
   return 'file';
-}
-
-function workspaceContextKindLabel(kind: WorkspaceContextItem['kind']): string {
-  switch (kind) {
-    case 'browser':
-      return 'Browser';
-    case 'design-files':
-      return 'Design files';
-    case 'design-system':
-      return 'Design system';
-    case 'folder':
-      return 'Folder';
-    case 'terminal':
-      return 'Terminal';
-    case 'side-chat':
-      return 'Side chat';
-    case 'live-artifact':
-      return 'Live artifact';
-    case 'file':
-    default:
-      return 'File';
-  }
-}
-
-function workspaceContextMeta(item: WorkspaceContextItem): string {
-  return item.url || item.path || item.absolutePath || item.title || item.tabId || item.id;
 }
 
 function workspaceContextSearchText(item: WorkspaceContextItem): string {
@@ -408,21 +417,3 @@ function workspaceContextSearchText(item: WorkspaceContextItem): string {
   ].join(' ');
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatRelativeTime(ts: number, t: TranslateFn): string {
-  const diff = Date.now() - ts;
-  const min = 60_000;
-  const hr = 60 * min;
-  const day = 24 * hr;
-  if (diff < min) return t('common.justNow');
-  if (diff < hr) return t('common.minutesAgo', { n: Math.floor(diff / min) });
-  if (diff < day) return t('common.hoursAgo', { n: Math.floor(diff / hr) });
-  if (diff < 7 * day) return t('common.daysAgo', { n: Math.floor(diff / day) });
-  if (diff < 30 * day) return t('designFiles.weeksAgo', { n: Math.floor(diff / (7 * day)) });
-  return new Date(ts).toLocaleDateString();
-}

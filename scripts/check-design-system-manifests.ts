@@ -30,6 +30,12 @@ const designSystemsRoot = path.join(repoRoot, "design-systems");
 const craftRoot = path.join(repoRoot, "craft");
 const SKIPPED_DIRECTORIES = new Set(["_schema"]);
 
+/** Normalize CRLF→LF so byte-exact generated-file comparisons are EOL-agnostic
+ *  (Windows core.autocrlf=true checks generated LF files out as CRLF). See #5175. */
+function normalizeEol(text: string): string {
+  return text.replace(/\r\n/g, "\n");
+}
+
 function toRepositoryPath(filePath: string): string {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
 }
@@ -210,7 +216,7 @@ export async function validateDesignTokensJson(
     bindings: report.tokens,
     report,
   });
-  if (actualText !== expected) {
+  if (normalizeEol(actualText) !== normalizeEol(expected)) {
     violations.push(`${repositoryManifestPath}: ${designTokensPath} is stale; regenerate it from ${reportPath}`);
   }
 
@@ -277,7 +283,7 @@ export async function validateTailwindV4Css(
   const expectedCss = renderTailwindV4Css(
     Array.from(parseRootTokenDeclarations(tokensCss).keys(), (name) => ({ name })),
   );
-  if (actualCss !== expectedCss) {
+  if (normalizeEol(actualCss) !== normalizeEol(expectedCss)) {
     violations.push(`${repositoryManifestPath}: ${tailwindPath} is stale; regenerate it from ${tokensPath}`);
   }
 }
@@ -383,14 +389,21 @@ function validateTokenSourceReferences(
   const sourceName = binding.sourceName ?? binding.name;
   const declared = tokenDeclarations.get(sourceName);
   if (declared === undefined) return;
+  let hasTokensCssSource = false;
   for (const source of binding.sources) {
     const line = parseTokenSourceLine(source, tokensPath);
     if (line === undefined) continue;
+    hasTokensCssSource = true;
     if (line !== declared.line) {
       violations.push(
         `${repositoryManifestPath}: ${reportPath} token ${binding.name} source ${source} must point to ${tokensPath}:${declared.line}`,
       );
     }
+  }
+  if (!hasTokensCssSource) {
+    violations.push(
+      `${repositoryManifestPath}: ${reportPath} token ${binding.name} must cite a ${tokensPath}:<line> source`,
+    );
   }
 }
 
@@ -496,7 +509,7 @@ async function validateDeclaredJsonFiles(
   }
 }
 
-async function validateComponentsManifestCache(
+export async function validateComponentsManifestCache(
   violations: string[],
   repositoryManifestPath: string,
   brandRoot: string,
@@ -520,6 +533,11 @@ async function validateComponentsManifestCache(
     if (!isDeepStrictEqual(cachedManifest, derivedManifest)) {
       violations.push(
         `${repositoryManifestPath}: ${toRepositoryPath(cachePath)} is stale; regenerate it from components.html + tokens.css`,
+      );
+    }
+    if (derivedManifest.tokens.undeclaredReferenced.length > 0) {
+      violations.push(
+        `${repositoryManifestPath}: ${toRepositoryPath(cachePath)} references undeclared component token(s): ${derivedManifest.tokens.undeclaredReferenced.join(", ")}`,
       );
     }
   } catch (error) {

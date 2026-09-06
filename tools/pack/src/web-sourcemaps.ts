@@ -42,7 +42,7 @@ import { join } from "node:path";
 
 import { createPackageManagerInvocation } from "@open-design/platform";
 
-import type { ToolPackConfig } from "./config.js";
+import type { ToolPackConfig } from "./config/index.js";
 import { execFileAsync } from "./mac/commands.js";
 
 const POSTHOG_CLI_VERSION = "0.7.11";
@@ -53,7 +53,7 @@ export interface WebSourcemapOptions {
    * Optional release version to associate with the uploaded chunks. Falls
    * back to `config.appVersion` when omitted; if neither is set the CLI
    * derives one from git, which is fine but less precise than passing a
-   * real semver/nightly identifier from the release workflow.
+   * real semver/prerelease identifier from the release workflow.
    */
   releaseVersion?: string;
 }

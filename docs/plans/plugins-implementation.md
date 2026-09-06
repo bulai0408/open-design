@@ -1,4 +1,4 @@
-# Open Design Plugin & Marketplace — Implementation Plan (living)
+# OpenDesign Plugin & Marketplace — Implementation Plan (living)
 
 Source spec: [`docs/plugins-spec.md`](../plugins-spec.md) (zh-CN: [`docs/plugins-spec.zh-CN.md`](../plugins-spec.zh-CN.md)).
 
@@ -78,7 +78,7 @@ This section tracks **what exists in the repo today**. Update in the same PR tha
 
 These notes capture the product/implementation answers that otherwise get lost between the spec and the code:
 
-- **No plugin selected does not mean a naked agent.** `composeSystemPrompt()` still always layers the Open Design base designer/discovery prompt, project metadata, active design system/craft, and daemon-owned safety/tooling guidance. Plugin context is additive: a selected plugin contributes snapshot-derived `## Active plugin`, `## Plugin inputs`, and active-stage atom blocks. Home free-form runs route through the bundled hidden `od-default` scenario, which shapes task type and then returns to the normal design pipeline.
+- **No plugin selected does not mean a naked agent.** `composeSystemPrompt()` still always layers the OpenDesign base designer/discovery prompt, project metadata, active design system/craft, and daemon-owned safety/tooling guidance. Plugin context is additive: a selected plugin contributes snapshot-derived `## Active plugin`, `## Plugin inputs`, and active-stage atom blocks. Home free-form runs route through the bundled hidden `od-default` scenario, which shapes task type and then returns to the normal design pipeline.
 - **The pipeline is plugin-assembled, not a fixed wizard.** The reference shorthand is `discovery -> plan -> generate -> critique`, but the runnable shape comes from `od.pipeline.stages[].atoms[]` on the applied plugin or bundled scenario fallback. `apps/daemon/src/plugins/pipeline-runner.ts` emits stage/GenUI events and `packages/contracts/src/prompts/atom-block.ts` renders the active stage body. Some atoms are still prompt fragments / permissive workers; observable atoms such as `diff-review`, `build-test`, and `handoff` now emit durable files or signals.
 - **GenUI is controlled rendering.** Agents/plugins emit structured surface requests (`form`, `choice`, `confirmation`, `oauth-prompt`) and OD renders them with product-owned React/CLI components. Inline `<question-form>` chat UI follows the same principle: parse structured data, render through `QuestionForm`, and keep styling in OD. Plugin-bundled custom components are a separate sandboxed path behind `genui:custom-component`.
 - **AG-UI is interoperability, not the product UI runtime.** `packages/agui-adapter` and `GET /api/runs/:runId/agui` are shipped so CopilotKit / AG-UI clients can consume an OD run. The internal web/desktop UI remains OD-native; adding CopilotKit itself is only justified for an explicit external embed/demo/client.
@@ -155,7 +155,7 @@ These notes capture the product/implementation answers that otherwise get lost b
 | `tools/pack/helm/open-design/templates/**` | shipped | Phase 5 — Deployment / Service / Secret / ConfigMap / PVCs / Ingress / NOTES |
 | `tools/pack/helm/open-design/values-{aws,gcp,azure,aliyun,tencent,huawei,self}.yaml` | shipped | Phase 5 — per-cloud overrides (volume + ingress diffs) |
 | `deploy/Dockerfile` plugins/_official COPY | shipped | Phase 5 — bundled atoms travel with the image |
-| `.github/workflows/docker-image.yml` | shipped | Phase 5 — multi-arch ghcr.io push (:edge / :version) |
+| `.github/workflows/docker-image.yml` | shipped | Phase 5 — multi-arch ghcr.io push (:version / :latest) |
 | `apps/daemon/src/storage/project-storage.ts` | shipped | Phase 5 — ProjectStorage interface + Local impl + S3 stub |
 | `apps/daemon/src/storage/daemon-db.ts` | shipped | Phase 5 — DaemonDb config resolver (sqlite default, postgres stub) |
 | `GET /api/plugins/:id/asset/*` | shipped | Phase 4 — sandboxed plugin asset endpoint (§9.2 CSP) |
@@ -506,7 +506,7 @@ Validation
 Deliverables
 
 - [x] `linux/amd64` + `linux/arm64` Dockerfile per spec §15.1 (`deploy/Dockerfile`; entry-slice base is `node:24-alpine` with `NODE_IMAGE` build-arg override → `node:24-bookworm-slim`; bundled atom plugins ship inside the image).
-- [x] CI pushes `:edge` on main, `:<version>` on tag — `.github/workflows/docker-image.yml`.
+- [x] Release automation pushes `:<version>` / `:latest`; tag pushes publish matching images — `.github/workflows/docker-image.yml`.
 - [x] `tools/pack/docker-compose.yml`, `tools/pack/helm/` — chart templates (Deployment / Service / Secret / ConfigMap / PVCs / Ingress / NOTES) shipped, per-cloud `values-<cloud>.yaml` overrides shipped (AWS / GCP / Azure / Aliyun / Tencent / Huawei / self-hosted).
 - [x] Bound-API-token guard: daemon refuses to bind `OD_BIND_HOST=<non-loopback>` without `OD_API_TOKEN`; bearer middleware on `/api/*` skipped only on loopback peers and on the open probes (`/api/health`, `/api/version`, `/api/daemon/status`).
 - [x] `ProjectStorage` adapter substrate — `LocalProjectStorage` (v1 default) wired + tested; `S3ProjectStorage` interface-locked stub; `resolveProjectStorage` reads `OD_PROJECT_STORAGE`. AWS SDK wiring stays as the next Phase 5 PR.
@@ -549,7 +549,9 @@ These were originally spec §18 open questions; they are now resolved and propag
 v1 ships when **all** of the following pass on a clean Linux CI container without electron. Each row links to the daemon / e2e test path that asserts it.
 
 - [x] **e2e-1 cold install** — `od plugin install ./fixtures/sample-plugin` →
-  - `<OD_DATA_DIR>/plugins/sample-plugin/` exists.
+  - daemon-managed plugin storage contains the sample plugin. This plan MUST
+    NOT define daemon data paths; read root `AGENTS.md` → **Daemon data
+    directory contract** before documenting storage.
   - `installed_plugins` has one row with `trust='restricted'`, `source_kind='local'`.
   - Test path: `apps/daemon/tests/plugins-e2e-fixture.test.ts`
 - [x] **e2e-2 pure apply** — two consecutive applies share `manifestSourceDigest`; the project cwd byte size is unchanged; `applied_plugin_snapshots` is not written by `applyPlugin()` itself (the resolver is the writer).

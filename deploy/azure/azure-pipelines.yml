@@ -11,7 +11,7 @@ variables:
   deploymentName: open-design-aci
   location: eastus
   templateFile: deploy/azure/container-instance.bicep
-  openDesignImage: docker.io/vanjayak/open-design:latest
+  openDesignImage: ghcr.io/nexu-io/od:latest
   dnsNameLabel: open-design-$(Build.BuildId)
   browserOrigin: https://od.example.com
 
@@ -22,7 +22,7 @@ steps:
   - checkout: self
 
   - task: AzureCLI@2
-    displayName: Deploy Open Design to Azure Container Instances
+    displayName: Deploy OpenDesign to Azure Container Instances
     inputs:
       azureSubscription: ${{ parameters.azureServiceConnection }}
       scriptType: bash

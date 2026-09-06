@@ -1,4 +1,4 @@
-🎨 **`141 PRs` · `50 contributors` · `2 days`** — **The all-in-one Agentic design workspace.** 0.9.0 put the AI engine in everyone's hands; 0.10.0 makes Open Design the only window a designer needs open. The whole craft now lives in one place — go from a vague idea to discovering references, gathering raw material, editing interactively, queuing notes, polishing motion and animation, and handing the result off to an editor or a Code Agent for production — **without leaving the app.** And because you can fire comments into a queue, run several sessions at once, and gather assets in parallel, it stops feeling like one assistant and starts feeling like **a whole local design team working for you.** 🚀
+🎨 **`141 PRs` · `50 contributors` · `2 days`** — **The all-in-one Agentic design workspace.** 0.9.0 put the AI engine in everyone's hands; 0.10.0 makes OpenDesign the only window a designer needs open. The whole craft now lives in one place — go from a vague idea to discovering references, gathering raw material, editing interactively, queuing notes, polishing motion and animation, and handing the result off to an editor or a Code Agent for production — **without leaving the app.** And because you can fire comments into a queue, run several sessions at once, and gather assets in parallel, it stops feeling like one assistant and starts feeling like **a whole local design team working for you.** 🚀
 
 ## 🔥 Highlights
 
@@ -14,7 +14,7 @@
 - ⚡ **Lighter, faster landing.** Hero decorations route through Image Resizing for ~92% smaller payloads. (#3523) Thanks `@lefarcen`.
 - 🔒 **Security.** Resolved a vulnerable `tmp` transitive dependency. (#3379) Thanks `@gateway`.
 
-> 📥 **Download:** assets for `open-design-v0.10.0` are built by the nightly pipeline and publish to GitHub Releases and `releases.open-design.ai` — macOS arm64/Intel `.dmg`, Windows x64 installer — when the build completes.
+> 📥 **Download:** assets for `open-design-v0.10.0` are built by the prerelease pipeline and publish to GitHub Releases and `releases.open-design.ai` — macOS arm64/Intel `.dmg`, Windows x64 installer — when the build completes.
 
 ## ✨ Added
 

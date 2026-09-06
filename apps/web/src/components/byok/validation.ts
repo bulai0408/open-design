@@ -36,6 +36,8 @@ export interface ByokDraftValidation {
 
 interface ValidateByokDraftOptions {
   requiresApiKey?: boolean;
+  /** A daemon-owned secure profile satisfies the credential requirement. */
+  credentialConfigured?: boolean;
   requireModel?: boolean;
   keyValidationBaseUrl?: string;
 }
@@ -56,7 +58,7 @@ export interface NormalizedByokBaseUrl {
 export type ByokModelPreferenceSource =
   | 'explicit'
   | 'account'
-  | 'provider_default'
+  | 'provider_preferred'
   | 'empty';
 
 export interface ByokModelPreference {
@@ -65,6 +67,7 @@ export interface ByokModelPreference {
 }
 
 const ZERO_WIDTH_CHARS = /[\u200B-\u200D\uFEFF]/g;
+const GOOGLE_GEMINI_DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';
 
 export function cleanByokApiKey(value: string): string {
   return value
@@ -122,13 +125,14 @@ export function validateByokDraft(
   options: ValidateByokDraftOptions = {},
 ): ByokDraftValidation {
   const requiresApiKey = options.requiresApiKey ?? true;
+  const credentialConfigured = options.credentialConfigured === true;
   const requireModel = options.requireModel ?? true;
   const issues: ByokDraftIssue[] = [];
   const cleanedApiKey = cleanByokApiKey(config.apiKey);
   const baseUrl = config.baseUrl.trim();
   const model = config.model.trim();
 
-  if (requiresApiKey && !cleanedApiKey) {
+  if (requiresApiKey && !cleanedApiKey && !credentialConfigured) {
     issues.push({
       field: 'api_key',
       level: 'error',
@@ -136,7 +140,7 @@ export function validateByokDraft(
       message: 'API key is required.',
       action: 'focus_api_key',
     });
-  } else if (requiresApiKey) {
+  } else if (requiresApiKey && cleanedApiKey) {
     if (cleanedApiKey !== config.apiKey) {
       issues.push({
         field: 'api_key',
@@ -162,14 +166,32 @@ export function validateByokDraft(
       message: 'Base URL is required.',
       action: 'focus_base_url',
     });
-  } else if (validateBaseUrl(baseUrl).error) {
-    issues.push({
-      field: 'base_url',
-      level: 'error',
-      code: 'base_url_invalid',
-      message: 'Base URL must be a valid public http:// or https:// URL.',
-      action: 'focus_base_url',
-    });
+  } else {
+    // #3225 — a `forbidden` result is a syntactically-valid URL that points at
+    // an internal address. Don't block it here: the Test / model-fetch actions
+    // gate on these issues, and the daemon owns the OD_ALLOWED_INTERNAL_HOSTS
+    // decision. Only genuinely malformed / non-http URLs are a client blocker.
+    const baseUrlCheck = validateBaseUrl(baseUrl);
+    if (baseUrlCheck.error && !baseUrlCheck.forbidden) {
+      issues.push({
+        field: 'base_url',
+        level: 'error',
+        code: 'base_url_invalid',
+        message: 'Base URL must be a valid public http:// or https:// URL.',
+        action: 'focus_base_url',
+      });
+    } else if (protocol === 'google' && baseUrl) {
+      const host = baseUrlHostname(baseUrl);
+      if (host === 'api.anthropic.com' || host === 'api.openai.com') {
+        issues.push({
+          field: 'base_url',
+          level: 'error',
+          code: 'base_url_invalid',
+          message: `Base URL points to ${host}. For Google Gemini use ${GOOGLE_GEMINI_DEFAULT_BASE_URL}.`,
+          action: 'focus_base_url',
+        });
+      }
+    }
   }
 
   if (requireModel && !model) {
@@ -205,19 +227,34 @@ export function blockingByokDraftFields(
 export function resolveByokModelPreference({
   currentModel,
   accountModels,
-  providerDefaultModel,
+  providerPreferredModels = [],
 }: {
   currentModel: string;
   accountModels: readonly ProviderModelOption[];
-  providerDefaultModel?: string;
+  providerPreferredModels?: readonly string[];
 }): ByokModelPreference {
   const explicit = currentModel.trim();
   if (explicit) return { model: explicit, source: 'explicit' };
-  const account = accountModels.find((model) => model.id.trim());
-  if (account) return { model: account.id, source: 'account' };
-  const providerDefault = providerDefaultModel?.trim() ?? '';
-  if (providerDefault) {
-    return { model: providerDefault, source: 'provider_default' };
+  const enabledAccountModels = accountModels.filter(
+    (model) => model.enabled !== false && model.id.trim(),
+  );
+  const enabledAccountModelIds = new Set(
+    enabledAccountModels.map((model) => model.id.trim()),
+  );
+  const providerPreferred = providerPreferredModels
+    .map((model) => model.trim())
+    .find((model) => model && enabledAccountModelIds.has(model));
+  if (providerPreferred) {
+    return { model: providerPreferred, source: 'provider_preferred' };
+  }
+  if (accountModels.length === 0) {
+    const fallback = providerPreferredModels.find((model) => model.trim())?.trim() ?? '';
+    if (fallback) {
+      return { model: fallback, source: 'provider_preferred' };
+    }
+  }
+  if (enabledAccountModels.length === 1) {
+    return { model: enabledAccountModels[0]!.id.trim(), source: 'account' };
   }
   return { model: '', source: 'empty' };
 }
@@ -263,7 +300,7 @@ function validateApiKeyShape(
   }
 
   if (protocol === 'google' && isGoogleFirstPartyBaseUrl(baseUrl)) {
-    if (apiKey.startsWith('AIza')) return null;
+    if (isGoogleGeminiApiKeyShape(apiKey)) return null;
     return {
       field: 'api_key',
       level: 'error',
@@ -283,9 +320,16 @@ function validateApiKeyShape(
 
 function detectByokApiKeyProtocol(apiKey: string): ApiProtocol | null {
   if (apiKey.startsWith('sk-ant-')) return 'anthropic';
-  if (apiKey.startsWith('AIza')) return 'google';
+  if (isGoogleGeminiApiKeyShape(apiKey)) return 'google';
   if (apiKey.startsWith('sk-')) return 'openai';
   return null;
+}
+
+/** Legacy AI Studio keys (AIza…) and service-account-bound keys (AQ.…). */
+function isGoogleGeminiApiKeyShape(apiKey: string): boolean {
+  if (apiKey.startsWith('AIza')) return true;
+  // https://docs.cloud.google.com/docs/authentication/api-keys#api-keys-bound-sa
+  return /^AQ\.[A-Za-z0-9_-]{20,}$/.test(apiKey);
 }
 
 function isAnthropicFirstPartyBaseUrl(baseUrl: string): boolean {
@@ -305,9 +349,18 @@ function isOpenAiFirstPartyBaseUrl(baseUrl: string): boolean {
 }
 
 function isGoogleFirstPartyBaseUrl(baseUrl: string): boolean {
+  return baseUrlHostname(baseUrl) === 'generativelanguage.googleapis.com';
+}
+
+function baseUrlHostname(baseUrl: string): string | undefined {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) return undefined;
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
   try {
-    return new URL(baseUrl).hostname.toLowerCase() === 'generativelanguage.googleapis.com';
+    return new URL(withProtocol).hostname.toLowerCase();
   } catch {
-    return false;
+    return undefined;
   }
 }

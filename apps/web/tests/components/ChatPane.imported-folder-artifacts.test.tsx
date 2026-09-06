@@ -77,6 +77,18 @@ function file(name: string, kind: ProjectFile['kind'], mtime: number): ProjectFi
   };
 }
 
+describe('ChatPane starter prompts', () => {
+  // #5517: an empty conversation renders a clean pane — no 开始一个对话 title
+  // and no starter template cards.
+  it('renders no starter title or example cards in an empty conversation', () => {
+    renderPane({});
+
+    expect(screen.queryByText('chat.startTitle')).toBeNull();
+    expect(screen.queryByText('chat.example1Title')).toBeNull();
+    expect(document.querySelector('.chat-examples')).toBeNull();
+  });
+});
+
 describe('ChatPane imported folder artifacts', () => {
   it('replaces empty starter prompts with design artifact previews', () => {
     const onRequestOpenFile = vi.fn();

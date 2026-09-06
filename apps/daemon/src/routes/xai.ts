@@ -4,7 +4,7 @@
 // has to be different: xAI's PoC client_id locks the redirect_uri to
 // http://127.0.0.1:56121/callback (Hermes-issued), so we run a one-shot
 // loopback listener (xai-oauth-server.ts) for the redirect instead of
-// piggybacking on the daemon's main HTTP port. Once Open Design owns
+// piggybacking on the daemon's main HTTP port. Once OpenDesign owns
 // its own xAI client_id, this file shrinks back to the daemon-port
 // shape that mcp-routes.ts uses.
 //
@@ -27,20 +27,20 @@
 import type { Express } from 'express';
 
 import { proxyDispatcherRequestInit } from '../connectionTest.js';
-import { mediaConfigDir, resolveProviderConfig } from '../media-config.js';
+import { mediaConfigDir, resolveProviderConfig } from '../media/config.js';
 import { PendingAuthCache } from '../mcp-oauth.js';
-import { beginXAIAuth, completeXAIAuth } from '../xai-oauth.js';
+import { beginXAIAuth, completeXAIAuth } from '../integrations/xai-oauth.js';
 import {
   startCallbackListener,
   type CallbackListener,
   type CallbackOutcome,
-} from '../xai-oauth-server.js';
+} from '../integrations/xai-oauth-server.js';
 import {
   clearXAIToken,
   getXAIToken,
   setXAIToken,
   type StoredXAIToken,
-} from '../xai-tokens.js';
+} from '../integrations/xai-tokens.js';
 import type { RouteDeps } from '../server-context.js';
 
 export interface RegisterXaiRoutesDeps extends RouteDeps<'http' | 'paths'> {}

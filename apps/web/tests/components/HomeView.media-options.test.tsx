@@ -2,7 +2,31 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const workspaceContextMock = vi.hoisted(() => ({
+  state: {
+    context: null,
+    resourceReadIdentity: null,
+    loading: false,
+    identityChangePending: false,
+    failure: 'unsupported' as 'unsupported' | 'unavailable' | undefined,
+  },
+}));
+
+vi.mock('../../src/components/home-hero/PlaceholderCarousel', () => ({
+  PlaceholderCarousel: () => null,
+}));
+
+vi.mock('../../src/collab/useWorkspaceContext', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/collab/useWorkspaceContext')>();
+  return {
+    ...actual,
+    useWorkspaceContext: () => workspaceContextMock.state,
+  };
+});
+
 import { HomeView } from '../../src/components/HomeView';
+import { HOME_APPLY_TEMPLATE_EVENT } from '../../src/components/home-hero/chips';
 import type { DesignSystemSummary, PromptTemplateSummary } from '../../src/types';
 // HomeHero's prompt input migrated from a <textarea> + highlight overlay to the
 // same Lexical contenteditable the project composer uses. It still has
@@ -50,59 +74,124 @@ const PROMPT_TEMPLATES: PromptTemplateSummary[] = [
 afterEach(() => {
   vi.unstubAllGlobals();
   cleanup();
+  window.localStorage.clear();
+  window.sessionStorage.clear();
+  workspaceContextMock.state = {
+    context: null,
+    resourceReadIdentity: null,
+    loading: false,
+    identityChangePending: false,
+    failure: 'unsupported',
+  };
 });
 
 describe('HomeView media composer options', () => {
-  it('renders media option popovers outside the prompt editor (not clipped by it)', async () => {
-    stubFetch();
+  it('keeps the type tabs interactive while switching to Image', async () => {
+    const mediaApplyResponse = new Promise<Response>(() => undefined);
+    stubFetch({ mediaApplyResponse });
     renderHome();
 
-    await clickHomeRailChip('audio');
-    await openOption('audioType');
+    // Image lives behind the row's 更多 popover.
+    const more = await screen.findByTestId('home-hero-type-pills-more');
+    await waitFor(() => expect((more as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(more);
+    const imageTab = await screen.findByTestId('home-hero-type-pill-image-more');
+    expect((imageTab as HTMLButtonElement).disabled).toBe(false);
 
-    // The old clipped `.home-hero__prompt-highlight` overlay is gone with the
-    // textarea->Lexical migration. The equivalent invariant is that the option
-    // menu is not nested inside the prompt editor contenteditable (where the
-    // editor's own overflow could clip it); it lives in the footer options row.
-    const popover = screen.getByTestId('home-hero-footer-option-audioType-menu');
-    expect(screen.getByTestId('home-hero-input').contains(popover)).toBe(false);
-    expect(popover.closest('[data-testid="home-hero-footer-options"]')).not.toBeNull();
+    fireEvent.click(imageTab);
+
+    // Picking retires the row; the composer pill names the type and its clear
+    // stays live while the media apply is still pending, so the choice is
+    // reversible at every moment.
+    await waitFor(() => {
+      expect(screen.getByTestId('home-hero-template-trigger').textContent).toContain('Image');
+    });
+    expect(screen.getByTestId('home-hero-template-clear')).toBeTruthy();
   });
 
-  it('shows the correct option pills for Image, Video, HyperFrames, and Audio', async () => {
+  it('drops the Home composer mode picker and still submits in Design mode', async () => {
+    stubFetch();
+    const onSubmit = vi.fn();
+    renderHome({ onSubmit });
+
+    await screen.findByTestId('home-hero-input');
+
+    // 设计 is the app default AND the default SELECTION: the composer opens with
+    // the Design pill showing, so the mode the request will run in is stated on
+    // screen rather than hidden behind a neutral glyph. The submitted payload
+    // carries design either way.
+    // The 「设计」 pill was removed from the Home composer footer; Home creates
+    // keep running in the app default — design — which the payload states.
+    expect(screen.queryByTestId('composer-mode-trigger')).toBeNull();
+
+    await setHomePrompt('Create a clean loading animation');
+    await submitHome();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
+      prompt: 'Create a clean loading animation',
+      conversationMode: 'design',
+    });
+  });
+
+  it('renders the design-system popover outside the prompt editor (not clipped by it)', async () => {
     stubFetch();
     renderHome();
 
     await clickHomeRailChip('image');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-model')).toBeTruthy());
+    await openOption('designSystem');
+
+    // The shared DesignSystemPicker portals its popover to document.body, so it
+    // can never be clipped by the prompt editor's (or footer row's) overflow.
+    const popover = screen.getByTestId('project-ds-picker-popover');
+    expect(screen.getByTestId('home-hero-input').contains(popover)).toBe(false);
+    expect(document.body.contains(popover)).toBe(true);
+  });
+
+  it('surfaces the persistent design-system picker and no footer pills for Image/Video or HyperFrames/Audio', async () => {
+    stubFetch();
+    renderHome();
+
+    // The design-system picker is now the persistent row below the composer, so
+    // it is present for every kind and no longer a footer pill. Image/Video add
+    // no inline footer pills either; ratio / duration / model / resolution are
+    // asked for during the run (mirroring prototype/deck).
+    expect(screen.getByTestId('home-hero-design-system-trigger')).toBeTruthy();
+
+    await clickHomeRailChip('image');
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(promptIsEmpty()).toBe(true);
-    expect(screen.getByTestId('home-hero-footer-option-designSystem')).toBeTruthy();
-    expect(screen.getByTestId('home-hero-footer-option-ratio')).toBeTruthy();
-    expect(screen.getByTestId('home-hero-footer-option-resolution')).toBeTruthy();
+    expect(screen.queryByTestId('home-hero-footer-option-designSystem')).toBeNull();
+    expect(screen.queryByTestId('home-hero-footer-option-model')).toBeNull();
+    expect(screen.queryByTestId('home-hero-footer-option-ratio')).toBeNull();
+    expect(screen.queryByTestId('home-hero-footer-option-resolution')).toBeNull();
     expect(screen.queryByTestId('home-hero-footer-option-duration')).toBeNull();
 
     await clickHomeRailChip('video');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-duration')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(promptIsEmpty()).toBe(true);
-    expect(screen.getByTestId('home-hero-footer-option-designSystem')).toBeTruthy();
-    expect(screen.getByTestId('home-hero-footer-option-model')).toBeTruthy();
-    expect(screen.getByTestId('home-hero-footer-option-ratio')).toBeTruthy();
-    expect(screen.getByTestId('home-hero-footer-option-resolution')).toBeTruthy();
+    expect(screen.queryByTestId('home-hero-footer-option-designSystem')).toBeNull();
+    expect(screen.queryByTestId('home-hero-footer-option-model')).toBeNull();
+    expect(screen.queryByTestId('home-hero-footer-option-ratio')).toBeNull();
+    expect(screen.queryByTestId('home-hero-footer-option-duration')).toBeNull();
+    expect(screen.queryByTestId('home-hero-footer-option-resolution')).toBeNull();
 
+    // HyperFrames / Audio keep no pre-flight pills at all.
     await clickHomeRailChip('hyperframes');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-duration')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(promptIsEmpty()).toBe(true);
-    expect(screen.getByTestId('home-hero-footer-option-ratio')).toBeTruthy();
+    expect(screen.queryByTestId('home-hero-footer-option-ratio')).toBeNull();
+    expect(screen.queryByTestId('home-hero-footer-option-duration')).toBeNull();
     expect(screen.queryByTestId('home-hero-footer-option-model')).toBeNull();
 
     await clickHomeRailChip('audio');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-audioType')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(promptIsEmpty()).toBe(true);
-    expect(screen.getByTestId('home-hero-footer-option-audioType')).toBeTruthy();
-    expect(screen.getByTestId('home-hero-footer-option-model')).toBeTruthy();
-    expect(screen.getByTestId('home-hero-footer-option-duration')).toBeTruthy();
-    // Inline `{{slot}}` prompt widgets are gone; audio inputs live in the footer
-    // options row (asserted above), never injected into the prompt body.
+    expect(screen.queryByTestId('home-hero-footer-option-audioType')).toBeNull();
+    expect(screen.queryByTestId('home-hero-footer-option-model')).toBeNull();
+    expect(screen.queryByTestId('home-hero-footer-option-duration')).toBeNull();
+    // Inline `{{slot}}` prompt widgets are gone too; nothing is injected into
+    // the prompt body.
     expect(screen.queryByTestId('home-hero-prompt-slot-text')).toBeNull();
     expect(screen.queryByTestId('home-hero-prompt-slot-voice')).toBeNull();
   });
@@ -120,11 +209,13 @@ describe('HomeView media composer options', () => {
     await clickHomeRailChip('image');
     await openOption('designSystem');
 
-    const menu = screen.getByTestId('home-hero-footer-option-designSystem-menu');
-    expect(within(menu).getByText('Personal')).toBeTruthy();
-    expect(within(menu).getByRole('option', { name: /Acme Published System/i })).toBeTruthy();
-    expect(within(menu).queryByRole('option', { name: /Acme Draft System/i })).toBeNull();
-    expect(within(menu).getByText('Official preset')).toBeTruthy();
+    // The shared picker is a flat searchable list (no group headers). Home still
+    // filters to selectable systems: a published user system shows, a draft one
+    // does not, and built-in presets show.
+    const popover = screen.getByTestId('project-ds-picker-popover');
+    expect(within(popover).getByRole('option', { name: /Acme Published System/i })).toBeTruthy();
+    expect(within(popover).queryByRole('option', { name: /Acme Draft System/i })).toBeNull();
+    expect(within(popover).getByRole('option', { name: /Neutral Modern/i })).toBeTruthy();
   });
 
   it('opens the Home style picker without duplicate group key warnings', async () => {
@@ -154,56 +245,28 @@ describe('HomeView media composer options', () => {
     renderHome();
 
     await clickHomeRailChip('image');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-model')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(screen.queryByRole('dialog', { name: /replace current prompt/i })).toBeNull();
 
     await setHomePrompt('Make this prompt personally tuned.');
     await clickHomeRailChip('video');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-duration')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(screen.queryByRole('dialog', { name: /replace current prompt/i })).toBeNull();
   });
 
-  it('exposes only Speech and Sound effect in the Home Audio workflow', async () => {
+  it('keeps the prompt empty for Audio and never injects inline slot widgets', async () => {
     stubFetch();
     renderHome();
 
+    // Audio type / model / duration / voice are no longer footer pills — the
+    // agent asks for them during the run. The composer just stays empty.
     await clickHomeRailChip('audio');
-    await openOption('audioType');
-
-    const audioTypes = optionTexts(screen.getByTestId('home-hero-footer-option-audioType-menu'));
-    expect(audioTypes).toEqual(['Speech', 'Sound effect']);
-  });
-
-  it('keeps the prompt empty when switching Speech and Sound effect audio sources', async () => {
-    stubFetch();
-    renderHome();
-
-    await clickHomeRailChip('audio');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-audioType')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(promptIsEmpty()).toBe(true);
-    // Inline `{{slot}}` prompt widgets are gone post-migration; audio inputs are
-    // never injected into the prompt body, so the editor stays empty.
+    expect(screen.queryByTestId('home-hero-footer-option-audioType')).toBeNull();
+    expect(screen.queryByTestId('home-hero-footer-option-duration')).toBeNull();
     expect(screen.queryByTestId('home-hero-prompt-slot-prompt')).toBeNull();
     expect(screen.queryByTestId('home-hero-prompt-slot-text')).toBeNull();
-
-    await chooseOption('audioType', 'sfx', 'Sound effect');
-
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-audioType').textContent).toBe('Sound effect'));
-    expect(screen.queryByTestId('home-hero-prompt-slot-text')).toBeNull();
-    expect(screen.queryByTestId('home-hero-prompt-slot-prompt')).toBeNull();
-    expect(promptIsEmpty()).toBe(true);
-  });
-
-  it('keeps media option edits from back-filling the textarea', async () => {
-    stubFetch();
-    renderHome();
-
-    await clickHomeRailChip('audio');
-    await chooseOption('duration', '60', '60s');
-    expect(promptIsEmpty()).toBe(true);
-
-    await chooseOption('audioType', 'sfx', 'Sound effect');
-    expect(promptIsEmpty()).toBe(true);
   });
 
   it('hides the full selector grid for media surfaces', async () => {
@@ -211,22 +274,22 @@ describe('HomeView media composer options', () => {
     renderHome();
 
     await clickHomeRailChip('image');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-model')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(screen.queryByRole('combobox', { name: 'Template' })).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Model' })).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Ratio' })).toBeNull();
 
     await clickHomeRailChip('video');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-duration')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(screen.queryByRole('combobox', { name: 'Duration' })).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Template' })).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Model' })).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Ratio' })).toBeNull();
 
     await clickHomeRailChip('audio');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-audioType')).toBeTruthy());
-    // The old full editor grid is gone: "Audio type" is now a footer pill (a
-    // listbox-trigger button), not a native <select> combobox.
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
+    // No audio pills/combobox at all now — those questions moved to the agent.
+    expect(screen.queryByTestId('home-hero-footer-option-audioType')).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Audio type' })).toBeNull();
     // The inline plugin inputs form was removed from the Home composer, so the
     // non-footer "Text" input no longer renders as a free-standing control.
@@ -270,7 +333,7 @@ describe('HomeView media composer options', () => {
     const view = render(<HomeView {...props} />);
 
     await clickHomeRailChip('image');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-model')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     await setHomePrompt('Create a campaign image.');
     await submitHome();
     await waitFor(() => {
@@ -294,7 +357,7 @@ describe('HomeView media composer options', () => {
     });
   });
 
-  it('includes selected Home footer options in the submitted payload', async () => {
+  it('includes the selected design system in the submitted payload and omits asked-for media fields', async () => {
     stubFetch();
     const onSubmit = vi.fn();
     renderHome({
@@ -306,10 +369,8 @@ describe('HomeView media composer options', () => {
     });
 
     await clickHomeRailChip('video');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-duration')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     await chooseOption('designSystem', 'brand-alpha', 'Brand Alpha');
-    await chooseOption('ratio', '1:1', '1:1');
-    await chooseOption('duration', '10', '10s');
     setHomePrompt('Create a launch teaser.');
     await submitHome();
 
@@ -317,13 +378,77 @@ describe('HomeView media composer options', () => {
       expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
         prompt: 'Create a launch teaser.',
         designSystemId: 'brand-alpha',
-        projectMetadata: expect.objectContaining({
-          kind: 'video',
-          videoAspect: '1:1',
-          videoLength: 10,
+        // ratio / duration are no longer seeded into metadata — the agent asks.
+        projectMetadata: expect.not.objectContaining({
+          videoAspect: expect.anything(),
+          videoLength: expect.anything(),
         }),
       }));
     });
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      projectMetadata: expect.objectContaining({ kind: 'video' }),
+    }));
+  });
+
+  it('strips deferred media settings from the forwarded pluginInputs', async () => {
+    // The footer pills for ratio / duration / model / resolution / audioType /
+    // voice were removed so the agent asks for them via question-form during
+    // the run. `buildHomeMediaComposer` still seeds those defaults into the
+    // composer state, so submission must strip them before forwarding —
+    // otherwise the run arrives with `ratio: 16:9` / `duration: 5` baked in and
+    // the first-turn discovery flow has nothing left to ask.
+    stubFetch();
+    const onSubmit = vi.fn();
+    renderHome({ onSubmit });
+
+    await clickHomeRailChip('video');
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
+    await setHomePrompt('Create a launch teaser.');
+    await submitHome();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    const [{ pluginInputs }] = onSubmit.mock.calls[0] as [{ pluginInputs?: Record<string, unknown> }];
+    expect(pluginInputs).toBeTruthy();
+    for (const deferred of ['model', 'ratio', 'resolution', 'duration', 'audioType', 'voice']) {
+      expect(pluginInputs).not.toHaveProperty(deferred);
+    }
+  });
+
+  it('resolves the run-facing snapshot from inputs with the deferred media settings stripped', async () => {
+    // Regression at the prompt/run boundary: the daemon renders `## Plugin
+    // inputs` verbatim from `snapshot.inputs` and tells the agent not to re-ask
+    // about anything listed there. The snapshot's inputs come from the body of
+    // the `/apply` call that yields `appliedPluginSnapshotId`, so submission
+    // must re-apply with the deferred footer/media fields stripped — otherwise
+    // the run prompt carries `ratio: 16:9` / `duration: 5` / `model: …` and the
+    // first-turn question-form discovery flow stays suppressed even though
+    // `onSubmit.pluginInputs` was stripped.
+    const fetchMock = stubFetch();
+    const onSubmit = vi.fn();
+    renderHome({ onSubmit });
+
+    await clickHomeRailChip('video');
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
+    await setHomePrompt('Create a launch teaser.');
+    await submitHome();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    const [{ appliedPluginSnapshotId }] = onSubmit.mock.calls[0] as [{ appliedPluginSnapshotId?: string | null }];
+    expect(appliedPluginSnapshotId).toBe('snap-od-media-generation');
+
+    // The apply call that produced the forwarded snapshot is the LAST media
+    // apply: its inputs become `snapshot.inputs`, so they must already be free
+    // of the deferred settings.
+    const applyCalls = fetchMock.mock.calls.filter(([url]) => (
+      typeof url === 'string' && url.includes('/api/plugins/od-media-generation/apply')
+    ));
+    expect(applyCalls.length).toBeGreaterThan(0);
+    const snapshotInputs = JSON.parse(String(applyCalls.at(-1)?.[1]?.body)).inputs as Record<string, unknown>;
+    for (const deferred of ['model', 'ratio', 'resolution', 'duration', 'audioType', 'voice']) {
+      expect(snapshotInputs).not.toHaveProperty(deferred);
+    }
+    // The required brief inputs the apply validates against survive the strip.
+    expect(snapshotInputs).toHaveProperty('subject');
   });
 
   it('submits HyperFrames as a video project with the hyperframes-html model', async () => {
@@ -333,130 +458,167 @@ describe('HomeView media composer options', () => {
 
     await clickHomeRailChip('hyperframes');
     await setHomePrompt('Create a HyperFrames launch bumper.');
-    await waitFor(() => expect((screen.getByTestId('home-hero-submit') as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(screen.getByTestId('home-hero-submit'));
+    // submit() re-applies the plugin from the deferral-stripped inputs before
+    // forwarding, so onSubmit fires after the apply round-trip resolves.
+    await submitHome();
 
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
       projectKind: 'video',
       projectMetadata: expect.objectContaining({
         kind: 'video',
         videoModel: 'hyperframes-html',
       }),
-    }));
+    })));
   });
 
-  it('does not add an ElevenLabs voice prompt when only the Audio tab is selected', async () => {
-    stubFetch();
+  it('does not wait for rich Workspace context after a directory-scoped plugin was selected', async () => {
+    const fetchMock = stubFetch({ teamMediaPlugin: true });
+    const onSubmit = vi.fn();
+    const props = homeProps({ onSubmit });
+    const view = render(<HomeView {...props} />);
+
+    await clickHomeRailChip('video');
+    await setHomePrompt('Create a directory-scoped launch teaser.');
+    workspaceContextMock.state = {
+      context: null,
+      resourceReadIdentity: null,
+      loading: true,
+      identityChangePending: false,
+      failure: undefined,
+    };
+    view.rerender(<HomeView {...props} />);
+    await submitHome();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const localApply = fetchMock.mock.calls.filter(([url]) => (
+      typeof url === 'string'
+      && url.includes('/api/plugins/od-media-generation/apply')
+    )).at(-1);
+    expect(localApply).toBeTruthy();
+    expect(new Headers(localApply?.[1]?.headers).has('x-od-workspace-id')).toBe(false);
+  });
+
+  it('keeps bundled plugins usable when identity is pending and the directory is empty', async () => {
+    const fetchMock = stubFetch({ emptyWorkspaceDirectory: true });
+    const onSubmit = vi.fn();
+    const props = homeProps({ onSubmit });
+    const view = render(<HomeView {...props} />);
+
+    await clickHomeRailChip('video');
+    await setHomePrompt('Create a launch teaser after signing out.');
+    const applyCountBeforeSubmit = fetchMock.mock.calls.filter(([url]) => (
+      typeof url === 'string' && url.includes('/api/plugins/od-media-generation/apply')
+    )).length;
+    workspaceContextMock.state = {
+      context: null,
+      resourceReadIdentity: null,
+      loading: false,
+      identityChangePending: true,
+      failure: undefined,
+    };
+    view.rerender(<HomeView {...props} />);
+    await submitHome();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const applyCountAfterSubmit = fetchMock.mock.calls.filter(([url]) => (
+      typeof url === 'string' && url.includes('/api/plugins/od-media-generation/apply')
+    )).length;
+    expect(applyCountAfterSubmit).toBe(applyCountBeforeSubmit + 1);
+    const submittedApply = fetchMock.mock.calls.filter(([url]) => (
+      typeof url === 'string' && url.includes('/api/plugins/od-media-generation/apply')
+    )).at(-1);
+    expect(new Headers(submittedApply?.[1]?.headers).has('x-od-workspace-id')).toBe(false);
+  });
+
+  it('does not wait for directory discovery when applying a bundled plugin', async () => {
+    const fetchMock = stubFetch({ workspaceDirectoryStatus: 503 });
+    const onSubmit = vi.fn();
+    const props = homeProps({ onSubmit });
+    const view = render(<HomeView {...props} />);
+
+    await clickHomeRailChip('video');
+    await setHomePrompt('Create a local launch teaser while identity is unavailable.');
+    workspaceContextMock.state = {
+      context: null,
+      resourceReadIdentity: null,
+      loading: true,
+      identityChangePending: true,
+      failure: 'unavailable',
+    };
+    view.rerender(<HomeView {...props} />);
+    const directoryReadsBeforeSubmit = fetchMock.mock.calls.filter(([url]) => (
+      typeof url === 'string' && url === '/api/workspace/directory'
+    )).length;
+    await submitHome();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const directoryReadsAfterSubmit = fetchMock.mock.calls.filter(([url]) => (
+      typeof url === 'string' && url === '/api/workspace/directory'
+    )).length;
+    expect(directoryReadsAfterSubmit).toBe(directoryReadsBeforeSubmit);
+    const submittedApply = fetchMock.mock.calls.filter(([url]) => (
+      typeof url === 'string' && url.includes('/api/plugins/od-media-generation/apply')
+    )).at(-1);
+    expect(new Headers(submittedApply?.[1]?.headers).has('x-od-workspace-id')).toBe(false);
+  });
+
+  it('does not expose a team plugin for unscoped apply while workspace identity is pending', async () => {
+    const fetchMock = stubFetch({
+      emptyWorkspaceDirectory: true,
+      teamMediaPlugin: true,
+    });
+    workspaceContextMock.state = {
+      context: null,
+      resourceReadIdentity: null,
+      loading: false,
+      identityChangePending: true,
+      failure: undefined,
+    };
     renderHome();
 
-    await clickHomeRailChip('audio');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-model')).toBeTruthy());
-    // The inline `{{slot}}` voice widget is gone; the real intent here is that
-    // selecting an ElevenLabs voice never back-fills the prompt editor body
-    // (asserted via promptIsEmpty below).
-    expect(screen.queryByTestId('home-hero-prompt-slot-voice')).toBeNull();
-
-    await chooseOption('model', 'elevenlabs-v3');
-
-    expect(promptIsEmpty()).toBe(true);
-    expect(screen.queryByTestId('home-hero-prompt-slot-voice')).toBeNull();
+    await screen.findByTestId('home-hero-input');
+    expect(
+      (screen.getByTestId('home-hero-type-pill-deck') as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => (
+      typeof url === 'string' && url.includes('/api/plugins/od-media-generation/apply')
+    ))).toBe(false);
   });
 
-  it('keeps the prompt empty when ElevenLabs returns no voices', async () => {
-    stubFetch({ elevenLabsVoices: [] });
-    renderHome();
-
-    await clickHomeRailChip('audio');
-    await chooseOption('model', 'elevenlabs-v3');
-
-    expect(promptIsEmpty()).toBe(true);
-    expect(screen.queryByTestId('home-hero-prompt-slot-voice')).toBeNull();
-  });
-
-  it('keeps the prompt empty when ElevenLabs voice lookup fails', async () => {
-    stubFetch({ elevenLabsVoiceError: 'no ElevenLabs API key' });
-    renderHome();
-
-    await clickHomeRailChip('audio');
-    await chooseOption('model', 'elevenlabs-v3');
-
-    expect(promptIsEmpty()).toBe(true);
-    expect(screen.queryByTestId('home-hero-prompt-slot-voice')).toBeNull();
-  });
-
-  it('caps Sound effect duration options and normalizes stale speech durations', async () => {
-    stubFetch();
+  it('keeps a locally catalogued plugin usable until local reconciliation removes it', async () => {
+    const fetchMock = stubFetch({
+      emptyWorkspaceDirectory: true,
+      teamMediaPlugin: true,
+    });
     const onSubmit = vi.fn();
+    workspaceContextMock.state = {
+      context: null,
+      resourceReadIdentity: null,
+      loading: false,
+      identityChangePending: false,
+      failure: undefined,
+    };
     renderHome({ onSubmit });
 
-    await clickHomeRailChip('audio');
-    await chooseOption('duration', '60', '60s');
-    expect(promptIsEmpty()).toBe(true);
-
-    await chooseOption('audioType', 'sfx', 'Sound effect');
-
-    expect(promptIsEmpty()).toBe(true);
-    await openOption('duration');
-    const durationOptions = optionTexts(screen.getByTestId('home-hero-footer-option-duration-menu'));
-    expect(durationOptions).toEqual(['5s', '10s', '15s', '30s']);
-
-    await setHomePrompt('Create a crisp product notification sound.');
-    fireEvent.click(screen.getByTestId('home-hero-submit'));
-    await waitFor(() => {
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
-        pluginInputs: expect.objectContaining({ audioType: 'sfx', duration: 30 }),
-      }));
-    });
+    await clickHomeRailChip('video');
+    await setHomePrompt('Create a launch teaser.');
+    await submitHome();
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const apply = fetchMock.mock.calls.find(([url]) => (
+      typeof url === 'string' && url.includes('/api/plugins/od-media-generation/apply')
+    ));
+    expect(apply).toBeTruthy();
+    expect(new Headers(apply?.[1]?.headers).has('x-od-workspace-id')).toBe(false);
   });
 
-  it('recomputes media metadata from textarea edits at submit time', async () => {
-    stubFetch();
-    const onSubmit = vi.fn();
-    renderHome({ onSubmit });
-
-    await clickHomeRailChip('audio');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-duration')).toBeTruthy());
-    await setHomePrompt(
-      "Create premium product-studio audio from the user's brief using minimax-tts for 30 seconds: polished, restrained, clear, and brand-ready.",
-    );
-    fireEvent.click(screen.getByTestId('home-hero-submit'));
-
-    await waitFor(() => {
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
-        pluginInputs: expect.objectContaining({ duration: 30 }),
-        projectMetadata: expect.objectContaining({ audioDuration: 30 }),
-      }));
-    });
-  });
-
-  it('uses the Audio text input as the audio source and plugin subject', async () => {
-    stubFetch();
-    const onSubmit = vi.fn();
-    renderHome({ onSubmit });
-
-    await clickHomeRailChip('audio');
-    await waitFor(() => expect(screen.getByTestId('home-hero-footer-option-duration')).toBeTruthy());
-    await setHomePrompt(
-      'Create premium product-studio audio from Welcome to Open Design. using minimax-tts for 10 seconds: polished, restrained, clear, and brand-ready.',
-    );
-
-    fireEvent.click(screen.getByTestId('home-hero-submit'));
-
-    await waitFor(() => {
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
-        pluginInputs: expect.objectContaining({
-          subject: 'Welcome to Open Design.',
-          text: 'Welcome to Open Design.',
-        }),
-      }));
-    });
-  });
-
-  it('preserves od-media-generation required inputs when applying media chips', async () => {
+  it('preserves od-media-generation required inputs when submitting media chips', async () => {
     const fetchMock = stubFetch();
-    renderHome();
+    const onSubmit = vi.fn();
+    renderHome({ onSubmit });
 
     await clickHomeRailChip('image');
+    await setHomePrompt('Create a campaign image.');
+    await submitHome();
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url, init]) => (
@@ -473,7 +635,6 @@ describe('HomeView media composer options', () => {
       subject: 'a polished product concept',
       style: 'cinematic, high-quality, on-brand',
       aspect: '16:9',
-      ratio: '16:9',
     });
   });
 });
@@ -493,17 +654,46 @@ function homeProps(overrides: Partial<React.ComponentProps<typeof HomeView>> = {
   };
 }
 
-function stubFetch(options: { elevenLabsVoices?: Array<{ voiceId: string; name: string; category?: string }>; elevenLabsVoiceError?: string } = {}) {
+function stubFetch(options: {
+  elevenLabsVoices?: Array<{ voiceId: string; name: string; category?: string }>;
+  elevenLabsVoiceError?: string;
+  emptyWorkspaceDirectory?: boolean;
+  mediaApplyResponse?: Promise<Response>;
+  teamMediaPlugin?: boolean;
+  workspaceDirectoryStatus?: number;
+} = {}) {
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
     cb(0);
     return 0;
   });
+  const mediaPlugin = options.teamMediaPlugin
+    ? { ...MEDIA_PLUGIN, source: 'team:plugin:workspace-a:od-media-generation' }
+    : MEDIA_PLUGIN;
   const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
     if (typeof url === 'string' && url === '/api/plugins') {
-      return json({ plugins: [MEDIA_PLUGIN, PROTOTYPE_PLUGIN, HYPERFRAMES_PLUGIN] });
+      return json({ plugins: [mediaPlugin, PROTOTYPE_PLUGIN, HYPERFRAMES_PLUGIN] });
     }
     if (typeof url === 'string' && url === '/api/mcp/servers') {
       return json({ servers: [], templates: [] });
+    }
+    if (typeof url === 'string' && url === '/api/workspace/directory') {
+      if (options.workspaceDirectoryStatus) {
+        return json({ error: 'workspace_unavailable' }, options.workspaceDirectoryStatus);
+      }
+      return json({
+        items: options.emptyWorkspaceDirectory
+          ? []
+          : [{
+              workspaceId: 'workspace-cold',
+              workspaceName: 'Cold workspace',
+              workspaceType: 'team',
+              workspaceMemberId: 'member-cold',
+              role: 'member',
+              memberStatus: 'active',
+              lifecycleState: 'active',
+            }],
+        activeWorkspaceId: null,
+      });
     }
     if (typeof url === 'string' && url.includes('/apply')) {
       const pluginId = url.split('/api/plugins/')[1]?.split('/apply')[0] ?? 'od-media-generation';
@@ -513,6 +703,7 @@ function stubFetch(options: { elevenLabsVoices?: Array<{ voiceId: string; name: 
         if (!inputs.subject) {
           return json({ error: 'missing_inputs', fields: ['subject'] }, 422);
         }
+        if (options.mediaApplyResponse) return options.mediaApplyResponse;
       }
       return json(applyResult(pluginId));
     }
@@ -533,18 +724,45 @@ function stubFetch(options: { elevenLabsVoices?: Array<{ voiceId: string; name: 
 }
 
 async function openOption(name: string) {
-  // The inline `{{slot}}` prompt-widget path (home-hero-prompt-slot-*) is gone;
-  // media options now always open from the footer options row.
+  // The design-system picker moved out of the footer to the persistent row
+  // below the composer; it renders the shared DesignSystemPicker, whose popover
+  // is portaled to document.body as `project-ds-picker-popover`. Any other
+  // footer field still opens from the inline FooterSelectOption `-menu`.
+  if (name === 'designSystem') {
+    fireEvent.click(await screen.findByTestId('home-hero-design-system-trigger'));
+    await waitFor(() => expect(screen.getByTestId('project-ds-picker-popover')).toBeTruthy());
+    return;
+  }
   fireEvent.click(await screen.findByTestId(`home-hero-footer-option-${name}`));
   await waitFor(() => expect(screen.getByTestId(`home-hero-footer-option-${name}-menu`)).toBeTruthy());
 }
 
 async function clickHomeRailChip(id: string) {
-  const activeChip = screen.queryByTestId('home-hero-active-type-chip');
-  if (activeChip) {
-    fireEvent.click(activeChip);
+  // A type already picked retires the row, and the pill has no menu — so
+  // switching means clearing back to the empty state first.
+  const clear = screen.queryByTestId('home-hero-template-clear');
+  if (clear) fireEvent.click(clear);
+  const lead = await screen.findByTestId('home-hero-type-pill-prototype');
+  await waitFor(() => expect((lead as HTMLButtonElement).disabled).toBe(false));
+  let pill = screen.queryByTestId(`home-hero-type-pill-${id}`);
+  if (!pill) {
+    // Types behind 更多 mount only while its popover is open.
+    fireEvent.click(screen.getByTestId('home-hero-type-pills-more'));
+    pill = screen.queryByTestId(`home-hero-type-pill-${id}-more`);
   }
-  fireEvent.click(await screen.findByTestId(`home-hero-rail-${id}`));
+  if (pill) {
+    fireEvent.click(pill);
+    return;
+  }
+  // Types outside the fixed row (media, HyperFrames, …) are reached the way
+  // the workspace tabs-bar hands one off: the apply-template window event,
+  // which HomeHero applies exactly as a row click.
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await act(async () => {
+    window.dispatchEvent(
+      new CustomEvent(HOME_APPLY_TEMPLATE_EVENT, { detail: { chipId: id } }),
+    );
+  });
 }
 
 // Drive the Lexical editor and let the OnChange -> onPromptChange -> setPrompt
@@ -564,10 +782,6 @@ async function submitHome() {
   fireEvent.click(screen.getByTestId('home-hero-submit'));
 }
 
-function optionTexts(select: HTMLElement): string[] {
-  return within(select).getAllByRole('option').map((option) => option.textContent ?? '');
-}
-
 // An empty Lexical editor serializes its placeholder <br> as a lone '\n', so the
 // composer's clear-empty convention is `text.trim() === ''` (formerly the
 // textarea's `.value === ''`).
@@ -577,6 +791,17 @@ function promptIsEmpty(): boolean {
 
 async function chooseOption(name: string, value: string, label = value) {
   await openOption(name);
+  if (name === 'designSystem') {
+    // The shared DesignSystemPicker selects on mouseDown from its portaled list.
+    const popover = screen.getByTestId('project-ds-picker-popover');
+    const option = within(popover).getAllByRole('option').find((item) => {
+      const text = item.textContent ?? '';
+      return text.includes(label) || text.includes(value);
+    });
+    if (!option) throw new Error(`No option "${label}" for ${name}`);
+    fireEvent.mouseDown(option);
+    return;
+  }
   // The inline `<select>` prompt-widget path (home-hero-prompt-option-*-select)
   // is gone; selection now always happens via the footer options menu.
   const menu = screen.getByTestId(`home-hero-footer-option-${name}-menu`);

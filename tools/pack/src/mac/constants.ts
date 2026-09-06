@@ -1,12 +1,14 @@
 export const PRODUCT_NAME = "Open Design";
 
 export const INTERNAL_PACKAGES = [
+  { directory: "packages/release", name: "@open-design/release" },
   { directory: "packages/components", name: "@open-design/components" },
   { directory: "packages/contracts", name: "@open-design/contracts" },
   { directory: "packages/registry-protocol", name: "@open-design/registry-protocol" },
   { directory: "packages/sidecar-proto", name: "@open-design/sidecar-proto" },
-  { directory: "packages/sidecar", name: "@open-design/sidecar" },
+  { directory: "packages/launcher-proto", name: "@open-design/launcher-proto" },
   { directory: "packages/platform", name: "@open-design/platform" },
+  { directory: "packages/sidecar", name: "@open-design/sidecar" },
   { directory: "packages/download", name: "@open-design/download" },
   { directory: "packages/host", name: "@open-design/host" },
   { directory: "packages/agui-adapter", name: "@open-design/agui-adapter" },

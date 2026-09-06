@@ -1,19 +1,28 @@
 import type { SVGProps } from 'react';
 
+import { REMIX_ICON_PATHS } from './remix-icon-paths';
+
 export type IconName =
   | 'alert-triangle'
   | 'arrow-left'
   | 'arrow-up'
+  | 'arrow-up-fill'
+  | 'artboard'
   | 'attach'
+  | 'bar-chart-box'
   | 'bell'
   | 'blocks'
+  | 'brain'
   | 'check'
   | 'chevron-down'
+  | 'chevron-up'
   | 'chevron-left'
   | 'chevron-right'
   | 'close'
   | 'copy'
+  | 'crop'
   | 'comment'
+  | 'dashboard'
   | 'discord'
   | 'download'
   | 'draw'
@@ -23,7 +32,12 @@ export type IconName =
   | 'eye-off'
   | 'file'
   | 'file-code'
+  | 'file-text'
+  | 'inbox-archive'
+  | 'inbox-unarchive'
   | 'folder'
+  | 'folder-2'
+  | 'folder-transfer'
   | 'folder-filled'
   | 'fork'
   | 'github'
@@ -40,35 +54,56 @@ export type IconName =
   | 'import'
   | 'info'
   | 'kanban'
+  | 'key'
   | 'layers-filled'
   | 'languages'
+  | 'layout'
+  | 'layout-grid-2'
   | 'lightbulb'
+  | 'arrow-right'
   | 'link'
+  | 'lock'
+  | 'mail'
+  | 'log-in'
+  | 'log-out'
   | 'integrations-filled'
+  | 'maximize'
   | 'mic'
+  | 'minimize'
   | 'minus'
   | 'more-horizontal'
   | 'orbit'
+  | 'remix-loop'
+  | 'make-same'
   | 'paint-bucket'
+  | 'layout-left'
+  | 'layout-right'
   | 'panel-left'
+  | 'nodes'
   | 'palette'
   | 'palette-filled'
   | 'pencil'
   | 'plus'
   | 'plus-filled'
   | 'puzzle'
+  | 'slides'
   | 'star'
+  | 'swap'
+  | 'swatchbook'
   | 'play'
   | 'present'
   | 'refresh'
   | 'reload'
+  | 'robot'
   | 'search'
   | 'send'
   | 'settings'
   | 'share'
   | 'sliders'
+  | 'smartphone'
   | 'spinner'
   | 'sparkles'
+  | 'sparkles-filled'
   | 'stop'
   | 'sun'
   | 'moon'
@@ -76,9 +111,14 @@ export type IconName =
   | 'terminal'
   | 'thumbs-down'
   | 'thumbs-up'
+  | 'translate'
   | 'tweaks'
+  | 'undo'
+  | 'redo'
   | 'upload'
+  | 'users'
   | 'trash'
+  | 'video-ai'
   | 'volume'
   | 'zoom-in'
   | 'zoom-out';
@@ -88,13 +128,155 @@ interface Props extends Omit<SVGProps<SVGSVGElement>, 'name'> {
   size?: number | string;
 }
 
+// #5517 swapped the app's icon language to Remix Icon (the demo renders
+// `ri-*` font glyphs). Packaged od:// documents cannot load url() fonts at
+// all, so we render the same glyphs as inline SVG path data instead
+// (extracted from remixicon@4.9.1 into remix-icon-paths.ts). Names missing
+// here fall back to the legacy hand-drawn stroke set below.
+const REMIX_ICON: Partial<Record<IconName, string>> = {
+  'alert-triangle': 'error-warning-line',
+  'arrow-left': 'arrow-left-line',
+  'arrow-right': 'arrow-right-line',
+  'arrow-up': 'arrow-up-line',
+  artboard: 'artboard-2-line',
+  attach: 'attachment-2',
+  'bar-chart-box': 'bar-chart-box-line',
+  bell: 'notification-3-line',
+  blocks: 'layout-grid-line',
+  brain: 'brain-line',
+  check: 'check-line',
+  'chevron-down': 'arrow-down-s-line',
+  'chevron-up': 'arrow-up-s-line',
+  'chevron-left': 'arrow-left-s-line',
+  'chevron-right': 'arrow-right-s-line',
+  close: 'close-line',
+  comment: 'chat-1-line',
+  copy: 'file-copy-line',
+  dashboard: 'dashboard-line',
+  discord: 'discord-line',
+  download: 'download-2-line',
+  draw: 'brush-line',
+  edit: 'edit-line',
+  'external-link': 'external-link-line',
+  eye: 'eye-line',
+  'eye-off': 'eye-off-line',
+  file: 'file-line',
+  'file-code': 'file-code-line',
+  'file-text': 'file-text-line',
+  'inbox-archive': 'inbox-archive-line',
+  'inbox-unarchive': 'inbox-unarchive-line',
+  folder: 'folder-line',
+  'folder-2': 'folder-2-line',
+  'folder-transfer': 'folder-transfer-line',
+  'folder-filled': 'folder-fill',
+  fork: 'git-branch-line',
+  github: 'github-line',
+  'github-filled': 'github-fill',
+  globe: 'global-line',
+  grid: 'grid-line',
+  'grip-vertical': 'drag-move-line',
+  hammer: 'hammer-line',
+  'help-circle': 'question-line',
+  history: 'history-line',
+  home: 'home-5-line',
+  'home-filled': 'home-5-fill',
+  image: 'image-line',
+  import: 'upload-2-line',
+  info: 'information-line',
+  'integrations-filled': 'puzzle-fill',
+  kanban: 'kanban-view',
+  key: 'key-2-line',
+  languages: 'translate-2',
+  'layers-filled': 'stack-fill',
+  layout: 'layout-line',
+  'layout-grid-2': 'layout-grid-2-line',
+  lightbulb: 'lightbulb-line',
+  link: 'link',
+  lock: 'lock-line',
+  'log-in': 'login-circle-line',
+  'log-out': 'logout-box-r-line',
+  mail: 'mail-line',
+  maximize: 'fullscreen-line',
+  mic: 'mic-line',
+  minimize: 'fullscreen-exit-line',
+  minus: 'subtract-line',
+  moon: 'moon-line',
+  'more-horizontal': 'more-line',
+  orbit: 'planet-line',
+  'paint-bucket': 'paint-line',
+  palette: 'palette-line',
+  'palette-filled': 'palette-fill',
+  'panel-left': 'side-bar-line',
+  pencil: 'pencil-line',
+  play: 'play-line',
+  plus: 'add-line',
+  'plus-filled': 'add-fill',
+  // 幻灯片 reads as the keynote lectern, not the screen-with-bullets glyph
+  // (product pick). Every `present` site means "slide deck" — the Home deck
+  // chip, the card's kind tile, Community's Slides facet, the workspace's
+  // slides tab — so the swap is made once here rather than per surface.
+  present: 'keynote-line',
+  puzzle: 'puzzle-line',
+  refresh: 'refresh-line',
+  reload: 'reset-left-line',
+  robot: 'robot-2-line',
+  search: 'search-line',
+  send: 'send-plane-2-line',
+  settings: 'settings-3-line',
+  share: 'share-forward-line',
+  sliders: 'equalizer-line',
+  smartphone: 'smartphone-line',
+  sparkles: 'sparkling-line',
+  'sparkles-filled': 'sparkling-2-fill',
+  spinner: 'loader-4-line',
+  star: 'star-line',
+  stop: 'stop-line',
+  sun: 'sun-line',
+  'sun-moon': 'sun-foggy-line',
+  swap: 'swap-2-fill',
+  swatchbook: 'artboard-line',
+  terminal: 'terminal-box-line',
+  'thumbs-down': 'thumb-down-line',
+  'thumbs-up': 'thumb-up-line',
+  trash: 'delete-bin-line',
+  translate: 'translate',
+  tweaks: 'sound-module-line',
+  upload: 'upload-2-line',
+  users: 'group-line',
+  'video-ai': 'video-ai-line',
+  volume: 'volume-up-line',
+  'zoom-in': 'zoom-in-line',
+  'zoom-out': 'zoom-out-line',
+};
+
 /**
- * Lightweight inline-SVG icon set tuned to the design system. Stroke-based
- * (Feather/Lucide style) so they pair cleanly with `currentColor` and adopt
- * the local text color. Use sparingly inside buttons that already have
- * accessible labels — set `aria-hidden` by default.
+ * Lightweight inline-SVG icon set tuned to the design system. Most names map
+ * to Remix Icon glyphs (#5517 icon language, inlined for od://); the
+ * remaining stroke-based (Feather/Lucide style) drawings below are the
+ * fallback for names Remix doesn't cover. Use sparingly inside buttons that
+ * already have accessible labels — set `aria-hidden` by default.
  */
 export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
+  const remixGlyph = REMIX_ICON[name];
+  const remixPath = remixGlyph ? REMIX_ICON_PATHS[remixGlyph] : undefined;
+  if (remixPath) {
+    const { className, ...restProps } = rest;
+    return (
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        aria-hidden
+        focusable="false"
+        className={`od-icon${name === 'spinner' ? ' icon-spin' : ''}${className ? ` ${className}` : ''}`}
+        {...restProps}
+      >
+        <path d={remixPath} />
+      </svg>
+    );
+  }
+  const { className: strokeClassName, ...strokeRest } = rest;
   const common = {
     width: size,
     height: size,
@@ -106,7 +288,13 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
     strokeLinejoin: 'round' as const,
     'aria-hidden': true,
     focusable: 'false' as const,
-    ...rest,
+    // Every glyph carries `od-icon`, the hook ~35 selectors across
+    // entry-layout / design-files / plus-menu / recent-projects style against.
+    // Moving off the icon FONT to inline SVG (packaged `od://` can't load
+    // url() fonts) dropped this class, which silently killed all of them —
+    // several stylesheets already carry `> svg` workarounds noting as much.
+    className: `od-icon${strokeClassName ? ` ${strokeClassName}` : ''}`,
+    ...strokeRest,
   };
   switch (name) {
     case 'alert-triangle':
@@ -135,6 +323,83 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
       return (
         <svg {...common}>
           <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+        </svg>
+      );
+    // Up-arrow lifted from the supplied send mark (Group 2147224569.svg, the
+    // successor to 发送按钮.svg): two barbs and a shaft, drawn as bars with
+    // fully rounded caps (`rx` = half the bar width) rather than one solid
+    // triangle. The file ships the whole button — near-black squircle, green
+    // arrow — but `.home-hero__submit` / `.composer-send` already paint that
+    // chrome from `--send-ink` / `--send-ground` at the file's own 32px box
+    // and rx 14, so only the arrow lives here.
+    //
+    // Unlike the rest of the set this keeps the source's 32 viewBox and its
+    // literal rect geometry instead of being rescaled onto the shared 24 grid:
+    // both callers render it at size 32, so the glyph lands pixel-exact on the
+    // button it was drawn for, and the rounded caps survive verbatim.
+    case 'arrow-up-fill':
+      return (
+        <svg {...common} viewBox="0 0 32 32" fill="currentColor" stroke="none">
+          <rect
+            x="16.1284"
+            y="9"
+            width="2.01621"
+            height="10.081"
+            rx="1.0081"
+            transform="rotate(45 16.1284 9)"
+          />
+          <rect
+            x="23.2568"
+            y="16.1289"
+            width="2.01621"
+            height="10.081"
+            rx="1.0081"
+            transform="rotate(135 23.2568 16.1289)"
+          />
+          <rect
+            x="17.0573"
+            y="22"
+            width="2"
+            height="12"
+            rx="1"
+            transform="rotate(-180 17.0573 22)"
+          />
+        </svg>
+      );
+    // Remix `artboard-2-line` (4.9.1), filled-path style like the *-filled set.
+    case 'artboard':
+      return (
+        <svg {...common} fill="currentColor" stroke="none">
+          <path d="M8 8V16H16V8H8ZM6 6H18V18H6V6ZM6 2H8V5H6V2ZM6 19H8V22H6V19ZM2 6H5V8H2V6ZM2 16H5V18H2V16ZM19 6H22V8H19V6ZM19 16H22V18H19V16ZM16 2H18V5H16V2ZM16 19H18V22H16V19Z" />
+        </svg>
+      );
+    // Remix `dashboard-line` (4.9.1).
+    case 'dashboard':
+      return (
+        <svg {...common} fill="currentColor" stroke="none">
+          <path d="M14 21C13.4477 21 13 20.5523 13 20V12C13 11.4477 13.4477 11 14 11H20C20.5523 11 21 11.4477 21 12V20C21 20.5523 20.5523 21 20 21H14ZM4 13C3.44772 13 3 12.5523 3 12V4C3 3.44772 3.44772 3 4 3H10C10.5523 3 11 3.44772 11 4V12C11 12.5523 10.5523 13 10 13H4ZM9 11V5H5V11H9ZM4 21C3.44772 21 3 20.5523 3 20V16C3 15.4477 3.44772 15 4 15H10C10.5523 15 11 15.4477 11 16V20C11 20.5523 10.5523 21 10 21H4ZM5 19H9V17H5V19ZM15 19H19V13H15V19ZM13 4C13 3.44772 13.4477 3 14 3H20C20.5523 3 21 3.44772 21 4V8C21 8.55228 20.5523 9 20 9H14C13.4477 9 13 8.55228 13 8V4ZM15 5V7H19V5H15Z" />
+        </svg>
+      );
+    // Remix `bar-chart-box-line` (4.9.1).
+    case 'bar-chart-box':
+      return (
+        <svg {...common} fill="currentColor" stroke="none">
+          <path d="M3 3H21C21.5523 3 22 3.44772 22 4V20C22 20.5523 21.5523 21 21 21H3C2.44772 21 2 20.5523 2 20V4C2 3.44772 2.44772 3 3 3ZM4 5V19H20V5H4ZM7 13H9V17H7V13ZM11 7H13V17H11V7ZM15 10H17V17H15V10Z" />
+        </svg>
+      );
+    // Remix `video-ai-line` (4.9.1).
+    case 'video-ai':
+      return (
+        <svg {...common} fill="currentColor" stroke="none">
+          <path d="M19.7134 8.12811L19.4668 8.69379C19.2864 9.10792 18.7136 9.10792 18.5331 8.69379L18.2866 8.12811C17.8471 7.11947 17.0555 6.31641 16.0677 5.87708L15.308 5.53922C14.8973 5.35653 14.8973 4.75881 15.308 4.57612L16.0252 4.25714C17.0384 3.80651 17.8442 2.97373 18.2761 1.93083L18.5293 1.31953C18.7058 0.893489 19.2942 0.893489 19.4706 1.31953L19.7238 1.93083C20.1558 2.97373 20.9616 3.80651 21.9748 4.25714L22.6919 4.57612C23.1027 4.75881 23.1027 5.35653 22.6919 5.53922L21.9323 5.87708C20.9445 6.31641 20.1529 7.11947 19.7134 8.12811ZM3.9934 3H13V5H5V19H19V11H21V20.0066C21 20.5552 20.5551 21 20.0066 21H3.9934C3.44476 21 3 20.5551 3 20.0066V3.9934C3 3.44476 3.44495 3 3.9934 3ZM10.6219 8.41459L15.5008 11.6672C15.6846 11.7897 15.7343 12.0381 15.6117 12.2219C15.5824 12.2658 15.5447 12.3035 15.5008 12.3328L10.6219 15.5854C10.4381 15.708 10.1897 15.6583 10.0672 15.4745C10.0234 15.4088 10 15.3316 10 15.2526V8.74741C10 8.52649 10.1791 8.34741 10.4 8.34741C10.479 8.34741 10.5562 8.37078 10.6219 8.41459Z" />
+        </svg>
+      );
+    // Four linked nodes (product-supplied glyph, filled like the *-line set):
+    // marks the template a chip stands for.
+    case 'nodes':
+      return (
+        <svg {...common} fill="currentColor" stroke="none">
+          <path d="M9 17C9 16.4474 8.77709 15.949 8.41406 15.5859C8.05104 15.2229 7.55256 15 7 15C5.89543 15 5 15.8954 5 17C5 18.1046 5.89543 19 7 19C8.10457 19 9 18.1046 9 17ZM19 17C19 15.8954 18.1046 15 17 15C15.8954 15 15 15.8954 15 17C15 18.1046 15.8954 19 17 19C18.1046 19 19 18.1046 19 17ZM9 7C9 5.89543 8.10457 5 7 5C5.89543 5 5 5.89543 5 7C5 8.10457 5.89543 9 7 9C8.10457 9 9 8.10457 9 7ZM19 7C19 5.89543 18.1046 5 17 5C15.8954 5 15 5.89543 15 7C15 7.55256 15.2229 8.05104 15.5859 8.41406C15.949 8.77709 16.4474 9 17 9C18.1046 9 19 8.10457 19 7ZM21 17C21 19.2091 19.2091 21 17 21C14.7909 21 13 19.2091 13 17C13 14.7909 14.7909 13 17 13C19.2091 13 21 14.7909 21 17ZM11 7C11 9.20914 9.20914 11 7 11C4.79086 11 3 9.20914 3 7C3 4.79086 4.79086 3 7 3C9.20914 3 11 4.79086 11 7ZM21 7C21 9.20914 19.2091 11 17 11C16.2584 11 15.5634 10.7972 14.9678 10.4453L10.4453 14.9678C10.7972 15.5634 11 16.2584 11 17C11 19.2091 9.20914 21 7 21C4.79086 21 3 19.2091 3 17C3 14.7909 4.79086 13 7 13C7.74116 13 8.43593 13.2022 9.03125 13.5537L13.5537 9.03125C13.2022 8.43593 13 7.74116 13 7C13 4.79086 14.7909 3 17 3C19.2091 3 21 4.79086 21 7Z" />
         </svg>
       );
     case 'bell':
@@ -196,10 +461,38 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
         </svg>
       );
+    case 'crop':
+      return (
+        <svg {...common}>
+          <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+          <path d="M18 22V8a2 2 0 0 0-2-2H2" />
+        </svg>
+      );
+    case 'undo':
+      return (
+        <svg {...common}>
+          <path d="M3 7v6h6" />
+          <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+        </svg>
+      );
+    case 'redo':
+      return (
+        <svg {...common}>
+          <path d="M21 7v6h-6" />
+          <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
+        </svg>
+      );
     case 'comment':
       return (
         <svg {...common}>
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </svg>
+      );
+    case 'mail':
+      return (
+        <svg {...common}>
+          <rect x="2" y="4" width="20" height="16" rx="2" />
+          <path d="m22 7-10 6L2 7" />
         </svg>
       );
     case 'discord':
@@ -252,6 +545,14 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
           <path d="M15 3h6v6" />
           <path d="M10 14 21 3" />
           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+        </svg>
+      );
+    case 'log-out':
+      return (
+        <svg {...common}>
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+          <path d="m16 17 5-5-5-5" />
+          <path d="M21 12H9" />
         </svg>
       );
     case 'file':
@@ -387,11 +688,33 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
           <path d="m21 15-4.5-4.5L7 20" />
         </svg>
       );
+    // The rail toggle's pair (supplied): the same framed panel with its bar on
+    // one side or the other, so collapsing/expanding reads as the sidebar
+    // moving out of and back into the frame.
+    case 'layout-left':
+      return (
+        <svg {...common} fill="currentColor" stroke="none">
+          <path d="M21 3C21.5523 3 22 3.44772 22 4V20C22 20.5523 21.5523 21 21 21H3C2.44772 21 2 20.5523 2 20V4C2 3.44772 2.44772 3 3 3H21ZM20 5H4V19H20V5ZM8 7V17H6V7H8Z" />
+        </svg>
+      );
+    case 'layout-right':
+      return (
+        <svg {...common} fill="currentColor" stroke="none">
+          <path d="M21 3C21.5523 3 22 3.44772 22 4V20C22 20.5523 21.5523 21 21 21H3C2.44772 21 2 20.5523 2 20V4C2 3.44772 2.44772 3 3 3H21ZM20 5H4V19H20V5ZM18 7V17H16V7H18Z" />
+        </svg>
+      );
     case 'panel-left':
       return (
         <svg {...common}>
           <rect x="3" y="3" width="18" height="18" rx="2" />
           <line x1="9" y1="3" x2="9" y2="21" />
+        </svg>
+      );
+    case 'slides':
+      return (
+        <svg {...common}>
+          <rect x="3" y="7" width="14" height="14" rx="2.5" />
+          <path d="M8 3.5h10A2.5 2.5 0 0 1 20.5 6v10" />
         </svg>
       );
     case 'import':
@@ -451,6 +774,13 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
           <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 1 0 7.07 7.07l1.71-1.71" />
         </svg>
       );
+    case 'lock':
+      return (
+        <svg {...common}>
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </svg>
+      );
     case 'integrations-filled':
       return (
         <svg {...common} fill="currentColor" stroke="none">
@@ -473,10 +803,10 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
       );
     case 'more-horizontal':
       return (
-        <svg {...common}>
-          <circle cx="5" cy="12" r="1.4" />
-          <circle cx="12" cy="12" r="1.4" />
-          <circle cx="19" cy="12" r="1.4" />
+        <svg {...common} fill="currentColor" stroke="none">
+          <circle cx="5.5" cy="12" r="1.75" />
+          <circle cx="12" cy="12" r="1.75" />
+          <circle cx="18.5" cy="12" r="1.75" />
         </svg>
       );
     case 'orbit':
@@ -524,6 +854,32 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
         <svg {...common}>
           <path d="M12 20h9" />
           <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z" />
+        </svg>
+      );
+    case 'layout':
+      // Dashboard/wireframe frame: outer card with a header band and a
+      // sidebar column — reads as "lo-fi screen layout" at small sizes.
+      return (
+        <svg {...common}>
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <path d="M3 9h18" />
+          <path d="M9 21V9" />
+        </svg>
+      );
+    case 'smartphone':
+      return (
+        <svg {...common}>
+          <rect x="5" y="2" width="14" height="20" rx="2.5" />
+          <path d="M11 18h2" />
+        </svg>
+      );
+    case 'file-text':
+      return (
+        <svg {...common}>
+          <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+          <path d="M5 3h9l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+          <path d="M8 13h8" />
+          <path d="M8 17h6" />
         </svg>
       );
     case 'plus':
@@ -578,9 +934,8 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
       );
     case 'send':
       return (
-        <svg {...common}>
-          <path d="M22 2 11 13" />
-          <path d="m22 2-7 20-4-9-9-4z" />
+        <svg {...common} fill="currentColor" stroke="none">
+          <path d="M3.48 2.41a.75.75 0 0 0-.93.94l2.43 7.9h8.52a.75.75 0 0 1 0 1.5H4.98l-2.43 7.9a.75.75 0 0 0 .93.94 60.5 60.5 0 0 0 18.44-8.98.75.75 0 0 0 0-1.22A60.5 60.5 0 0 0 3.48 2.41Z" />
         </svg>
       );
     case 'settings':
@@ -596,6 +951,15 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
           <path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
           <path d="m16 6-4-4-4 4" />
           <path d="M12 2v13" />
+        </svg>
+      );
+    case 'users':
+      return (
+        <svg {...common}>
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
         </svg>
       );
     case 'sliders':
@@ -614,7 +978,7 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
       );
     case 'spinner':
       return (
-        <svg {...common} className={`icon-spin ${rest.className ?? ''}`.trim()}>
+        <svg {...common} className={`od-icon icon-spin${strokeClassName ? ` ${strokeClassName}` : ''}`}>
           <path d="M21 12a9 9 0 1 1-6.22-8.56" />
         </svg>
       );
@@ -636,8 +1000,24 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
       );
     case 'stop':
       return (
+        <svg {...common} fill="currentColor" stroke="none">
+          {/* Fill ~58% of the viewBox (was 50% at 12/24) so the square reads at
+             a weight comparable to the send glyph in the composer's icon-only
+             button instead of looking like a tiny dot. */}
+          <rect x="5" y="5" width="14" height="14" rx="2" />
+        </svg>
+      );
+    case 'swatchbook':
+      // Lucide-style swatchbook — a folded swatch card peeling off a stacked
+      // base. Reads as "brand kit / palette card" rather than the generic
+      // `blocks` glyph, matching the Brand Kit nav destination and the
+      // "Create Brand Kit" home chip.
+      return (
         <svg {...common}>
-          <rect x="6" y="6" width="12" height="12" rx="1.5" />
+          <path d="M11 17a4 4 0 0 1-8 0V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2Z" />
+          <path d="M16.7 13H19a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H7" />
+          <path d="M7 17h.01" />
+          <path d="m11 8 2.3-2.3a2.4 2.4 0 0 1 3.404.004L18.6 7.6a2.4 2.4 0 0 1 .026 3.434L9.9 19.8" />
         </svg>
       );
     case 'sun':
@@ -721,6 +1101,24 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
           <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
         </svg>
       );
+    case 'maximize':
+      return (
+        <svg {...common}>
+          <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+          <path d="M16 3h3a2 2 0 0 1 2 2v3" />
+          <path d="M21 16v3a2 2 0 0 1-2 2h-3" />
+          <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
+        </svg>
+      );
+    case 'minimize':
+      return (
+        <svg {...common}>
+          <path d="M8 3v3a2 2 0 0 1-2 2H3" />
+          <path d="M16 3v3a2 2 0 0 0 2 2h3" />
+          <path d="M21 16h-3a2 2 0 0 0-2 2v3" />
+          <path d="M3 16h3a2 2 0 0 1 2 2v3" />
+        </svg>
+      );
     case 'zoom-in':
       return (
         <svg {...common}>
@@ -744,6 +1142,30 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
           <path d="M3 6h18" />
           <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
           <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+        </svg>
+      );
+    case 'remix-loop':
+      // Supplied artwork (per product), kept verbatim: a filled 24-box glyph,
+      // so it opts out of `common`'s stroke contract the same way the send
+      // mark above does. Two nested hooks inside a ring — it reads as "run it
+      // again from this" at 14px, which the generic refresh loop does not.
+      return (
+        <svg {...common} fill="currentColor" stroke="none">
+          <path d="M12 2C17.5121 2 21.9816 6.45975 21.999 11.9678C21.9992 11.9746 21.9989 11.9814 21.999 11.9883C21.999 11.9922 22 11.9961 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12C2 6.47715 6.47715 2 12 2ZM12 4C10.0751 4 8.30904 4.67985 6.92871 5.8125C7.58426 5.61027 8.27973 5.5 9 5.5C12.866 5.50002 16 8.63402 16 12.5C16 13.0523 15.5523 13.5 15 13.5C14.4477 13.5 14 13.0523 14 12.5C14 9.73859 11.7614 7.50002 9 7.5C6.38853 7.5 4.23108 9.50052 4.00098 12.043C4.02411 16.4415 7.59606 20 12 20C13.9248 20 15.69 19.3191 17.0703 18.1865C16.4149 18.3886 15.72 18.5 15 18.5C11.134 18.5 8 15.366 8 11.5C8 10.9477 8.44772 10.5 9 10.5C9.55228 10.5 10 10.9477 10 11.5C10 14.2614 12.2386 16.5 15 16.5C17.6118 16.5 19.7684 14.4989 19.998 11.9561C19.9744 7.558 16.4036 4 12 4Z" />
+        </svg>
+      );
+    case 'make-same':
+      // Supplied artwork (per product). Unlike the rest of the set it keeps
+      // the source's 48 viewBox and its stroke-4 weight — rescaling to 24
+      // would have to re-round every coordinate, and the glyph's thin lid
+      // ellipse is exactly what would go first. The source hard-codes
+      // `stroke="#ffffff"`; taken to `currentColor` here so the glyph follows
+      // whatever paints it (the card pills are white-on-dark today).
+      return (
+        <svg {...common} viewBox="0 0 48 48" strokeWidth={4}>
+          <path d="M10 10c.5 3 1 4.5 1.5 8c.4 2.8.5 7.167.5 9c-2.167 1-7 3-7 7s5 9 19 9s19-5 19-9s-7-7-7-7s0-5.5.5-9s1-5 1.5-8" />
+          <path d="M36 27c0 4-1 8-12.5 8" />
+          <ellipse cx="24" cy="10" rx="14" ry="5" />
         </svg>
       );
     default:

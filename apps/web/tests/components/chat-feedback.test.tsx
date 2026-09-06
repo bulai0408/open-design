@@ -100,6 +100,8 @@ function renderChatPane({
   streaming = false,
   onAssistantFeedback = vi.fn(),
   hasActiveDesignSystem = false,
+  onForkFromMessage,
+  viewerOnly = false,
 }: {
   messages: ChatMessage[];
   streaming?: boolean;
@@ -108,6 +110,8 @@ function renderChatPane({
     change: ChatMessageFeedbackChange,
   ) => void;
   hasActiveDesignSystem?: boolean;
+  onForkFromMessage?: (message: ChatMessage) => void;
+  viewerOnly?: boolean;
 }) {
   return {
     onAssistantFeedback,
@@ -128,6 +132,8 @@ function renderChatPane({
         onSelectConversation={() => {}}
         onDeleteConversation={() => {}}
         onAssistantFeedback={onAssistantFeedback}
+        onForkFromMessage={onForkFromMessage}
+        viewerOnly={viewerOnly}
       />,
     ),
   };
@@ -151,6 +157,16 @@ describe('chat assistant feedback', () => {
     });
 
     expect(screen.getByRole('group', { name: 'Feedback' })).toBeTruthy();
+  });
+
+  it('hides conversation fork actions from read-only project viewers', () => {
+    renderChatPane({
+      messages: [completedAssistant()],
+      onForkFromMessage: vi.fn(),
+      viewerOnly: true,
+    });
+
+    expect(screen.queryByRole('button', { name: 'Fork from here' })).toBeNull();
   });
 
   it('collects positive and negative feedback on completed artifact results', () => {
@@ -404,6 +420,49 @@ describe('chat assistant feedback', () => {
               mime: 'text/html',
             },
           ],
+        },
+      ],
+    });
+
+    expect(screen.queryByRole('group', { name: 'Feedback' })).toBeNull();
+  });
+
+  it('collects feedback on a failed assistant turn', () => {
+    renderChatPane({
+      messages: [
+        completedAssistant({
+          content: '',
+          runStatus: 'failed',
+          events: [{ kind: 'status', label: 'error', detail: 'boom-401' }],
+        }),
+      ],
+    });
+
+    expect(screen.getByRole('group', { name: 'Feedback' })).toBeTruthy();
+  });
+
+  it('collects feedback on a canceled assistant turn', () => {
+    renderChatPane({
+      messages: [
+        completedAssistant({
+          content: 'Partial answer',
+          runStatus: 'canceled',
+        }),
+      ],
+    });
+
+    expect(screen.getByRole('group', { name: 'Feedback' })).toBeTruthy();
+  });
+
+  it('does not ask for feedback on a queued turn that has not started', () => {
+    renderChatPane({
+      messages: [
+        {
+          id: 'assistant-1',
+          role: 'assistant',
+          content: '',
+          createdAt: 1_700_000_000_000,
+          runStatus: 'queued',
         },
       ],
     });

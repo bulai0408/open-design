@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Dialog, DialogFooter, DialogTitle } from '@open-design/components';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { Dispatch, FormEvent, SetStateAction } from 'react';
 import { useT } from '../i18n';
 import type { AppConfig, DesignSystemGenerationJob, DesignSystemSummary } from '../types';
@@ -13,6 +14,8 @@ import { DesignSystemPreviewModal } from './DesignSystemPreviewModal';
 import { Icon } from './Icon';
 import { orderDesignSystemGroups } from './design-system-group-order';
 import { AnimatePresence } from 'motion/react';
+import { useWorkspaceContext } from '../collab/useWorkspaceContext';
+import { workspaceIdentityCacheKey } from '../collab/workspace-identity';
 
 // Sibling Settings section that hosts the design-systems registry.
 // Lifted out of the previous LibrarySection so each surface (functional
@@ -46,6 +49,7 @@ export function DesignSystemsSection({
   onDesignSystemImportRebuildJob,
 }: Props) {
   const t = useT();
+  const renameTitleId = useId();
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const [designSystems, setDesignSystems] = useState<DesignSystemSummary[]>([]);
   const [search, setSearch] = useState('');
@@ -70,10 +74,18 @@ export function DesignSystemsSection({
   const [importedDesignSystem, setImportedDesignSystem] = useState<DesignSystemSummary | null>(null);
   const [highlightedDesignSystemId, setHighlightedDesignSystemId] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const { context: workspaceContext } = useWorkspaceContext();
+  const workspaceIdentity = workspaceIdentityCacheKey(workspaceContext);
 
   useEffect(() => {
-    fetchDesignSystems().then(setDesignSystems);
-  }, []);
+    let cancelled = false;
+    fetchDesignSystems(workspaceContext).then((systems) => {
+      if (!cancelled) setDesignSystems(systems);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceIdentity]);
 
   const disabledDS = useMemo(
     () => new Set(cfg.disabledDesignSystems ?? []),
@@ -184,7 +196,11 @@ export function DesignSystemsSection({
     const targetId = renameTarget.id;
     setRenaming(true);
     setRenameError(null);
-    const updated = await updateDesignSystemDraft(targetId, { title: trimmed });
+    const updated = await updateDesignSystemDraft(
+      targetId,
+      { title: trimmed },
+      workspaceContext,
+    );
     if (updated) {
       // The rename happened server-side, so reflect it in the list even if the
       // user has since moved to another rename session.
@@ -604,50 +620,45 @@ export function DesignSystemsSection({
         ) : null}
       </AnimatePresence>
       {renameTarget ? (
-        <div className="modal-backdrop" onClick={cancelRename}>
-          <form
-            className="modal modal-rename"
-            onClick={(e) => e.stopPropagation()}
-            onSubmit={(e) => {
-              e.preventDefault();
-              void commitRename();
-            }}
-          >
-            <h2>{t('common.rename')}</h2>
-            <label>
-              <input
-                type="text"
-                value={renameInput}
-                autoFocus
-                aria-label={t('common.rename')}
-                onChange={(e) => setRenameInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') {
-                    e.preventDefault();
-                    cancelRename();
-                  }
-                }}
-              />
-            </label>
-            {renameError ? <p className="library-install-error">{renameError}</p> : null}
-            <div className="row">
-              <button type="button" onClick={cancelRename}>
-                {t('common.cancel')}
-              </button>
-              <button
-                type="submit"
-                className="primary"
-                disabled={
-                  renaming ||
-                  !renameInput.trim() ||
-                  renameInput.trim() === renameTarget.original
-                }
-              >
-                {t('common.save')}
-              </button>
-            </div>
-          </form>
-        </div>
+        <Dialog
+          as="form"
+          className="modal-rename"
+          onClose={cancelRename}
+          closeOnEscape
+          ariaLabelledBy={renameTitleId}
+          onSubmit={(e) => {
+            e.preventDefault();
+            void commitRename();
+          }}
+        >
+          <DialogTitle id={renameTitleId}>{t('common.rename')}</DialogTitle>
+          <label>
+            <input
+              type="text"
+              value={renameInput}
+              autoFocus
+              aria-label={t('common.rename')}
+              onChange={(e) => setRenameInput(e.target.value)}
+            />
+          </label>
+          {renameError ? <p className="library-install-error">{renameError}</p> : null}
+          <DialogFooter className="row">
+            <button type="button" onClick={cancelRename}>
+              {t('common.cancel')}
+            </button>
+            <button
+              type="submit"
+              className="primary"
+              disabled={
+                renaming ||
+                !renameInput.trim() ||
+                renameInput.trim() === renameTarget.original
+              }
+            >
+              {t('common.save')}
+            </button>
+          </DialogFooter>
+        </Dialog>
       ) : null}
     </section>
   );

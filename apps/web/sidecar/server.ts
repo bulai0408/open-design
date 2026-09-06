@@ -1,31 +1,30 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import {
+  Agent as HttpAgent,
   createServer as createHttpServer,
   request as createHttpRequest,
   type IncomingMessage,
   type Server as HttpServer,
   type ServerResponse,
 } from "node:http";
-import { request as createHttpsRequest } from "node:https";
+import { Agent as HttpsAgent, request as createHttpsRequest } from "node:https";
 import { existsSync, readFileSync } from "node:fs";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { createServer as createTcpServer, type AddressInfo, type Server as TcpServer } from "node:net";
-import { dirname, isAbsolute, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  createConnection,
+  createServer as createTcpServer,
+  type AddressInfo,
+  type Server as TcpServer,
+  type Socket,
+} from "node:net";
+import { dirname, isAbsolute, join, relative } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   SIDECAR_ENV,
-  SIDECAR_MESSAGES,
-  normalizeWebSidecarMessage,
-  type SidecarStamp,
   type WebStatusSnapshot,
 } from "@open-design/sidecar-proto";
-import {
-  createJsonIpcServer,
-  type JsonIpcServerHandle,
-  type SidecarRuntimeContext,
-} from "@open-design/sidecar";
 
 const HOST = process.env.OD_HOST || "127.0.0.1";
 if (process.env.OD_HOST != null && !/^[a-zA-Z0-9._\-:[\]@]+$/.test(process.env.OD_HOST)) {
@@ -36,18 +35,30 @@ const STANDALONE_BACKEND_HOST = "127.0.0.1";
 const DAEMON_PORT_ENV = SIDECAR_ENV.DAEMON_PORT;
 const WEB_DIST_DIR_ENV = SIDECAR_ENV.WEB_DIST_DIR;
 const WEB_PORT_ENV = SIDECAR_ENV.WEB_PORT;
-const TOOLS_DEV_PARENT_PID_ENV = SIDECAR_ENV.TOOLS_DEV_PARENT_PID;
 const WEB_OUTPUT_MODE_ENV = "OD_WEB_OUTPUT_MODE";
 const WEB_STANDALONE_ROOT_ENV = "OD_WEB_STANDALONE_ROOT";
 const STANDALONE_PARENT_PID_ENV = "OD_STANDALONE_PARENT_PID";
 const STANDALONE_STARTUP_TIMEOUT_ENV = "OD_STANDALONE_STARTUP_TIMEOUT_MS";
+// Synthesized for daemon-routed paths when no daemon origin is configured:
+// same plain-text errno shape as a dead-daemon proxy failure so the web app's
+// isDaemonProxyConnectionFailure recognizes it as an outage.
+const DAEMON_PROXY_UNAVAILABLE_MESSAGE =
+  `connect ECONNREFUSED (${DAEMON_PORT_ENV} is not set; the web runtime has no daemon origin)`;
 const SHUTDOWN_TIMEOUT_MS = 3000;
+const WEB_HTTP_DRAIN_MS = 250;
+const STANDALONE_READINESS_POLL_MS = 150;
+const STANDALONE_TCP_READINESS_GRACE_MS = STANDALONE_READINESS_POLL_MS;
 const require = createRequire(import.meta.url);
 
 type NextApp = {
   close?: () => Promise<void>;
   getRequestHandler(): (request: IncomingMessage, response: ServerResponse) => Promise<void>;
   prepare(): Promise<void>;
+};
+
+type NextBundlerOptions = {
+  turbopack?: boolean;
+  webpack?: boolean;
 };
 
 type StandaloneBackend = {
@@ -57,9 +68,16 @@ type StandaloneBackend = {
   stop(): Promise<void>;
 };
 
-function createNextApp(options: { dev: boolean; dir: string }): NextApp {
-  const createNextServer = require("next") as (nextOptions: { dev: boolean; dir: string }) => NextApp;
+function createNextApp(options: { dev: boolean; dir: string } & NextBundlerOptions): NextApp {
+  const createNextServer = require("next") as (nextOptions: { dev: boolean; dir: string } & NextBundlerOptions) => NextApp;
   return createNextServer(options);
+}
+
+export function resolveNextBundlerOptions(isDev: boolean): NextBundlerOptions {
+  if (!isDev) return {};
+  const configured = (process.env.OD_WEB_DEV_BUNDLER ?? "webpack").trim().toLowerCase();
+  if (configured === "turbopack" || configured === "turbo") return { turbopack: true };
+  return { webpack: true };
 }
 
 export type WebSidecarHandle = {
@@ -194,13 +212,31 @@ export function resolveStandaloneServerEntry(
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
-function shouldUseStandaloneOutput(runtime: SidecarRuntimeContext<SidecarStamp>): boolean {
+export type WebRuntimeContext = { mode: string; [field: string]: unknown };
+
+function shouldUseStandaloneOutput(runtime: WebRuntimeContext): boolean {
   return runtime.mode !== "dev" && process.env[WEB_OUTPUT_MODE_ENV] === "standalone";
 }
 
 function resolveDaemonOrigin(): string | null {
   const port = parsePort(process.env[DAEMON_PORT_ENV]);
-  return port === 0 ? null : `http://${DAEMON_HOST}:${port}`;
+  if (port === 0) {
+    console.warn(
+      `[open-design web] ${DAEMON_PORT_ENV} is not set; /api, /artifacts and /frames will answer ${DAEMON_PROXY_UNAVAILABLE_MESSAGE}`,
+    );
+    return null;
+  }
+  return `http://${DAEMON_HOST}:${port}`;
+}
+
+function resolveRequestPathname(requestUrl: string | undefined): string | null {
+  if (requestUrl == null) return null;
+
+  try {
+    return new URL(requestUrl, `http://${HOST}`).pathname;
+  } catch {
+    return null;
+  }
 }
 
 function isDaemonProxyPathname(pathname: string): boolean {
@@ -386,13 +422,115 @@ function isSameBrowserHostOrigin(options: {
   return isLoopbackOrPrivateLanHost(originHost) || isAllowedDevHost(originHost, allowedDevHosts);
 }
 
+/**
+ * Explicit keep-alive pool for proxied upstream requests.
+ *
+ * Invariant: a pooled idle socket must be destroyed strictly before either
+ * upstream's server-side keep-alive window can close it — the daemon holds
+ * kept-alive sockets for 120s (`apps/daemon/src/server.ts`) and a standalone
+ * Next.js backend uses Node's 5s default — so the proxy should not pick up an
+ * idle socket its upstream is concurrently closing. On a keep-alive Agent the
+ * `timeout` option destroys pooled sockets after that idle period; sockets
+ * with an in-flight request only emit an (unobserved) `timeout` event, so
+ * long-lived streams such as SSE are unaffected.
+ */
+const PROXY_FREE_SOCKET_IDLE_MS = 3_000;
+const proxyHttpAgent = new HttpAgent({
+  keepAlive: true,
+  scheduling: "lifo",
+  timeout: PROXY_FREE_SOCKET_IDLE_MS,
+});
+const proxyHttpsAgent = new HttpsAgent({
+  keepAlive: true,
+  scheduling: "lifo",
+  timeout: PROXY_FREE_SOCKET_IDLE_MS,
+});
+
+/**
+ * Requests whose body is fully buffered under this cap AND whose method is
+ * idempotent may be replayed once after a reused-socket connection reset.
+ * Larger bodies and non-idempotent methods keep the streaming pass-through
+ * path and are never replayed.
+ */
+const PROXY_REPLAY_BODY_LIMIT_BYTES = 512 * 1024;
+const IDEMPOTENT_PROXY_METHODS = new Set(["GET", "HEAD", "PUT", "DELETE", "OPTIONS"]);
+
+type ProxyRequestBody =
+  | { replayable: true; body: Buffer }
+  | { replayable: false; prefix: Buffer[]; stream: IncomingMessage };
+
+function captureProxyRequestBody(request: IncomingMessage): Promise<ProxyRequestBody> {
+  const method = (request.method ?? "GET").toUpperCase();
+  if (!IDEMPOTENT_PROXY_METHODS.has(method)) {
+    return Promise.resolve({ replayable: false, prefix: [], stream: request });
+  }
+  return new Promise((resolveBody) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const settle = (body: ProxyRequestBody) => {
+      if (settled) return;
+      settled = true;
+      request.off("data", onData);
+      request.off("end", onEnd);
+      request.off("error", onError);
+      request.off("close", onError);
+      resolveBody(body);
+    };
+    const onData = (chunk: Buffer) => {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size > PROXY_REPLAY_BODY_LIMIT_BYTES) {
+        request.pause();
+        settle({ replayable: false, prefix: [...chunks], stream: request });
+      }
+    };
+    const onEnd = () => settle({ replayable: true, body: Buffer.concat(chunks) });
+    // A client that aborts mid-body gets the same truncated-stream behavior
+    // as the previous pipe-through implementation (and is never replayed).
+    const onError = () => settle({ replayable: false, prefix: [...chunks], stream: request });
+    request.on("data", onData);
+    request.on("end", onEnd);
+    request.on("error", onError);
+    // A disconnect can surface as a bare "close" with neither "end" nor
+    // "error"; "end" always fires first on complete bodies, so this only
+    // catches genuinely truncated requests.
+    request.on("close", onError);
+  });
+}
+
+/**
+ * The daemon can close a kept-alive socket at the same moment the proxy
+ * reuses it (keep-alive window expiry, restart) — the write then fails with a
+ * connection reset and, before this guard, surfaced to the browser as a 502
+ * the daemon never sent. Replaying is safe exactly when the request is
+ * idempotent with a fully buffered body, no response bytes have arrived, and
+ * the failed attempt ran on a REUSED pooled socket; the retry takes a fresh
+ * connection so it cannot hit another stale pool entry.
+ */
+function shouldReplayProxyRequest(input: {
+  attempt: number;
+  body: ProxyRequestBody;
+  error: unknown;
+  reusedSocket: boolean;
+  response: ServerResponse;
+}): boolean {
+  if (input.attempt > 0 || !input.body.replayable) return false;
+  if (input.response.headersSent || !input.reusedSocket) return false;
+  const code = input.error instanceof Error
+    ? (input.error as NodeJS.ErrnoException).code
+    : undefined;
+  return code === "ECONNRESET" || code === "EPIPE";
+}
+
 async function proxyHttpRequest(
   target: URL,
   request: IncomingMessage,
   response: ServerResponse,
   options: { daemonWebPort?: number } = {},
 ): Promise<void> {
-  const proxyRequestFactory = target.protocol === "https:" ? createHttpsRequest : createHttpRequest;
+  const secure = target.protocol === "https:";
+  const proxyRequestFactory = secure ? createHttpsRequest : createHttpRequest;
   const headers = { ...request.headers, host: target.host };
   if (options.daemonWebPort != null) {
     const origin = normalizeDaemonProxyOriginHeader({
@@ -408,30 +546,55 @@ async function proxyHttpRequest(
     }
   }
 
+  const body = await captureProxyRequestBody(request);
+
   await new Promise<void>((resolveProxy) => {
-    const proxyRequest = proxyRequestFactory(
-      target,
-      {
-        headers,
-        method: request.method,
-      },
-      (proxyResponse) => {
-        response.writeHead(proxyResponse.statusCode ?? 502, proxyResponse.headers);
-        proxyResponse.pipe(response);
-        proxyResponse.on("end", resolveProxy);
-      },
-    );
+    const sendAttempt = (attempt: number): void => {
+      const proxyRequest = proxyRequestFactory(
+        target,
+        {
+          headers,
+          method: request.method,
+          // The replay must prove the failure was a stale pooled socket, so
+          // it bypasses the pool and dials a fresh connection.
+          agent: attempt === 0 ? (secure ? proxyHttpsAgent : proxyHttpAgent) : false,
+        },
+        (proxyResponse) => {
+          response.writeHead(proxyResponse.statusCode ?? 502, proxyResponse.headers);
+          proxyResponse.pipe(response);
+          proxyResponse.on("end", resolveProxy);
+        },
+      );
 
-    proxyRequest.on("error", (error) => {
-      if (!response.headersSent) {
-        response.statusCode = 502;
-        response.setHeader("content-type", "text/plain; charset=utf-8");
+      proxyRequest.on("error", (error) => {
+        if (
+          shouldReplayProxyRequest({
+            attempt,
+            body,
+            error,
+            reusedSocket: proxyRequest.reusedSocket === true,
+            response,
+          })
+        ) {
+          sendAttempt(attempt + 1);
+          return;
+        }
+        if (!response.headersSent) {
+          response.statusCode = 502;
+          response.setHeader("content-type", "text/plain; charset=utf-8");
+        }
+        response.end(error instanceof Error ? error.message : String(error));
+        resolveProxy();
+      });
+
+      if (body.replayable) {
+        proxyRequest.end(body.body);
+      } else {
+        for (const chunk of body.prefix) proxyRequest.write(chunk);
+        body.stream.pipe(proxyRequest);
       }
-      response.end(error instanceof Error ? error.message : String(error));
-      resolveProxy();
-    });
-
-    request.pipe(proxyRequest);
+    };
+    sendAttempt(0);
   });
 }
 
@@ -467,6 +630,67 @@ async function closeServer(server: HttpServer | TcpServer): Promise<void> {
   await new Promise<void>((resolveClose, rejectClose) => {
     server.close((error) => (error == null ? resolveClose() : rejectClose(error)));
   });
+}
+
+/**
+ * Own every accepted web-sidecar connection so shutdown cannot be held open by
+ * a renderer keep-alive, SSE request, or upgraded socket. Short requests get a
+ * small drain window; the remaining connections are no longer useful after the
+ * sidecar has entered its stopped state and are closed deterministically.
+ */
+export function createWebHttpServerShutdown(
+  server: HttpServer,
+  drainMs = WEB_HTTP_DRAIN_MS,
+): () => Promise<void> {
+  const sockets = new Set<Socket>();
+  const trackSocket = (socket: Socket): void => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  };
+  server.on("connection", trackSocket);
+
+  let task: Promise<void> | null = null;
+  return () => {
+    task ??= (async () => {
+      try {
+        if (!server.listening) {
+          for (const socket of sockets) socket.destroy();
+          return;
+        }
+
+        const closed = new Promise<void>((resolveClose, rejectClose) => {
+          server.close((error) => (error == null ? resolveClose() : rejectClose(error)));
+        });
+        server.closeIdleConnections();
+
+        let timeout: NodeJS.Timeout | undefined;
+        let drained: boolean;
+        try {
+          drained = await Promise.race([
+            closed.then(() => true),
+            new Promise<false>((resolveTimeout) => {
+              timeout = setTimeout(() => resolveTimeout(false), drainMs);
+            }),
+          ]);
+        } finally {
+          if (timeout != null) clearTimeout(timeout);
+        }
+
+        if (!drained) server.closeAllConnections();
+
+        // server.close and closeAllConnections intentionally exclude upgraded
+        // sockets. The connection fence covers those and older Node behavior
+        // as well, including when server.close resolves before the drain timer.
+        for (const socket of sockets) socket.destroy();
+        if (!drained) {
+          await closed;
+        }
+      } finally {
+        server.off("connection", trackSocket);
+      }
+    })();
+    return task;
+  };
 }
 
 async function reserveTcpPort(host = HOST): Promise<number> {
@@ -509,7 +733,15 @@ async function stopStandaloneChild(child: ChildProcess): Promise<void> {
   }
 }
 
-async function probeStandaloneBackend(origin: string): Promise<boolean> {
+type StandaloneBackendProbeResult = "http" | "tcp" | null;
+
+async function probeStandaloneBackend(origin: string): Promise<StandaloneBackendProbeResult> {
+  if (await probeStandaloneBackendPort(origin)) return "tcp";
+  if (await probeStandaloneBackendHttp(origin)) return "http";
+  return null;
+}
+
+async function probeStandaloneBackendHttp(origin: string): Promise<boolean> {
   return await new Promise<boolean>((resolveProbe) => {
     const request = createHttpRequest(new URL("/", origin), { method: "HEAD", timeout: 800 }, (response) => {
       response.resume();
@@ -524,6 +756,64 @@ async function probeStandaloneBackend(origin: string): Promise<boolean> {
   });
 }
 
+async function probeStandaloneBackendPort(origin: string): Promise<boolean> {
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  const port = Number(parsed.port || defaultPortForProtocol(parsed.protocol));
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return false;
+  const host = parsed.hostname.replace(/^\[(.*)\]$/, "$1");
+
+  return await new Promise<boolean>((resolveProbe) => {
+    const socket = createConnection({ host, port });
+    let settled = false;
+    const settle = (ready: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolveProbe(ready);
+    };
+    socket.setTimeout(800, () => settle(false));
+    socket.once("connect", () => settle(true));
+    socket.once("error", () => settle(false));
+  });
+}
+
+function createStandaloneChildExitError(child: ChildProcess, startedAt: number): Error {
+  const elapsedMs = Date.now() - startedAt;
+  const likelyPortRace = elapsedMs <= 200;
+  return new Error(
+    `standalone Next.js server exited before readiness after ${elapsedMs}ms: code=${child.exitCode} signal=${child.signalCode}`
+    + (likelyPortRace
+      ? "; the reserved startup port may have been claimed before the child process bound it, retry the launch"
+      : ""),
+  );
+}
+
+function throwIfStandaloneChildExited(child: ChildProcess, startedAt: number): void {
+  if (child.exitCode == null && child.signalCode == null) return;
+  throw createStandaloneChildExitError(child, startedAt);
+}
+
+async function waitForStandaloneTcpReadinessGrace(child: ChildProcess): Promise<void> {
+  if (child.exitCode != null || child.signalCode != null) return;
+
+  await new Promise<void>((resolveWait) => {
+    let timeout: NodeJS.Timeout | undefined;
+    const finish = () => {
+      if (timeout != null) clearTimeout(timeout);
+      child.off("exit", finish);
+      resolveWait();
+    };
+    timeout = setTimeout(finish, STANDALONE_TCP_READINESS_GRACE_MS);
+    timeout.unref();
+    child.once("exit", finish);
+  });
+}
+
 async function waitForStandaloneBackendReady(
   child: ChildProcess,
   origin: string,
@@ -532,21 +822,91 @@ async function waitForStandaloneBackendReady(
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
-    if (child.exitCode != null || child.signalCode != null) {
-      const elapsedMs = Date.now() - startedAt;
-      const likelyPortRace = elapsedMs <= 200;
-      throw new Error(
-        `standalone Next.js server exited before readiness after ${elapsedMs}ms: code=${child.exitCode} signal=${child.signalCode}`
-        + (likelyPortRace
-          ? "; the reserved startup port may have been claimed before the child process bound it, retry the launch"
-          : ""),
-      );
+    throwIfStandaloneChildExited(child, startedAt);
+    const readiness = await probeStandaloneBackend(origin);
+    if (readiness != null) {
+      if (readiness === "tcp") {
+        await waitForStandaloneTcpReadinessGrace(child);
+      }
+      throwIfStandaloneChildExited(child, startedAt);
+      return;
     }
-    if (await probeStandaloneBackend(origin)) return;
-    await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    await new Promise((resolveWait) => setTimeout(resolveWait, STANDALONE_READINESS_POLL_MS));
   }
 
   throw new Error(`timed out after ${timeoutMs}ms waiting for standalone Next.js server at ${origin}; override with ${STANDALONE_STARTUP_TIMEOUT_ENV}`);
+}
+
+async function waitForInProcessStandaloneBackendReady(
+  origin: string,
+  timeoutMs = resolveStandaloneStartupTimeoutMs(),
+): Promise<void> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await probeStandaloneBackend(origin)) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, STANDALONE_READINESS_POLL_MS));
+  }
+
+  throw new Error(`timed out after ${timeoutMs}ms waiting for in-process standalone Next.js server at ${origin}; override with ${STANDALONE_STARTUP_TIMEOUT_ENV}`);
+}
+
+function shouldStartStandaloneBackendInProcess(): boolean {
+  return process.env.ELECTRON_RUN_AS_NODE === "1" && process.versions.electron != null;
+}
+
+async function startStandaloneBackendInProcess(entryPath: string, port: number, origin: string): Promise<StandaloneBackend> {
+  Object.assign(process.env, createStandaloneBackendEnv({ port }));
+  console.log(`[open-design web] starting in-process standalone Next.js server from ${entryPath}`);
+  const restoreChdir = await installInProcessStandaloneChdirAlias(dirname(entryPath));
+  try {
+    await import(pathToFileURL(entryPath).href);
+  } finally {
+    restoreChdir();
+  }
+  await waitForInProcessStandaloneBackendReady(origin);
+
+  return {
+    exitReason() {
+      return null;
+    },
+    isRunning() {
+      return true;
+    },
+    origin,
+    async stop() {
+      // The standalone server shares this web sidecar process in packaged
+      // Electron-as-Node mode. Process shutdown is the close boundary.
+    },
+  };
+}
+
+async function installInProcessStandaloneChdirAlias(aliasRoot: string): Promise<() => void> {
+  if (process.platform !== "win32") return () => {};
+
+  const realRoot = await realpath(aliasRoot).catch(() => null);
+  if (realRoot == null || normalizeWindowsPath(realRoot) === normalizeWindowsPath(aliasRoot)) return () => {};
+
+  const originalChdir = process.chdir.bind(process);
+  process.chdir = ((directory: string): void => {
+    const mapped = mapWindowsPathIntoAlias(directory, realRoot, aliasRoot);
+    originalChdir(mapped ?? directory);
+  }) as typeof process.chdir;
+
+  return () => {
+    process.chdir = originalChdir as typeof process.chdir;
+  };
+}
+
+function mapWindowsPathIntoAlias(candidate: string, realRoot: string, aliasRoot: string): string | null {
+  const normalizedCandidate = normalizeWindowsPath(candidate);
+  const normalizedRealRoot = normalizeWindowsPath(realRoot);
+  if (normalizedCandidate !== normalizedRealRoot && !normalizedCandidate.startsWith(`${normalizedRealRoot}\\`)) return null;
+  return join(aliasRoot, relative(realRoot, candidate));
+}
+
+function normalizeWindowsPath(path: string): string {
+  return path.replaceAll("/", "\\").replace(/[\\]+$/, "").toLowerCase();
 }
 
 async function startStandaloneBackend(webRoot: string | null): Promise<StandaloneBackend> {
@@ -561,6 +921,10 @@ async function startStandaloneBackend(webRoot: string | null): Promise<Standalon
 
   const port = await reserveTcpPort(STANDALONE_BACKEND_HOST);
   const origin = resolveStandaloneBackendOrigin(port);
+  if (shouldStartStandaloneBackendInProcess()) {
+    return await startStandaloneBackendInProcess(entryPath, port, origin);
+  }
+
   console.log(`[open-design web] starting standalone Next.js server from ${entryPath}`);
   const child = spawn(process.execPath, createStandaloneServerArgs(entryPath), {
     cwd: dirname(entryPath),
@@ -617,50 +981,20 @@ async function settleShutdownTask(task: Promise<unknown> | undefined): Promise<v
   }
 }
 
-function stopThenExit(stop: () => Promise<void>): void {
-  const hardExit = setTimeout(() => process.exit(0), SHUTDOWN_TIMEOUT_MS + 1000);
-  hardExit.unref();
-  void stop().finally(() => {
-    clearTimeout(hardExit);
-    process.exit(0);
-  });
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function attachParentMonitor(stop: () => Promise<void>): void {
-  const parentPid = Number(process.env[TOOLS_DEV_PARENT_PID_ENV]);
-  if (!Number.isInteger(parentPid) || parentPid <= 0) return;
-
-  const timer = setInterval(() => {
-    if (isProcessAlive(parentPid)) return;
-    clearInterval(timer);
-    stopThenExit(stop);
-  }, 1000);
-  timer.unref();
-}
-
 async function createWebSidecarHandle(
-  runtime: SidecarRuntimeContext<SidecarStamp>,
   httpServer: HttpServer,
   closeRuntime: () => Promise<void> | void,
+  portRequest: number,
   isRuntimeRunning?: () => boolean,
 ): Promise<WebSidecarHandle> {
-  const port = await listen(httpServer, parsePort(process.env[WEB_PORT_ENV]));
+  const closeHttpServer = createWebHttpServerShutdown(httpServer);
+  const port = await listen(httpServer, portRequest);
   const state: WebStatusSnapshot = {
     pid: process.pid,
     state: "running",
     updatedAt: new Date().toISOString(),
     url: `http://${HOST}:${port}`,
   };
-  let ipcServer: JsonIpcServerHandle | null = null;
   let stopped = false;
   let resolveStopped!: () => void;
   const stoppedPromise = new Promise<void>((resolveStop) => {
@@ -679,35 +1013,9 @@ async function createWebSidecarHandle(
     stopped = true;
     state.state = "stopped";
     state.updatedAt = new Date().toISOString();
-    await settleShutdownTask(ipcServer?.close());
-    await settleShutdownTask(closeServer(httpServer));
+    await closeHttpServer();
     await settleShutdownTask(Promise.resolve().then(closeRuntime));
     resolveStopped();
-  }
-
-  attachParentMonitor(stop);
-
-  ipcServer = await createJsonIpcServer({
-    socketPath: runtime.ipc,
-    handler: async (message: unknown) => {
-      const request = normalizeWebSidecarMessage(message);
-      switch (request.type) {
-        case SIDECAR_MESSAGES.STATUS:
-          refreshRuntimeState();
-          return { ...state };
-        case SIDECAR_MESSAGES.SHUTDOWN:
-          setImmediate(() => {
-            stopThenExit(stop);
-          });
-          return { accepted: true };
-      }
-    },
-  });
-
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => {
-      stopThenExit(stop);
-    });
   }
 
   return {
@@ -722,7 +1030,7 @@ async function createWebSidecarHandle(
   };
 }
 
-function createDaemonProxyHandler(
+export function createDaemonProxyHandler(
   daemonOrigin: string | null,
   fallback: (request: IncomingMessage, response: ServerResponse) => Promise<void>,
 ): (request: IncomingMessage, response: ServerResponse) => void {
@@ -739,6 +1047,20 @@ function createDaemonProxyHandler(
       return;
     }
 
+    // Daemon-routed pathnames must never fall through to the SPA shell: the
+    // Next.js catch-all answers every path with 200 text/html, which browser
+    // callers parse as JSON and crash on. With no daemon origin there is no
+    // proxy target, so answer as the connection-level outage it is.
+    if (
+      daemonOrigin == null &&
+      isDaemonProxyPathname(resolveRequestPathname(request.url) ?? "")
+    ) {
+      response.statusCode = 502;
+      response.setHeader("content-type", "text/plain; charset=utf-8");
+      response.end(DAEMON_PROXY_UNAVAILABLE_MESSAGE);
+      return;
+    }
+
     void fallback(request, response).catch((error: unknown) => {
       response.statusCode = 500;
       response.end(error instanceof Error ? error.message : String(error));
@@ -747,24 +1069,27 @@ function createDaemonProxyHandler(
 }
 
 async function startRegularNextSidecar(
-  runtime: SidecarRuntimeContext<SidecarStamp>,
+  runtime: WebRuntimeContext,
   webRoot: string,
+  port: number,
 ): Promise<WebSidecarHandle> {
-  const app = createNextApp({ dev: process.env.OD_WEB_PROD !== "1" && runtime.mode === "dev", dir: webRoot });
+  const dev = process.env.OD_WEB_PROD !== "1" && runtime.mode === "dev";
+  const app = createNextApp({ dev, dir: webRoot, ...resolveNextBundlerOptions(dev) });
   await prepareNextApp(app, webRoot);
 
   const daemonOrigin = resolveDaemonOrigin();
   const handleRequest = app.getRequestHandler();
   const httpServer = createHttpServer(createDaemonProxyHandler(daemonOrigin, handleRequest));
 
-  return await createWebSidecarHandle(runtime, httpServer, async () => {
+  return await createWebSidecarHandle(httpServer, async () => {
     await app.close?.();
-  });
+  }, port);
 }
 
 async function startStandaloneNextSidecar(
-  runtime: SidecarRuntimeContext<SidecarStamp>,
+  runtime: WebRuntimeContext,
   webRoot: string | null,
+  port: number,
 ): Promise<WebSidecarHandle> {
   const daemonOrigin = resolveDaemonOrigin();
   const backend = await startStandaloneBackend(webRoot);
@@ -784,19 +1109,19 @@ async function startStandaloneNextSidecar(
   }));
 
   try {
-    return await createWebSidecarHandle(runtime, httpServer, backend.stop, backend.isRunning);
+    return await createWebSidecarHandle(httpServer, backend.stop, port, backend.isRunning);
   } catch (error) {
     await backend.stop().catch(() => undefined);
     throw error;
   }
 }
 
-export async function startWebSidecar(runtime: SidecarRuntimeContext<SidecarStamp>): Promise<WebSidecarHandle> {
+export async function startWebSidecar(runtime: WebRuntimeContext, port = parsePort(process.env[WEB_PORT_ENV])): Promise<WebSidecarHandle> {
   if (shouldUseStandaloneOutput(runtime)) {
     const webRoot = resolveConfiguredStandaloneRoot() == null ? resolveWebRoot() : null;
-    return await startStandaloneNextSidecar(runtime, webRoot);
+    return await startStandaloneNextSidecar(runtime, webRoot, port);
   }
 
   const webRoot = resolveWebRoot();
-  return await startRegularNextSidecar(runtime, webRoot);
+  return await startRegularNextSidecar(runtime, webRoot, port);
 }

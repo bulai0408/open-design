@@ -1,8 +1,22 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+
+vi.mock('../../src/collab/useWorkspaceContext', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/collab/useWorkspaceContext')>();
+  return {
+    ...actual,
+    useWorkspaceContext: () => ({
+      context: null,
+      loading: false,
+      failure: 'unsupported' as const,
+    }),
+  };
+});
+
 import { HomeView } from '../../src/components/HomeView';
+import { createPluginUseHandoff } from '../../src/components/home-hero/plugin-authoring';
 import { I18nProvider } from '../../src/i18n';
 // HomeHero's prompt input is now the same Lexical contenteditable as the
 // project composer, so `home-hero-input` has no `.value`. Read its serialized
@@ -101,14 +115,13 @@ describe('HomeView plugin i18n', () => {
             onSubmit={() => undefined}
             onOpenProject={() => undefined}
             onViewAllProjects={() => undefined}
+            promptHandoff={createPluginUseHandoff(1, 'localized-plugin', { action: 'use' })}
           />
         </div>
       </I18nProvider>,
     );
     const scrollContainer = view.container.querySelector('.entry-main--scroll') as HTMLElement;
     scrollContainer.scrollTop = 240;
-
-    fireEvent.click(await waitFor(() => screen.getByTestId('plugins-home-use-localized-plugin')));
 
     // Plain "Use" now routes the plugin as the active driver (so its own
     // pipeline + context apply on submit) and applies it, surfacing the
@@ -129,50 +142,9 @@ describe('HomeView plugin i18n', () => {
     });
   });
 
-  it('hydrates the Home prompt with the localized plugin query', async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (url) => {
-      if (typeof url === 'string' && url === '/api/plugins') {
-        return new Response(JSON.stringify({ plugins: [PLUGIN_ROW] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (typeof url === 'string' && url.includes('/apply')) {
-        return new Response(JSON.stringify(APPLY_RESULT), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      throw new Error(`unexpected fetch ${url}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    render(
-      <I18nProvider initial="zh-CN">
-        <HomeView
-          projects={[]}
-          onSubmit={() => undefined}
-          onOpenProject={() => undefined}
-          onViewAllProjects={() => undefined}
-        />
-      </I18nProvider>,
-    );
-
-    fireEvent.click(await waitFor(() => screen.getByTestId('plugins-home-use-menu-localized-plugin')));
-    fireEvent.click(screen.getByTestId('plugins-home-use-with-query-localized-plugin'));
-
-    await screen.findByTestId('home-hero-input');
-    // The localized query hydrates the Lexical editor's serialized text (the
-    // draft was empty, so the appended query is the whole prompt). The
-    // caret-at-end assertion is dropped: a contenteditable has no
-    // selectionStart/End, and the caret is placed by the editor's own model.
-    await waitFor(() => {
-      expect(homeHeroPromptText()).toBe('生成一份关于 设计系统 的简报。');
-    });
-    // use-with-query now also routes the plugin as the active driver, so it
-    // applies (binding its pipeline/context for submit).
-    await waitFor(() => expect(
-      fetchMock.mock.calls.some(([url]) => String(url).includes('/apply')),
-    ).toBe(true));
-  });
+  // The "Use with query" affordance was an inline rich-card control. The Home
+  // Community gallery has no inline plugin actions (use goes through the detail
+  // modal, which routes plain `use`), so use-with-query + its localized-query
+  // hydration is now exercised by the rich-card surface (PluginsView.test.tsx)
+  // and the query localization itself by state/projects.test.ts.
 });

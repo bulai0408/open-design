@@ -1,6 +1,6 @@
 // External MCP server configuration storage + spawn-time wiring.
 //
-// Open Design acts as an MCP CLIENT to one or more external MCP servers
+// OpenDesign acts as an MCP CLIENT to one or more external MCP servers
 // (Higgsfield openclaw, GitHub, filesystem, anything the user configures).
 // At spawn time we hand those servers to whichever agent is being launched
 // (Claude Code via a project-cwd `.mcp.json`, ACP agents via the existing
@@ -12,10 +12,11 @@
 //
 // We deliberately keep the schema close to Claude Code's `.mcp.json` and
 // Cursor's MCP config — those are the de-facto interchange formats — so
-// users can copy-paste between Open Design and other tools without
+// users can copy-paste between OpenDesign and other tools without
 // translation.
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 
@@ -409,9 +410,11 @@ export function buildAcpMcpServers(servers: McpServerConfig[]): AcpMcpServer[] {
  * `~/.config/opencode/opencode.json`, the `OPENCODE_CONFIG` file path, the
  * project `opencode.json`, and the `OPENCODE_CONFIG_CONTENT` env var (an
  * inline JSON string). The env-var path is what lets a launcher like the
- * Open Design daemon hand servers to a single `opencode run` invocation
+ * OpenDesign daemon hand servers to a single `opencode run` invocation
  * without writing into the user's global config or leaving a temp file
- * around on crash.
+ * around on crash. We also use the same payload to grant `external_directory`
+ * access to daemon-selected absolute paths (project cwd, staged skill dirs,
+ * etc.) so headless OpenCode runs do not auto-reject them.
  *
  * Schema (verified against the dev branch of `sst/opencode`'s
  * `packages/opencode/src/config/config.ts` and the public docs at
@@ -445,12 +448,17 @@ export function buildAcpMcpServers(servers: McpServerConfig[]): AcpMcpServer[] {
  * works the same way for OpenCode users without forcing them to
  * re-authenticate inside OpenCode.
  */
+export interface OpenCodeConfigBuildOptions {
+  allowedDirectories?: string[];
+  extraConfig?: Record<string, unknown>;
+}
+
 export function buildOpenCodeMcpConfigContent(
   servers: McpServerConfig[],
   tokens: Record<string, string> = {},
+  options: OpenCodeConfigBuildOptions = {},
 ): string | null {
   const enabled = servers.filter((s) => s.enabled);
-  if (enabled.length === 0) return null;
   const mcp: Record<string, Record<string, unknown>> = {};
   for (const s of enabled) {
     if (s.transport === 'stdio') {
@@ -481,8 +489,73 @@ export function buildOpenCodeMcpConfigContent(
       mcp[s.id] = entry;
     }
   }
-  if (Object.keys(mcp).length === 0) return null;
-  return JSON.stringify({ mcp });
+  const externalDirectory = buildOpenCodeExternalDirectoryAllowlist(
+    options.allowedDirectories,
+  );
+  const extraConfig = options.extraConfig ?? {};
+  if (
+    Object.keys(mcp).length === 0 &&
+    !externalDirectory &&
+    Object.keys(extraConfig).length === 0
+  ) return null;
+
+  const config: Record<string, unknown> = { ...extraConfig };
+  if (Object.keys(mcp).length > 0) config.mcp = mcp;
+  if (externalDirectory) {
+    const priorPermission =
+      config.permission && typeof config.permission === 'object' && !Array.isArray(config.permission)
+        ? config.permission as Record<string, unknown>
+        : {};
+    config.permission = {
+      ...priorPermission,
+      external_directory: externalDirectory,
+    };
+  }
+  return JSON.stringify(config);
+}
+
+function buildOpenCodeExternalDirectoryAllowlist(
+  directories: string[] | undefined,
+): Record<string, 'allow'> | null {
+  const normalized = Array.from(
+    new Set(
+      (directories ?? [])
+        .filter((dir) => typeof dir === 'string' && dir.trim().length > 0)
+        .filter((dir) => path.isAbsolute(dir))
+        .flatMap((dir) => normalizeAllowedDirectoryVariants(dir)),
+    ),
+  );
+  if (normalized.length === 0) return null;
+
+  const allowlist: Record<string, 'allow'> = {};
+  for (const dir of normalized) {
+    allowlist[dir] = 'allow';
+    allowlist[joinPermissionGlob(dir, '*')] = 'allow';
+    allowlist[joinPermissionGlob(dir, '**')] = 'allow';
+  }
+  return allowlist;
+}
+
+function normalizeAllowedDirectory(dir: string): string {
+  const resolved = path.resolve(dir);
+  const root = path.parse(resolved).root;
+  if (resolved === root) return root;
+  return resolved.replace(/[\\/]+$/, '');
+}
+
+function normalizeAllowedDirectoryVariants(dir: string): string[] {
+  const normalized = normalizeAllowedDirectory(dir);
+  let real: string | null = null;
+  try {
+    real = normalizeAllowedDirectory(realpathSync.native(dir));
+  } catch {
+    real = null;
+  }
+  return real && real !== normalized ? [normalized, real] : [normalized];
+}
+
+function joinPermissionGlob(dir: string, suffix: '*' | '**'): string {
+  return dir.endsWith(path.sep) ? `${dir}${suffix}` : `${dir}${path.sep}${suffix}`;
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -497,7 +570,7 @@ export const MCP_TEMPLATES: McpTemplate[] = [
     id: 'higgsfield-openclaw',
     label: 'Higgsfield (OpenClaw)',
     description:
-      'Image and video generation MCP from higgsfield.ai. Exposes Soul, Nano Banana, Flux, Kling, Veo, Seedance, and 25+ other models. Endpoint is streamable HTTP at /mcp; click "Connect" after saving — Open Design completes OAuth and stores the token server-side, so no terminal step is needed and the connection survives across chat turns and cloud deployments.',
+      'Image and video generation MCP from higgsfield.ai. Exposes Soul, Nano Banana, Flux, Kling, Veo, Seedance, and 25+ other models. Endpoint is streamable HTTP at /mcp; click "Connect" after saving — OpenDesign completes OAuth and stores the token server-side, so no terminal step is needed and the connection survives across chat turns and cloud deployments.',
     transport: 'http',
     authMode: 'oauth',
     category: 'image-generation',
@@ -1054,7 +1127,7 @@ export const MCP_TEMPLATES: McpTemplate[] = [
     category: 'publishing',
     homepage: 'https://ogforge.dev/',
     example:
-      'Generate a 1200×630 dark-theme OG image titled "Open Design 1.0" with a subtitle "Design with agents", with a Lucide "sparkles" icon.',
+      'Generate a 1200×630 dark-theme OG image titled "OpenDesign 1.0" with a subtitle "Design with agents", with a Lucide "sparkles" icon.',
     command: 'npx',
     args: ['-y', 'ogforge-api'],
   },
@@ -1111,7 +1184,7 @@ export const MCP_TEMPLATES: McpTemplate[] = [
     id: 'filesystem',
     label: 'Filesystem',
     description:
-      'Read, write and list files in a sandboxed directory. Useful for letting the agent operate on a folder outside your Open Design project.',
+      'Read, write and list files in a sandboxed directory. Useful for letting the agent operate on a folder outside your OpenDesign project.',
     transport: 'stdio',
     category: 'utilities',
     homepage: 'https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem',

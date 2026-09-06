@@ -5,7 +5,7 @@
 // (image / video / HTML / design-system / fallback), and the user
 // expects the detail modal to mirror those tiles with the same
 // affordances they get on the curated gallery (DesignSystemPreview
-// modal, examples PreviewModal, PromptTemplatePreviewModal):
+// modal and examples PreviewModal):
 //
 //   media   → image/video player, prompt body, copy, lightbox
 //   html    → sandboxed iframe + share menu + fullscreen
@@ -18,28 +18,45 @@
 // stays identical — every variant reaches `usePlugin` through the
 // same callback wiring.
 
-import type { InstalledPluginRecord } from '@open-design/contracts';
+import type {
+  InstalledPluginRecord,
+  WorkspaceCollabContext,
+} from '@open-design/contracts';
 import { createPortal } from 'react-dom';
 import { inferPluginPreview } from './plugins-home/preview';
 import { PluginScenarioDetail } from './plugin-details/PluginScenarioDetail';
 import { PluginExampleDetail } from './plugin-details/PluginExampleDetail';
 import { PluginDesignSystemDetail } from './plugin-details/PluginDesignSystemDetail';
 import { PluginMediaDetail } from './plugin-details/PluginMediaDetail';
+import type { PluginUseAction } from './plugins-home/useActions';
+import type { PreviewSharePopoverItem } from './PreviewModal';
 
 interface Props {
   record: InstalledPluginRecord;
   onClose: () => void;
-  onUse: (record: InstalledPluginRecord) => void;
+  onUse: (record: InstalledPluginRecord, action: PluginUseAction) => void;
+  onDuplicate?: (record: InstalledPluginRecord) => void;
   isApplying?: boolean;
+  hideUseAction?: boolean;
+  /** Exact authority for the resource bytes shown by this modal. */
+  workspaceContext?: WorkspaceCollabContext | null;
+  // Analytics — fires when the user picks an item inside the PreviewModal
+  // share popover (media / html / design variants only; the scenario
+  // fallback has no share popover).
+  onSharePopoverItemClick?: (item: PreviewSharePopoverItem) => void;
 }
 
 export function PluginDetailsModal({
   record,
   onClose,
   onUse,
+  onDuplicate,
   isApplying,
+  hideUseAction,
+  workspaceContext = null,
+  onSharePopoverItemClick,
 }: Props) {
-  const preview = inferPluginPreview(record);
+  const preview = inferPluginPreview(record, { workspaceContext });
   let detail: JSX.Element;
 
   if (preview.kind === 'media') {
@@ -48,7 +65,10 @@ export function PluginDetailsModal({
         record={record}
         onClose={onClose}
         onUse={onUse}
+        onDuplicate={onDuplicate}
         isApplying={isApplying}
+        hideUseAction={hideUseAction}
+        onSharePopoverItemClick={onSharePopoverItemClick}
       />
     );
   } else if (preview.kind === 'html') {
@@ -60,7 +80,11 @@ export function PluginDetailsModal({
         }
         onClose={onClose}
         onUse={onUse}
+        onDuplicate={onDuplicate}
         isApplying={isApplying}
+        hideUseAction={hideUseAction}
+        workspaceContext={workspaceContext}
+        onSharePopoverItemClick={onSharePopoverItemClick}
       />
     );
   } else if (preview.kind === 'design') {
@@ -69,7 +93,11 @@ export function PluginDetailsModal({
         record={record}
         onClose={onClose}
         onUse={onUse}
+        onDuplicate={onDuplicate}
         isApplying={isApplying}
+        hideUseAction={hideUseAction}
+        workspaceContext={workspaceContext}
+        onSharePopoverItemClick={onSharePopoverItemClick}
       />
     );
   } else {
@@ -78,7 +106,10 @@ export function PluginDetailsModal({
         record={record}
         onClose={onClose}
         onUse={onUse}
+        onDuplicate={onDuplicate}
         isApplying={isApplying}
+        hideUseAction={hideUseAction}
+        workspaceContext={workspaceContext}
       />
     );
   }

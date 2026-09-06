@@ -7,16 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- [Fixed] Long speaker notes are now scrollable inside the presenter view instead of being clipped when notes push the layout past the viewport. (#6271)
+- [Changed] Retired the official Nix flake, Home Manager/NixOS modules, and lockfile-coupled Nix CI maintenance. OpenDesign still discovers agent CLIs installed through Nix profiles on NixOS and nix-darwin hosts.
+
 ## [0.9.0] - 2026-05-29
 
-🎉 **310 PRs · 88 contributors · 7 days** — Meet the **install-and-create release**. No more API-key scavenger hunts. No more asking teammates to install three different CLIs before their first prompt. **Open Design AMR** is now built into the app: sign in once, pick a model, and start building. Around that zero-config first run, 0.9.0 brings a bigger agent bench, faster model picking, a more discoverable plugin marketplace, richer review workflows, smoother Studio tools, and easier installs across Windows, macOS, and Linux. 🚀
+🎉 **310 PRs · 88 contributors · 7 days** — Meet the **install-and-create release**. No more API-key scavenger hunts. No more asking teammates to install three different CLIs before their first prompt. **OpenDesign AMR** is now built into the app: sign in once, pick a model, and start building. Around that zero-config first run, 0.9.0 brings a bigger agent bench, faster model picking, a more discoverable plugin marketplace, richer review workflows, smoother Studio tools, and easier installs across Windows, macOS, and Linux. 🚀
 
 ### Highlights
 
-- 🤖 **Open Design AMR — official AI, one click from a fresh install.** The old first-run tax was brutal: install a CLI, find an API key, paste secrets, test auth, debug the shell, then maybe start designing. 0.9.0 cuts that down to the thing users actually wanted: open the app, sign in to AMR, pick a model, and go. Onboarding leads with AMR, the desktop keeps sign-in visible, live model discovery keeps choices fresh, wallet/account states are handled in the UI, image attachments work, and the `vela` runtime is bundled in the installer. (#2355, #2979, #2980, #3012, #3019, #3048, #3073, #3076, #3088, #3092, #3094, #3097, #3099, #3117, #3127, #3158, #3198, #3226) Thanks @lefarcen, @nettee, @mrcfps, @pftom, @jinmeihong0201-gif, @Caprika.
-- 🆕 **The agent bench gets much bigger.** Aider, Trae CLI, Antigravity, and DeepSeek Reasonix all join the picker, giving builders more real local-agent paths instead of a single blessed workflow. Aider gets first-class branding, Trae runs over ACP in yolo mode, and the new adapters make Open Design feel less like one agent integration and more like the place where agents come to work. (#1970, #2729, #2856, #3157, #2952) Thanks @mrbeandev, @JasonYang0104, @lefarcen, @Bernardxu123.
+- 🤖 **OpenDesign AMR — official AI, one click from a fresh install.** The old first-run tax was brutal: install a CLI, find an API key, paste secrets, test auth, debug the shell, then maybe start designing. 0.9.0 cuts that down to the thing users actually wanted: open the app, sign in to AMR, pick a model, and go. Onboarding leads with AMR, the desktop keeps sign-in visible, live model discovery keeps choices fresh, wallet/account states are handled in the UI, image attachments work, and the `vela` runtime is bundled in the installer. (#2355, #2979, #2980, #3012, #3019, #3048, #3073, #3076, #3088, #3092, #3094, #3097, #3099, #3117, #3127, #3158, #3198, #3226) Thanks @lefarcen, @nettee, @mrcfps, @pftom, @jinmeihong0201-gif, @Caprika.
+- 🆕 **The agent bench gets much bigger.** Aider, Trae CLI, Antigravity, and DeepSeek Reasonix all join the picker, giving builders more real local-agent paths instead of a single blessed workflow. Aider gets first-class branding, Trae runs over ACP in yolo mode, and the new adapters make OpenDesign feel less like one agent integration and more like the place where agents come to work. (#1970, #2729, #2856, #3157, #2952) Thanks @mrbeandev, @JasonYang0104, @lefarcen, @Bernardxu123.
 - 🔎 **Model picking stops feeling like scrolling a phone book.** Search now cuts through long model lists, and shared BYOK catalogs keep Settings and the inline switcher aligned so switching models feels fast instead of fiddly. (#3278) Thanks @AmyShang-alt.
-- 💬 **Keep talking while the model is still working.** Queue chat sends mid-stream, then let Open Design continue the conversation the moment the current turn finishes. Studio and Draw now follow the same flow, so capturing an idea does not depend on waiting for the previous response to end. (#2870, #3270, #1961) Thanks @zoeforfun, @lefarcen, @leno23.
+- 💬 **Keep talking while the model is still working.** Queue chat sends mid-stream, then let OpenDesign continue the conversation the moment the current turn finishes. Studio and Draw now follow the same flow, so capturing an idea does not depend on waiting for the previous response to end. (#2870, #3270, #1961) Thanks @zoeforfun, @lefarcen, @leno23.
 - 🧩 **Skills become a real plugin ecosystem.** Skill bundles now graduate into first-class Plugins: visible in the drawer, listable from the CLI, indexed on the site, and easier to explain to users. One extension model, one library, one mental model. (#3085) Thanks @Siri-Ray.
 - 🎨 **Bigger creative moves are one install away.** The official GSAP plugin brings serious web animation into the agent loop, while Research Decision Room turns research prompts into structured multi-role reviews instead of one long answer. (#3109, #3111, #2949) Thanks @Tuola-waj, @mturac.
 - 🌍 **The plugin library starts feeling global.** The on-site library now mirrors in-app categories and reads natively across supported locales, so visitors land on a catalog that feels built for them instead of partially translated around the edges. (#3010, #2926) Thanks @522700967-wq.
@@ -24,16 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🪪 **Design systems move from files to living assets.** Rename them, pin your own to the top, read real swatches from their color tables, and connect design-system projects to GitHub without the zip-file shuffle. (#2812, #2817, #2820) Thanks @portseif.
 - 📅 **Routines feel scheduled, not scripted.** A real picker, natural-language summaries, newest-first ordering, auto-focus after create, localization, and duplicate-slot cleanup make automations easier to trust. (#2593, #2389, #3035, #2598, #1971) Thanks @Hetsavani, @leno23, @sasha1107, @bulai0408.
 - 💬 **Review can keep moving while the artifact changes.** Comment mode now supports attachments, live preview updates, and clean deselection, so screenshots and notes stay attached to the work instead of freezing the review flow. (#2869, #2844, #3144) Thanks @zoeforfun, @leessju, @feliciaZH.
-- 📦 **Trying Open Design gets easier on Windows and Linux.** Windows gets a portable zip path; Linux gets Docker/Podman Compose one-click setup. Less install friction, faster first run. (#2937, #2414) Thanks @PerishCode, @epicsagas.
-- 🔌 **MCP clients can now do real workspace work.** Write files, delete files, delete projects, resolve the active project directory, run generation loops, and bootstrap Codex from one place. External clients can now participate in the Open Design workspace instead of only observing it. (#2416, #2802, #3141) Thanks @YOMXXX, @papperrollinggery, @lefarcen.
-- 🛂 **Network changes stop requiring a restart.** Switch the system proxy while Open Design is running; the next outbound request picks it up automatically. (#3093) Thanks @mrcfps.
+- 📦 **Trying OpenDesign gets easier on Windows and Linux.** Windows gets a portable zip path; Linux gets Docker/Podman Compose one-click setup. Less install friction, faster first run. (#2937, #2414) Thanks @PerishCode, @epicsagas.
+- 🔌 **MCP clients can now do real workspace work.** Write files, delete files, delete projects, resolve the active project directory, run generation loops, and bootstrap Codex from one place. External clients can now participate in the OpenDesign workspace instead of only observing it. (#2416, #2802, #3141) Thanks @YOMXXX, @papperrollinggery, @lefarcen.
+- 🛂 **Network changes stop requiring a restart.** Switch the system proxy while OpenDesign is running; the next outbound request picks it up automatically. (#3093) Thanks @mrcfps.
 - 🌐 **The public site gets a proper community front door.** Community, Discord/X, Ambassadors, a cleaner footer, localized template pages, and sharper brand details make the project easier to discover and share. (#3066, #3230, #3222, #3218, #3256) Thanks @leilei926524-tech, @522700967-wq.
 - ✏️ **Studio's mark tool gets cleaner and faster.** Draw and Screenshot merge into one Studio flow, with better preview interactions and clearer queue/screenshot modal behavior. (#3277, #3000, #3215) Thanks @lefarcen, @zoeforfun, @xxiaoxiong.
 
 ### ✨ Added
 
 #### 🤖 Agents & runtimes
-- **Open Design AMR (vela) as a first-class ACP stdio agent**, with onboarding, sign-in pill, and bundled `vela` CLI inside the installer. (#2355) Thanks @lefarcen.
+- **OpenDesign AMR (vela) as a first-class ACP stdio agent**, with onboarding, sign-in pill, and bundled `vela` CLI inside the installer. (#2355) Thanks @lefarcen.
 - **AMR login state read from `~/.amr`** so the desktop reflects vela's source of truth. (#3048, #3073) Thanks @Caprika.
 - **AMR sign-in pill hover-cancel.** (#3158) Thanks @Caprika.
 - **AMR account-failure and insufficient-balance UI**, including wallet URL handling and duplicate recharge-link dedupe. (#2980, #3099, #3117) Thanks @Caprika.
@@ -133,7 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.8.0] - 2026-05-20
 
-The rebuilt-core release: **everything is a plugin**, **headless by default**, **plugins create plugins**. Open Design's research-preview architecture has been replaced with a small, boring engine plus a plugin surface — design systems, slices, prototypes, exports, and Figma itself all live in plugins now. The desktop app is a thin wrapper around the OD CLI, so the same engine runs in Claude Code, OpenClaw, Hermes Agent, and chat bots in Lark / Discord / Slack. **Critique Theater** matures through **Phase 16** (rollout ratchet, conformance API, 9 Prometheus metrics, Grafana dashboard, M0 dark-launch by default). **149 design systems** now ship with structured `tokens.css` + components manifests across 60+ new brand fixtures. **Italian (it) locale** + **CJK font fallback**. New media providers: **Leonardo.ai**, **ElevenLabs**, **SenseAudio**. **Packaged auto-update** lands on both **macOS and Windows**, battle-hardened through the preview cycle. Plus a **top-to-bottom visual refresh**, **Quick-brief discovery overhaul**, **PostHog v2 analytics schema**, **manual edit UX overhaul** (focus mode, uploads, remove-element patch), **custom CLI agent profiles**, and **HTML Anything** landing page. 305 merged PRs by 75 contributors since 0.7.0.
+The rebuilt-core release: **everything is a plugin**, **headless by default**, **plugins create plugins**. OpenDesign's research-preview architecture has been replaced with a small, boring engine plus a plugin surface — design systems, slices, prototypes, exports, and Figma itself all live in plugins now. The desktop app is a thin wrapper around the OD CLI, so the same engine runs in Claude Code, OpenClaw, Hermes Agent, and chat bots in Lark / Discord / Slack. **Critique Theater** matures through **Phase 16** (rollout ratchet, conformance API, 9 Prometheus metrics, Grafana dashboard, M0 dark-launch by default). **149 design systems** now ship with structured `tokens.css` + components manifests across 60+ new brand fixtures. **Italian (it) locale** + **CJK font fallback**. New media providers: **Leonardo.ai**, **ElevenLabs**, **SenseAudio**. **Packaged auto-update** lands on both **macOS and Windows**, battle-hardened through the preview cycle. Plus a **top-to-bottom visual refresh**, **Quick-brief discovery overhaul**, **PostHog v2 analytics schema**, **manual edit UX overhaul** (focus mode, uploads, remove-element patch), **custom CLI agent profiles**, and **HTML Anything** landing page. 305 merged PRs by 75 contributors since 0.7.0.
 
 ### Added
 
@@ -196,9 +199,9 @@ The rebuilt-core release: **everything is a plugin**, **headless by default**, *
 - **Updater hardening** through the preview cycle — release validation, deferred installer on Windows, applied-state clearing, download / install handoff hardening, smoke-recovery. ([#2565], [#2575], [#2592], [#2595], [#2677], [#2687], [#2700])
 - **Desktop updater UI flow** — new in-app updater popup.
 - **Packaged update apply observations** captured for telemetry / debugging. ([#2429])
-- **Nightly + preview package identity** so beta installs don't collide with stable. ([#2437])
+- **Prerelease + preview package identity** so beta installs don't collide with stable. ([#2437])
 - **macOS Dock icon stays put** when desktop-pet window opens. ([#2413])
-- **Refresh Open Design app visuals** — new app icons, logo, brand glyphs. ([#2436])
+- **Refresh OpenDesign app visuals** — new app icons, logo, brand glyphs. ([#2436])
 - **Linux packaged client parity smoke coverage.**
 - **Ensure node binary dir is on PATH for agent sub-processes on Windows.** ([#1989])
 
@@ -257,7 +260,7 @@ The rebuilt-core release: **everything is a plugin**, **headless by default**, *
 #### Desktop & packaging
 - macOS Dock icon stays put when desktop-pet window opens. ([#2413])
 - Align Windows smoke update root with portable installs. ([#2376])
-- Nightly release smoke identity. ([#2446])
+- Prerelease release smoke identity. ([#2446])
 - Improve desktop updater ready UI. ([#2403])
 - Forward proxy env vars to packaged sidecars.
 - Detect mise-installed npm package bins.
@@ -442,7 +445,7 @@ A memory-plus-UI release: **auto-memory store** carries agent context across run
 ### Internal
 
 - Stabilize extended Playwright coverage. ([#1341])
-- Expand nightly UI and desktop regression coverage. ([#1256])
+- Expand prerelease UI and desktop regression coverage. ([#1256])
 - Harden e2e smoke and release reports. ([#1140])
 - Expand entry and settings automation coverage. ([#954])
 - Refreshed generated GitHub metrics SVG and contributors wall. ([#1115], [#1117], [#1183], [#1188], [#1328], [#1330])
@@ -453,11 +456,11 @@ A memory-plus-UI release: **auto-memory store** carries agent context across run
   - **`od plugin events snapshot/stats` + tail filters (Phase 4).** Extends §3.II1 with: `GET /api/plugins/events/snapshot` for non-SSE one-shot reads (dashboards that don't want a live connection); `GET /api/plugins/events/stats` returns a `summarisePluginEvents()` rollup (counts byKind, byPluginId — skipping empty ids — plus oldest/newest at + id range); `--kind <k>` and `--plugin-id <id>` filter flags work on both `od plugin events tail` (client-side post-render) and the new `od plugin events snapshot` subcommand. CLI pretty-prints the stats rollup with sorted-key counts for byte-determinism.
   - **More plugin event producer hooks (Phase 4).** Extends §3.II1 with: `installPlugin` accepts `eventKind: 'installed' | 'upgraded'` so the upgrade route distinguishes the operation in the live tail; `POST /api/plugins/:id/trust` emits `plugin.trust-changed`; `POST /api/applied-plugins/prune` emits `plugin.snapshot-pruned` when anything was actually removed; `POST /api/marketplaces/:id/refresh` emits `plugin.marketplace-refreshed`. Each hook is best-effort and never blocks the underlying mutation if the ring buffer throws.
   - **Plugin event ring buffer + SSE tail (Phase 4).** New `apps/daemon/src/plugins/events.ts` ships an in-memory FIFO ring buffer (capped at 1000 entries, monotonic ids, fan-out subscribers) for plugin lifecycle events: `plugin.installed` / `.upgraded` / `.uninstalled` / `.trust-changed` / `.applied` / `.snapshot-pruned` / `.marketplace-refreshed`. Producer hooks landed on the installer (install + uninstall). New `GET /api/plugins/events` SSE route emits the backlog on connect (with optional `?since=<id>` trim) then forwards live events. CLI: `od plugin events tail [-f] [--since <id>] [--json]` — non-follow mode drains backlog + exits; `-f` keeps the stream open for ops dashboards.
-  - **`od plugin doctor --strict` + verify strict propagation (Phase 4).** New `--strict` flag on `od plugin doctor` promotes warnings to failures (exit 4 distinguishes 'strict failed' from doctor errors at exit 1). The `verifyPlugin()` orchestrator gains a matching `strict: true` config knob that flows through `.od-verify.json` so plugins can lock 'no warnings allowed' as a one-line CI policy.
+  - **`od plugin doctor --strict` + verify strict propagation (Phase 4).** New `--strict` flag on `od plugin doctor` promotes warnings to failures (exit 4 distinguishes 'strict failed' from doctor errors at exit 1). The `verifyPlugin()` orchestrator gains a matching `strict: true` config knob that flows through the plugin verify config file so plugins can lock 'no warnings allowed' as a one-line CI policy.
   - **`od daemon db verify` SQLite integrity check (Phase 5).** New `verifySqliteIntegrity()` pure helper wraps PRAGMA `integrity_check` (or `quick_check` with `--quick`) + PRAGMA `foreign_key_check`. Returns a structured `{ ok, mode, issues[], elapsedMs, generatedAt }` report with issues tagged `kind='integrity' | 'foreign_key'`. Loopback-only `POST /api/daemon/db/verify` route + `od daemon db verify [--quick]` CLI subcommand — exit 0 on ok=true, 4 on any issue, so CI can wire it into a pre-deploy check.
   - **`od daemon db vacuum` (Phase 5).** New loopback-only `POST /api/daemon/db/vacuum` runs SQLite VACUUM and reports before/after sizes + reclaimed bytes + elapsed ms. Useful after large delete batches (snapshot prune, plugin uninstall) shrink rows but leave space allocated to the file. CLI: `od daemon db vacuum [--json]`.
   - **`od daemon db status` SQLite inventory (Phase 5).** New `inspectSqliteDatabase()` pure helper + `GET /api/daemon/db` route returns a structured report: `kind` ('sqlite'), file location, size on disk (primary + WAL + SHM), schema version (`user_version` PRAGMA), and per-table row counts (system tables excluded, lexicographic order). CLI: `od daemon db status [--json]` lets ops sanity-check deployments at a glance + compare expected-vs-actual table rosters across daemon upgrades.
-  - **`od plugin verify <id>` CI meta-command (Phase 4).** New `verifyPlugin()` pure orchestrator aggregates `doctor` + `simulate` + `canon --check` into one pass/fail report. Reads `<plugin-folder>/.od-verify.json` (or `--config <path>`) so plugin authors commit their CI checks into their repo. Each check resolves to `passed | failed | skipped | unsupported`; aggregate passes iff every enabled check is passed or skipped (`unsupported` bubbles up as a fail to keep CI honest). One-liner CI workflow: `od plugin verify my-plugin` — exit 0 on pass, 4 on fail, 2 on CLI/config error.
+  - **`od plugin verify <id>` CI meta-command (Phase 4).** New `verifyPlugin()` pure orchestrator aggregates `doctor` + `simulate` + `canon --check` into one pass/fail report. Reads the plugin verify config file (or `--config <path>`) so plugin authors commit their CI checks into their repo. Each check resolves to `passed | failed | skipped | unsupported`; aggregate passes iff every enabled check is passed or skipped (`unsupported` bubbles up as a fail to keep CI honest). One-liner CI workflow: `od plugin verify my-plugin` — exit 0 on pass, 4 on fail, 2 on CLI/config error.
   - **`od plugin simulate <id>` pipeline dry-run (Phase 4).** New `simulatePipeline({ pipeline, signals, iterationCap? })` pure helper walks every stage in a plugin's pipeline against caller-supplied signals (constant snapshot OR per-iteration generator function) and reports `outcome ∈ { single | converged | cap | unparsable }` per stage plus aggregate `outcome ∈ { all-converged | all-single | mixed | cap-hit | unparsable }`. Companion `parseSignalKv()` parses repeatable `-s key=value` CLI flags into the closed `UntilSignals` vocabulary with typo guards. CLI: `od plugin simulate <pluginId> [-s key=value ...] [--cap <n>] [--json]` — exit 4 on cap-hit/unparsable so CI can hook this into a pipeline check.
   - **`od plugin stats` inventory health report (Phase 4).** New `pluginInventoryStats()` + `snapshotInventoryStats()` pure helpers aggregate installed-plugin counts (by `sourceKind` / `trust` / `taskKind`, bundled vs. third-party split, plugins with elevated capabilities — `fs:write` / `subprocess` / `bash` / `network` / `connector:*`) and snapshot health (status breakdown, project / run linkage, oldest / newest applied timestamps). New `GET /api/plugins/stats` route + `od plugin stats [--json]` CLI subcommand for at-a-glance fleet audit.
   - **`od plugin canon --check <expected-file>` byte-equality fixtures (Phase 4).** New `--check` mode on `od plugin canon` compares the canon output against an on-disk fixture and exits 4 on mismatch with a per-line diff preview. Lets plugin authors commit `renderPluginBlock()` regression fixtures into their own `tests/` without writing a fresh test harness.
@@ -549,12 +552,12 @@ A memory-plus-UI release: **auto-memory store** carries agent context across run
 - **`ib-pitch-book` skill** — investment-banking strategic-alternatives pitch book (Anthropic financial-services Pitch Agent workflow); ships `example.html` and IB layout references.
 ## [0.6.0] - 2026-05-09
 
-A connectivity-and-iteration release: Open Design becomes a fully bidirectional MCP citizen (external MCP client with 39 templates), ships **Cloudflare Pages deployment** for generated artifacts (with custom domains), advances Critique Theater to **Phase 6** (interrupt + project-keyed run registry), and lands a redesigned top bar, draggable file tabs, batch delete, **vector PDF export**, **agent-callable research/search**, and **Orbit activity summaries**. Hyperframes learns the HTML-in-Canvas API. New BYOK provider (Ollama Cloud), new agent capabilities (Gemini 3 preview + GPT-5.1 codex picker + DeepSeek v4), new design systems (BMW M, Slack, Cisco, Webex, Mission Control, Urdu Modern), eight new skill bundles, and Turkish + Thai locales. 136 merged PRs since 0.5.0.
+A connectivity-and-iteration release: OpenDesign becomes a fully bidirectional MCP citizen (external MCP client with 39 templates), ships **Cloudflare Pages deployment** for generated artifacts (with custom domains), advances Critique Theater to **Phase 6** (interrupt + project-keyed run registry), and lands a redesigned top bar, draggable file tabs, batch delete, **vector PDF export**, **agent-callable research/search**, and **Orbit activity summaries**. Hyperframes learns the HTML-in-Canvas API. New BYOK provider (Ollama Cloud), new agent capabilities (Gemini 3 preview + GPT-5.1 codex picker + DeepSeek v4), new design systems (BMW M, Slack, Cisco, Webex, Mission Control, Urdu Modern), eight new skill bundles, and Turkish + Thai locales. 136 merged PRs since 0.5.0.
 
 ### Added
 
 #### MCP, deployment & connectors
-- **External MCP client with daemon-managed OAuth and 39 design-focused templates.** Open Design can now consume MCP servers, not just expose itself as one. ([#898])
+- **External MCP client with daemon-managed OAuth and 39 design-focused templates.** OpenDesign can now consume MCP servers, not just expose itself as one. ([#898])
 - **Cloudflare Pages artifact deployment.** One-shot publish of generated artifacts to Pages from the desktop app. ([#729])
 - **Cloudflare Pages custom domains.** Bind your own domain to deployed artifacts. ([#851])
 - Preserve OAuth state and advertised tool counts when reconnecting MCP/connector providers. ([#1036])
@@ -591,7 +594,7 @@ A connectivity-and-iteration release: Open Design becomes a fully bidirectional 
 - Expose Gemini 3 preview models and Gemini 2.5 Flash Lite in the picker. ([#986])
 - Add GPT-5.1 entries to the Codex picker. ([#946])
 - Expand Codex picker coverage. ([#757])
-- Stable nightly promotion gate for `[codex]`. ([#962])
+- Stable prerelease promotion gate for `[codex]`. ([#962])
 - `VP_HOME` environment variable support in agent resolution. ([#859])
 - Auto-rebuild `better-sqlite3` on Node.js ABI mismatch postinstall. ([#813])
 - Increase agent inactivity timeout. ([#1071])
@@ -649,7 +652,7 @@ A connectivity-and-iteration release: Open Design becomes a fully bidirectional 
 
 #### MCP & connectors
 - MCP install snippet survives daemon port changes. ([#846])
-- Pin `OD_DATA_DIR` in `/api/mcp/install-info` env so the macOS-packaged MCP server stops EPERM'ing on `.od/projects`. ([#857])
+- Pin the daemon data directory in `/api/mcp/install-info` env so the macOS-packaged MCP server stops failing on managed project storage. ([#857])
 - Reserve clearance for the MCP server Copy button so it stops overlapping the snippet. ([#847])
 - Give the MCP server Copy button a solid surface so it reads against the code block. ([#840])
 - Stable curated tool count in the connector card badge. ([#767])
@@ -730,7 +733,7 @@ A connectivity-and-iteration release: Open Design becomes a fully bidirectional 
 - Test: cover model option rendering. ([#948])
 - Test: de-flake chat-scroll-preservation across tab switches. ([#886])
 - Auto-generated metrics + contributors wall refreshes. ([#853], [#998], [#856], [#1004])
-- Release: Open Design 0.5.0 changelog landing. ([#820])
+- Release: OpenDesign 0.5.0 changelog landing. ([#820])
 
 ## [0.5.0] - 2026-05-07
 
@@ -866,7 +869,7 @@ A minor release focused on iteration: live-data dashboards graduate to a first-c
 
 ### Documentation
 
-- Documented `OD_DATA_DIR` and migration from `.od/` to the Desktop app. ([#570])
+- Documented daemon data directory migration to the Desktop app. ([#570])
 - Added Chinese (Simplified) QUICKSTART. ([#578])
 - Backported missing zh-TW README sections from the English README. ([#586])
 - Synced and improved the Korean README. ([#619])
@@ -878,12 +881,12 @@ A minor release focused on iteration: live-data dashboards graduate to a first-c
 
 ## [0.4.0] - 2026-05-05
 
-A multi-protocol leap: Open Design now ships as an MCP server, ships Critique Theater (Design Jury) Phase 4, gains live-reload + Tweaks mode + live artifacts in the preview pane, and adds five new agent / runtime adapters. 71 merged PRs from 40+ contributors over two days. Linux AppImage packaging landed in tooling, but the stable Linux artifact is deferred from 0.4.0 while containerized release packaging is hardened.
+A multi-protocol leap: OpenDesign now ships as an MCP server, ships Critique Theater (Design Jury) Phase 4, gains live-reload + Tweaks mode + live artifacts in the preview pane, and adds five new agent / runtime adapters. 71 merged PRs from 40+ contributors over two days. Linux AppImage packaging landed in tooling, but the stable Linux artifact is deferred from 0.4.0 while containerized release packaging is hardened.
 
 ### Added
 
 #### MCP & agent integration
-- **`od mcp` — expose Open Design as a stdio MCP server.** Coding agents in other repos (Claude Code, Codex, Cursor, VS Code, Antigravity, Zed, Windsurf) can read files from local Open Design projects directly, including the project the user has open in the Open Design app right now. ([#399])
+- **`od mcp` — expose OpenDesign as a stdio MCP server.** Coding agents in other repos (Claude Code, Codex, Cursor, VS Code, Antigravity, Zed, Windsurf) can read files from local OpenDesign projects directly, including the project the user has open in the OpenDesign app right now. ([#399])
 - **Link code folder support for agent context** — point agents at any local code folder alongside the design project. ([#455])
 - Kilo CLI (ACP) agent adapter. ([#480])
 - DeepSeek TUI agent adapter. ([#439])
@@ -1140,7 +1143,7 @@ A feature-heavy follow-up to 0.1.0 — dark mode, xAI Grok Imagine media generat
 
 ## [0.1.0] - 2026-05-01
 
-First public release of Open Design — a local-first, open-source alternative to Anthropic's Claude Design. It detects your installed code-agent CLI, runs design skills against curated design systems, and streams artifacts into a sandboxed in-app preview.
+First public release of OpenDesign — a local-first, open-source alternative to Anthropic's Claude Design. It detects your installed code-agent CLI, runs design skills against curated design systems, and streams artifacts into a sandboxed in-app preview.
 
 ### Added
 
@@ -1229,7 +1232,7 @@ First public release of Open Design — a local-first, open-source alternative t
 
 ### Internal
 
-- Initial project structure, project rename "Open Claude Design" → "Open Design", naming optimization. ([#1], [#2])
+- Initial project structure, project rename "Open Claude Design" → "OpenDesign", naming optimization. ([#1], [#2])
 - Initial AGENTS.md and OpenCode agent instructions. ([#114])
 - Beta release workflow placeholder. ([#36])
 - Git commit co-author policy. ([#131])

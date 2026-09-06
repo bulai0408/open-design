@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  continuableUnfinishedTodos,
   latestTodosFromEvents,
   latestTodoWriteInputForPinnedCard,
   parseTodoWriteInput,
@@ -121,6 +122,20 @@ describe('todo event helpers', () => {
     ]);
   });
 
+  it('accepts native task item text aliases used by different agents', () => {
+    expect(parseTodoWriteInput({
+      todos: [
+        { description: 'Inspect plan mode output', status: 'completed' },
+        { label: 'Render todo card', status: 'in_progress' },
+        { text: 'Run focused tests', status: 'pending' },
+      ],
+    })).toEqual([
+      { content: 'Inspect plan mode output', status: 'completed', activeForm: undefined },
+      { content: 'Render todo card', status: 'in_progress', activeForm: undefined },
+      { content: 'Run focused tests', status: 'pending', activeForm: undefined },
+    ]);
+  });
+
   it('uses lowercase todowrite as the latest todo truth over older TodoWrite events', () => {
     const events: AgentEvent[] = [
       { kind: 'tool_use', id: 'todo-1', name: 'TodoWrite', input: firstTodoInput },
@@ -164,6 +179,45 @@ describe('todo event helpers', () => {
         activeForm: undefined,
       },
     ]);
+  });
+
+  // #1247 / #1060 — locks the canonical predicate: `stopped` counts as unfinished
+  // (status !== 'completed'), so the footer and the daemon's endedWithUnfinishedWork
+  // flag agree. Narrowing to "pending/in_progress only" would reintroduce the drift.
+  it('counts a stopped task as unfinished, matching the daemon predicate', () => {
+    const events: AgentEvent[] = [
+      {
+        kind: 'tool_use',
+        id: 'todo-1',
+        name: 'TodoWrite',
+        input: {
+          todos: [
+            { content: 'Draft layout', status: 'completed' },
+            { content: 'Build components', status: 'stopped' },
+          ],
+        },
+      },
+    ];
+    expect(unfinishedTodosFromEvents(events)).toEqual([
+      { content: 'Build components', status: 'stopped', activeForm: undefined },
+    ]);
+  });
+
+  it('treats an all-completed TodoWrite as finished (no unfinished work)', () => {
+    const events: AgentEvent[] = [
+      {
+        kind: 'tool_use',
+        id: 'todo-1',
+        name: 'TodoWrite',
+        input: {
+          todos: [
+            { content: 'Draft layout', status: 'completed' },
+            { content: 'Build components', status: 'completed' },
+          ],
+        },
+      },
+    ];
+    expect(unfinishedTodosFromEvents(events)).toEqual([]);
   });
 
   it('marks the active todo as stopped when a failed run ended without a final TodoWrite', () => {
@@ -251,5 +305,45 @@ describe('todo event helpers', () => {
       { content: 'Add annotation card', status: 'stopped', activeForm: undefined },
       { content: 'Run focused tests', status: 'pending', activeForm: undefined },
     ]);
+  });
+});
+
+describe('continuableUnfinishedTodos', () => {
+  const staleSnapshot: AgentEvent[] = [
+    {
+      kind: 'tool_use',
+      id: 'todo-1',
+      name: 'TodoWrite',
+      input: {
+        todos: [
+          { content: '生成品牌视觉资产', status: 'completed' },
+          { content: '写入响应式交互原型', status: 'pending' },
+          { content: '交付根目录运行入口', status: 'pending' },
+        ],
+      },
+    },
+  ] as AgentEvent[];
+
+  it('offers nothing to continue once the strategy task delivered its work', () => {
+    // The agent wrote index.html plus its assets and OD Next settled the task
+    // `completed`, but its last TodoWrite still carried two pending items.
+    // Offering "continue" there sends the user into a second task that has
+    // nothing left to write and can only block.
+    expect(
+      continuableUnfinishedTodos({
+        events: staleSnapshot,
+        strategyTaskDelivered: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it('still offers the unfinished items when the task did not deliver', () => {
+    expect(
+      continuableUnfinishedTodos({ events: staleSnapshot }).map((todo) => todo.content),
+    ).toEqual(['写入响应式交互原型', '交付根目录运行入口']);
+  });
+
+  it('returns nothing for a missing message', () => {
+    expect(continuableUnfinishedTodos(undefined)).toEqual([]);
   });
 });

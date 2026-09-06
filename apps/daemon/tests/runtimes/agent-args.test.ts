@@ -1,12 +1,31 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'vitest';
 import {
-  AGENT_DEFS, aider, antigravity, assert, claude, codex, copilot, cursorAgent, deepseek, devin, detectAgents, gemini, grokBuild, join, kilo, kiro, mkdtempSync, opencode, pi, qoder, qwen, rmSync, spawnEnvForAgent, tmpdir, vibe, writeFileSync, chmodSync,
+  AGENT_DEFS, aider, antigravity, assert, claude, codex, copilot, cursorAgent, deepseek, devin, detectAgents, grokBuild, join, kilo, kimi, kiro, mkdtempSync, opencode, pi, qoder, qwen, rmSync, spawnEnvForAgent, tmpdir, vibe, writeFileSync, chmodSync,
 } from './helpers/test-helpers.js';
 import { writeAntigravityModelSelection } from '../../src/runtimes/defs/antigravity.js';
+import { parseOpenCodeModels } from '../../src/runtimes/defs/opencode.js';
+import { agentCapabilities } from '../../src/runtimes/capabilities.js';
+import {
+  getRememberedLiveModels,
+  rememberLiveModels,
+} from '../../src/runtimes/models.js';
 import type { TestAgentDef } from './helpers/test-helpers.js';
 
-test('cursor-agent args deliver prompts via stdin without passing a literal dash prompt', () => {
+// ---- Cursor Agent --trust capability (issue #4461) -------------------------
+// `--trust` is only honored in `-p`/headless mode and only exists on newer
+// cursor-agent builds. Older installs reject it with "unknown option
+// '--trust'" and exit 1, killing Test and task execution. The flag is gated
+// on the `--help` probe (capabilityFlags) like claude's --add-dir, so the
+// baseline (no probe / probe failed -> caps = {}) must omit it.
+
+test('cursor-agent omits --trust by default until the --help probe confirms support (issue #4461)', () => {
+  // Default state before any capability probe: agentCapabilities has no entry
+  // -> buildArgs gets `caps = {}` -> caps.trust is undefined -> falsy -> no
+  // --trust. This is also the "probe threw" case (timeout, binary missing,
+  // non-zero --help exit), which is exactly the older cursor-agent that
+  // rejects the flag. Omitting it keeps Test working there.
+  agentCapabilities.delete('cursor-agent');
   const args = cursorAgent.buildArgs(
     '',
     [],
@@ -21,17 +40,55 @@ test('cursor-agent args deliver prompts via stdin without passing a literal dash
     'stream-json',
     '--stream-partial-output',
     '--force',
-    '--trust',
     '--workspace',
     '/tmp/od-project',
   ]);
+  assert.equal(args.includes('--trust'), false);
 });
 
-test('opencode args keep the documented run/json argv and ignore unsupported reasoning options', () => {
+test('cursor-agent passes --trust once the --help probe detects it', () => {
+  agentCapabilities.set('cursor-agent', { trust: true });
+  try {
+    const args = cursorAgent.buildArgs(
+      '',
+      [],
+      [],
+      {},
+      { cwd: '/tmp/od-project' },
+    );
+
+    assert.deepEqual(args, [
+      '--print',
+      '--output-format',
+      'stream-json',
+      '--stream-partial-output',
+      '--force',
+      '--trust',
+      '--workspace',
+      '/tmp/od-project',
+    ]);
+  } finally {
+    agentCapabilities.delete('cursor-agent');
+  }
+});
+
+test('cursor-agent declares the --trust capability probe (issue #4461 root cause)', () => {
+  assert.deepEqual(cursorAgent.helpArgs, ['--help']);
+  assert.equal(cursorAgent.capabilityFlags?.['--trust'], 'trust');
+});
+
+test('opencode args pass model-supported variants without changing the default argv', () => {
+  agentCapabilities.delete('opencode');
   const prompt = 'design a dashboard';
   const baseArgs = opencode.buildArgs(prompt, [], [], {});
   assert.equal(opencode.promptViaStdin, true);
   assert.equal(opencode.reasoningOptions, undefined);
+  assert.deepEqual(opencode.listModels?.args, ['models', '--verbose']);
+  assert.equal(opencode.fallbackModels.find(
+    (model) => model.id === 'openai/gpt-5.6-sol',
+  )?.reasoningOptions, undefined);
+  assert.deepEqual(opencode.helpArgs, ['run', '--help']);
+  assert.deepEqual(opencode.capabilityFlags?.['--dangerously-skip-permissions'], 'skipPermissions');
   assert.equal(baseArgs.includes('-'), false);
   assert.equal(baseArgs.includes(prompt), false);
   assert.deepEqual(baseArgs, [
@@ -53,20 +110,148 @@ test('opencode args keep the documented run/json argv and ignore unsupported rea
     '-m',
     'anthropic/claude-sonnet-4-5',
   ]);
-  const withReasoning = opencode.buildArgs(
-    prompt,
-    [],
-    [],
-    {
-      model: 'anthropic/claude-sonnet-4-5',
-      reasoning: 'high',
-    },
-  );
-  assert.equal(withReasoning.some((arg) => arg.includes('reason')), false);
-  assert.equal(withReasoning.includes('--thinking'), false);
-  assert.deepEqual(withReasoning, withModel);
+  assert.deepEqual(opencode.buildArgs(prompt, [], [], {
+    model: 'anthropic/claude-sonnet-4-5',
+    reasoning: 'high',
+  }), withModel);
+  assert.deepEqual(opencode.buildArgs(prompt, [], [], {
+    model: 'openai/gpt-5.6-sol',
+    reasoning: 'default',
+  }), [
+    'run',
+    '--format',
+    'json',
+    '-m',
+    'openai/gpt-5.6-sol',
+  ]);
   assert.equal(withModel.includes('--dangerously-skip-permissions'), false);
   assert.equal(withModel.includes('--model'), false);
+});
+
+test('opencode parses live verbose variant metadata and only forwards variants advertised for that model', () => {
+  const previous = getRememberedLiveModels('opencode');
+  const parsed = parseOpenCodeModels([
+    'openai/gpt-5.6-sol',
+    '{ "variants": { "high": {} } }',
+    'openai/gpt-5.6-terra',
+    '{ "variants": { "high": {} } }',
+    'openai/gpt-5.6-luna',
+    '{ "variants": { "max": {} } }',
+    'custom/reasoner',
+    '{',
+    '  "id": "reasoner",',
+    '  "variants": {',
+    '    "low": { "reasoningEffort": "low" },',
+    '    "ultra": { "reasoningEffort": "ultra" }',
+    '  }',
+    '}',
+    'custom/plain',
+    '{',
+    '  "id": "plain",',
+    '  "variants": {}',
+    '}',
+  ].join('\n'));
+  assert.deepEqual(parsed?.find((model) => model.id === 'custom/reasoner')?.reasoningOptions, [
+    { id: 'default', label: 'Default' },
+    { id: 'low', label: 'low' },
+    { id: 'ultra', label: 'ultra' },
+  ]);
+  assert.equal(parsed?.find((model) => model.id === 'custom/plain')?.reasoningOptions, undefined);
+
+  rememberLiveModels('opencode', parsed ?? []);
+  try {
+    assert.deepEqual(opencode.buildArgs('', [], [], {
+      model: 'openai/gpt-5.6-sol',
+      reasoning: 'high',
+    }), [
+      'run',
+      '--format',
+      'json',
+      '-m',
+      'openai/gpt-5.6-sol',
+      '--variant',
+      'high',
+    ]);
+    assert.deepEqual(opencode.buildArgs('', [], [], {
+      model: 'openai/gpt-5.6-terra',
+      reasoning: 'high',
+    }), [
+      'run',
+      '--format',
+      'json',
+      '-m',
+      'openai/gpt-5.6-terra',
+      '--variant',
+      'high',
+    ]);
+    assert.deepEqual(opencode.buildArgs('', [], [], {
+      model: 'openai/gpt-5.6-luna',
+      reasoning: 'max',
+    }), [
+      'run',
+      '--format',
+      'json',
+      '-m',
+      'openai/gpt-5.6-luna',
+      '--variant',
+      'max',
+    ]);
+    assert.deepEqual(opencode.buildArgs('', [], [], {
+      model: 'custom/reasoner',
+      reasoning: 'ultra',
+    }), [
+      'run',
+      '--format',
+      'json',
+      '-m',
+      'custom/reasoner',
+      '--variant',
+      'ultra',
+    ]);
+    assert.deepEqual(opencode.buildArgs('', [], [], {
+      model: 'custom/plain',
+      reasoning: 'ultra',
+    }), [
+      'run',
+      '--format',
+      'json',
+      '-m',
+      'custom/plain',
+    ]);
+  } finally {
+    rememberLiveModels('opencode', previous);
+  }
+});
+
+test('opencode passes --dangerously-skip-permissions when the help probe finds it', () => {
+  agentCapabilities.set('opencode', { skipPermissions: true });
+  try {
+    const args = opencode.buildArgs('design a dashboard', [], [], {});
+    assert.deepEqual(args, [
+      'run',
+      '--format',
+      'json',
+      '--dangerously-skip-permissions',
+    ]);
+  } finally {
+    agentCapabilities.delete('opencode');
+  }
+});
+
+test('opencode pins its workspace to the project cwd', () => {
+  // OpenCode resolves its project by walking up to the nearest enclosing git
+  // root, not by using its process cwd. A managed project directory is not a
+  // repository, so a development install (daemon data dir under the checkout)
+  // made OpenCode adopt the whole Open Design repository as the workspace: it
+  // wrote the deliverable at the repository root, the project stayed empty, and
+  // the Run reported `no_artifact`.
+  const args = opencode.buildArgs('design a dashboard', [], [], {}, { cwd: '/projects/p1' });
+  assert.deepEqual(args, ['run', '--format', 'json', '--dir', '/projects/p1']);
+});
+
+test('opencode omits --dir for a run with no project directory', () => {
+  const args = opencode.buildArgs('design a dashboard', [], [], {}, {});
+  assert.equal(args.includes('--dir'), false);
 });
 
 // Copilot reads the prompt from stdin when `-p` is omitted entirely
@@ -206,6 +391,38 @@ test('pi args use rpc mode without --no-session and append model/thinking option
   ]);
 });
 
+test('pi fetchModels reads the model table from stdout', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'od-pi-models-'));
+  try {
+    const bin = join(dir, process.platform === 'win32' ? 'pi.cmd' : 'pi');
+    if (process.platform === 'win32') {
+      writeFileSync(
+        bin,
+        '@echo off\r\nif "%~1"=="--list-models" (\r\n  echo provider model context max-out thinking images\r\n  echo anthropic claude-sonnet-4-5 200K 64K yes yes\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n',
+      );
+    } else {
+      writeFileSync(
+        bin,
+        '#!/bin/sh\nif [ "$1" = "--list-models" ]; then\n  printf \'%s\\n\' \\\n    \'provider model context max-out thinking images\' \\\n    \'anthropic claude-sonnet-4-5 200K 64K yes yes\'\n  exit 0\nfi\nexit 1\n',
+      );
+      chmodSync(bin, 0o755);
+    }
+
+    assert.ok(pi.fetchModels, 'pi must define fetchModels');
+    const models = await pi.fetchModels(bin, {});
+
+    assert.deepEqual(models, [
+      { id: 'default', label: 'Default (CLI config)' },
+      {
+        id: 'anthropic/claude-sonnet-4-5',
+        label: 'anthropic/claude-sonnet-4-5',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('pi args forward extraAllowedDirs as --append-system-prompt flags', () => {
   const args = pi.buildArgs(
     '',
@@ -263,41 +480,6 @@ test('pi args combine model, thinking, and extraAllowedDirs', () => {
     'medium',
     '--append-system-prompt',
     '/tmp/skills',
-  ]);
-});
-
-test('gemini args avoid version-fragile trust flags', () => {
-  const args = gemini.buildArgs('', [], [], {});
-
-  assert.deepEqual(args, ['--output-format', 'stream-json', '--yolo']);
-  assert.equal(args.includes('--skip-trust'), false);
-  assert.deepEqual(gemini.env, { GEMINI_CLI_TRUST_WORKSPACE: 'true' });
-});
-
-test('gemini args preserve custom model selection', () => {
-  const args = gemini.buildArgs('', [], [], { model: 'gemini-2.5-pro' });
-
-  assert.deepEqual(args, [
-    '--output-format',
-    'stream-json',
-    '--yolo',
-    '--model',
-    'gemini-2.5-pro',
-  ]);
-});
-
-test('gemini picker exposes the Gemini 3 previews and 2.5 family in priority order', () => {
-  // Pin the picker contents and ordering so the Settings UI cannot be
-  // silently reshaped by a future edit to AGENT_DEFS. Gemini also accepts
-  // arbitrary custom ids, which makes it especially easy for a regression
-  // here to slip through manual QA. Issue #981.
-  assert.deepEqual(gemini.fallbackModels.map((m) => m.id), [
-    'default',
-    'gemini-3-pro-preview',
-    'gemini-3-flash-preview',
-    'gemini-2.5-pro',
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
   ]);
 });
 
@@ -468,24 +650,26 @@ test('qwen args check promptViaStdin, base args, model args and exclude `-` sent
 // `agy` exposes `-p` (print mode, alias for `--print`) plus `-` as
 // the stdin sentinel — confirmed against `agy --help` on v1.0.3, where
 // `Available subcommands` is `changelog / help / install / plugin /
-// update` (no `chat`). Earlier review iterations pinned `['chat', '-']`
-// based on a different agy build the looper reviewer environment uses;
-// the installed CLI does not recognise it, exits 0 with no stdout, and
-// the daemon would render the resulting empty reply as a "successful"
-// agent response — exactly the failure mode the auth/quota guard at
-// server.ts ~12090 is meant to catch but for the wrong reason.
-test('antigravity pipes prompt via stdin via -p flag (print mode)', () => {
+// update` (no `chat`). Current agy treats `agy -p -` as a literal
+// prompt of "-" (stdin is ignored) — see #7161. OD therefore passes
+// the real prompt as the `-p` argument.
+test('antigravity passes prompt via -p argument (print mode)', () => {
   assert.equal(antigravity.bin, 'agy');
   assert.equal(antigravity.streamFormat, 'plain');
-  assert.equal(antigravity.promptViaStdin, true);
+  assert.equal(antigravity.promptViaStdin, false);
 
   const args = antigravity.buildArgs('write hello world', [], [], {}, {});
-  assert.deepEqual(args, ['-p', '-']);
+  assert.deepEqual(args, ['-p', 'write hello world']);
 
   const argsWithLog = antigravity.buildArgs('write hello world', [], [], {}, {
     agentLogFilePath: '/tmp/od-agy-test.log',
   });
-  assert.deepEqual(argsWithLog, ['--log-file', '/tmp/od-agy-test.log', '-p', '-']);
+  assert.deepEqual(argsWithLog, [
+    '--log-file',
+    '/tmp/od-agy-test.log',
+    '-p',
+    'write hello world',
+  ]);
 
   // No `--model` flag exists upstream, so buildArgs argv must stay the
   // same regardless of which label the user picks.
@@ -500,7 +684,12 @@ test('antigravity pipes prompt via stdin via -p flag (print mode)', () => {
       antigravitySettingsPath: join(settingsDir, 'settings.json'),
     });
     assert.equal(withModel.includes('--model'), false);
-    assert.deepEqual(withModel, ['--log-file', '/tmp/od-agy-test.log', '-p', '-']);
+    assert.deepEqual(withModel, [
+      '--log-file',
+      '/tmp/od-agy-test.log',
+      '-p',
+      'hi',
+    ]);
   } finally {
     rmSync(settingsDir, { recursive: true, force: true });
   }
@@ -516,13 +705,13 @@ test('antigravity pipes prompt via stdin via -p flag (print mode)', () => {
   const followUp = antigravity.buildArgs('next message', [], [], {}, {
     hasPriorAssistantTurn: true,
   });
-  assert.deepEqual(followUp, ['-p', '-']);
+  assert.deepEqual(followUp, ['-p', 'next message']);
   assert.equal(followUp.includes('-c'), false);
 
   const firstTurn = antigravity.buildArgs('first', [], [], {}, {
     hasPriorAssistantTurn: false,
   });
-  assert.deepEqual(firstTurn, ['-p', '-']);
+  assert.deepEqual(firstTurn, ['-p', 'first']);
   assert.equal(antigravity.resumesSessionViaCli, undefined);
 
   assert.equal(antigravity.maxPromptArgBytes, undefined);
@@ -552,6 +741,60 @@ test('antigravity pipes prompt via stdin via -p flag (print mode)', () => {
   // settings UI hides the "Custom (fill below)" option when this is
   // `false`. Remove this opt-out once upstream wires #35.
   assert.equal(antigravity.supportsCustomModel, false);
+});
+
+test('antigravity gates non-interactive permission bypass on the detected CLI capability', () => {
+  agentCapabilities.delete('antigravity');
+  assert.deepEqual(antigravity.helpArgs, ['--help']);
+  assert.deepEqual(antigravity.capabilityFlags, {
+    '--dangerously-skip-permissions': 'skipPermissions',
+  });
+  assert.deepEqual(antigravity.buildArgs('', [], [], {}), ['-p', '']);
+
+  agentCapabilities.set('antigravity', { skipPermissions: true });
+  try {
+    assert.deepEqual(antigravity.buildArgs('', [], [], {}), [
+      '--dangerously-skip-permissions',
+      '-p',
+      '',
+    ]);
+  } finally {
+    agentCapabilities.delete('antigravity');
+  }
+});
+
+test('antigravity keeps log argv order when permission bypass is unavailable', () => {
+  agentCapabilities.set('antigravity', { skipPermissions: false });
+  try {
+    assert.deepEqual(
+      antigravity.buildArgs('', [], [], {}, {
+        agentLogFilePath: '/tmp/od-agy-test.log',
+      }),
+      ['--log-file', '/tmp/od-agy-test.log', '-p', ''],
+    );
+  } finally {
+    agentCapabilities.delete('antigravity');
+  }
+});
+
+test('antigravity places permission bypass after log args', () => {
+  agentCapabilities.set('antigravity', { skipPermissions: true });
+  try {
+    assert.deepEqual(
+      antigravity.buildArgs('', [], [], {}, {
+        agentLogFilePath: '/tmp/od-agy-test.log',
+      }),
+      [
+        '--log-file',
+        '/tmp/od-agy-test.log',
+        '--dangerously-skip-permissions',
+        '-p',
+        '',
+      ],
+    );
+  } finally {
+    agentCapabilities.delete('antigravity');
+  }
 });
 
 // `agy` reads `~/.gemini/antigravity-cli/settings.json` on every CLI
@@ -700,6 +943,24 @@ test('kilo args use acp subcommand for json-rpc streaming', () => {
   assert.equal(kilo.streamFormat, 'acp-json-rpc');
 });
 
+test('kimi args use ACP so composed prompts do not travel through argv', () => {
+  const args = kimi.buildArgs('design a page', [], [], {});
+
+  assert.deepEqual(args, ['acp']);
+  assert.equal(args.includes('--yolo'), false);
+  assert.equal(kimi.streamFormat, 'acp-json-rpc');
+  assert.equal(kimi.eventParser, undefined);
+  assert.equal(kimi.mcpDiscovery, 'mature-acp');
+  assert.equal(kimi.externalMcpInjection, 'acp-merge');
+  assert.equal(kimi.maxPromptArgBytes, undefined);
+});
+
+test('kimi args leave model selection to the ACP session', () => {
+  const args = kimi.buildArgs('hello', [], [], { model: 'moonshot-v1-32k' });
+
+  assert.deepEqual(args, ['acp']);
+});
+
 test('kilo fetchModels falls back to fallbackModels when detection fails', async () => {
   assert.ok(kilo.fetchModels, 'kilo must define fetchModels');
   const result = await kilo.fetchModels('/nonexistent/kilo', {}).catch(() => null);
@@ -777,27 +1038,67 @@ test('codex buildArgs omits model_reasoning_effort when reasoning is "default"',
   );
 });
 
-test('grok-build inlines the prompt as -p <value> and never falls back to stdin sentinels', () => {
+test('grok-build uses --prompt-file and never embeds the prompt in argv or stdin', () => {
   const prompt = 'summarize the current page layout';
+  const promptFilePath = '/tmp/od-grok-prompt/prompt.md';
   const args = grokBuild.buildArgs(
     prompt,
     [],
     [],
     { model: 'grok-4.3', reasoning: 'high' },
-    { cwd: '/tmp/od-project' },
+    { cwd: '/tmp/od-project', promptFilePath },
   );
 
+  assert.equal(grokBuild.promptViaFile, true);
   assert.equal(grokBuild.promptViaStdin, false);
   assert.deepEqual(args, [
-    '-p',
-    prompt,
+    '--prompt-file',
+    promptFilePath,
+    '--no-plan',
+    '--always-approve',
     '--model',
     'grok-4.3',
+  ]);
+  assert.equal(args.includes(prompt), false);
+  assert.equal(args.includes('-'), false);
+  assert.equal(args.includes('-p'), false);
+  assert.equal(args.includes('--single'), false);
+  assert.equal(args.filter((entry) => entry === '--prompt-file').length, 1);
+});
+
+test('grok-build disables plan mode and auto-approves headless tool calls (issue #5507)', () => {
+  const promptFilePath = '/tmp/od-grok-prompt/prompt.md';
+  const args = grokBuild.buildArgs('', [], [], { model: 'grok-build' }, { promptFilePath });
+
+  assert.deepEqual(args.slice(2, 4), ['--no-plan', '--always-approve']);
+});
+
+test('grok-build omits effort for default/build models but keeps it for reasoning models', () => {
+  const promptFilePath = '/tmp/od-grok-prompt/prompt.md';
+  const defaultArgs = grokBuild.buildArgs('', [], [], { model: 'default', reasoning: 'high' }, { promptFilePath });
+  assert.equal(defaultArgs.includes('--effort'), false);
+
+  const buildArgs = grokBuild.buildArgs('', [], [], { model: 'grok-build', reasoning: 'high' }, { promptFilePath });
+  assert.equal(buildArgs.includes('--effort'), false);
+
+  const reasoningArgs = grokBuild.buildArgs('', [], [], { model: 'grok-4.20-reasoning', reasoning: 'high' }, { promptFilePath });
+  assert.deepEqual(reasoningArgs, [
+    '--prompt-file',
+    promptFilePath,
+    '--no-plan',
+    '--always-approve',
+    '--model',
+    'grok-4.20-reasoning',
     '--effort',
     'high',
   ]);
-  assert.equal(args.includes('-'), false);
-  assert.equal(args.filter((entry) => entry === '-p').length, 1);
+});
+
+test('grok-build requires a daemon-provided prompt file path', () => {
+  assert.throws(
+    () => grokBuild.buildArgs('hi', [], [], {}, { cwd: '/tmp/od-project' }),
+    /promptFilePath/,
+  );
 });
 
 test('claude flags promptViaStdin and never embeds the prompt in argv', () => {
@@ -832,6 +1133,48 @@ test('claude flags promptViaStdin and never embeds the prompt in argv', () => {
   // `-p` (print mode) must still be present; without it claude drops into
   // an interactive REPL that the daemon has no TTY for.
   assert.ok(args.includes('-p'), 'claude argv must include -p');
+});
+
+test('claude enables native Child behavior frames only for an observed OD Next Run', () => {
+  assert.equal(
+    claude.buildArgs('', [], [], {}, {}).includes('--forward-subagent-text'),
+    false,
+  );
+  assert.equal(
+    claude.capabilityFlags?.['--forward-subagent-text'],
+    'forwardSubagentText',
+  );
+  agentCapabilities.set('claude', { forwardSubagentText: true });
+  try {
+    assert.equal(claude.buildArgs('', [], [], {}, {
+      observeNativeChildBehavior: true,
+    }).includes('--forward-subagent-text'), true);
+  } finally {
+    agentCapabilities.delete('claude');
+  }
+  assert.throws(
+    () => claude.buildArgs('', [], [], {}, { observeNativeChildBehavior: true }),
+    /advertised --forward-subagent-text support/,
+  );
+});
+
+test('claude registers daemon-issued Build Package handles and rejects an unadvertised CLI', () => {
+  const bindings = [{ nativeAgentHandle: 'od-build-1-0123456789abcdef', buildPackageId: 'package-a' }];
+  agentCapabilities.set('claude', { customAgents: true });
+  try {
+    const args = claude.buildArgs('', [], [], {}, { nativeBuildPackageBindings: bindings });
+    const flag = args.indexOf('--agents');
+    assert.ok(flag >= 0);
+    const definitions = JSON.parse(args[flag + 1]!);
+    assert.deepEqual(Object.keys(definitions), ['od-build-1-0123456789abcdef']);
+    assert.equal(JSON.stringify(definitions).includes('package-a'), false);
+  } finally {
+    agentCapabilities.delete('claude');
+  }
+  assert.throws(
+    () => claude.buildArgs('', [], [], {}, { nativeBuildPackageBindings: bindings }),
+    /advertised --agents support/,
+  );
 });
 
 // ---- Claude Code --add-dir capability (issue #430) -------------------------
@@ -904,7 +1247,6 @@ test('promptInputFormat is a string property (or undefined) on every promptViaSt
     { name: 'codex', def: codex, expected: undefined },
     { name: 'copilot', def: copilot, expected: undefined },
     { name: 'cursor-agent', def: cursorAgent, expected: undefined },
-    { name: 'gemini', def: gemini, expected: undefined },
     { name: 'opencode', def: opencode, expected: undefined },
     { name: 'pi', def: pi, expected: undefined },
     { name: 'qoder', def: qoder, expected: undefined },

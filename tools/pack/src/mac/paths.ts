@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { APP_KEYS } from "@open-design/sidecar-proto";
 
-import type { ToolPackConfig } from "../config.js";
+import type { ToolPackConfig } from "../config/index.js";
 import { PRODUCT_NAME } from "./constants.js";
 import {
   MAC_PREBUNDLE_ENTRYPOINTS_DIR_NAME,
@@ -13,7 +13,7 @@ import {
   MAC_PREBUNDLED_DAEMON_SIDECAR_RELATIVE_PATH,
   MAC_PREBUNDLED_PACKAGED_MAIN_RELATIVE_PATH,
   MAC_PREBUNDLED_WEB_SIDECAR_RELATIVE_PATH,
-} from "../mac-prebundle.js";
+} from "./prebundle.js";
 import { resolveMacInstallIdentity } from "./identity.js";
 import type { MacPaths } from "./types.js";
 
@@ -69,6 +69,7 @@ export function resolveMacPaths(config: ToolPackConfig): MacPaths {
     packagedMainPrebundlePath: join(namespaceRoot, "assembled", MAC_PREBUNDLED_PACKAGED_MAIN_RELATIVE_PATH),
     packagedConfigPath: join(namespaceRoot, "open-design-config.json"),
     resourceRoot: join(namespaceRoot, "resources", "open-design"),
+    payloadZipPath: join(namespaceRoot, "payload", `${PRODUCT_NAME}-${namespaceToken}-payload.zip`),
     systemApplicationsAppPath: join("/Applications", identity.systemAppBundleName),
     tarballsRoot: join(namespaceRoot, "tarballs"),
     userApplicationsAppPath: join(homedir(), "Applications", identity.systemAppBundleName),
@@ -83,8 +84,4 @@ export function resolveMacPaths(config: ToolPackConfig): MacPaths {
 
 export function desktopLogPath(config: ToolPackConfig): string {
   return join(config.roots.runtime.namespaceRoot, "logs", APP_KEYS.DESKTOP, "latest.log");
-}
-
-export function desktopIdentityPath(config: ToolPackConfig): string {
-  return join(config.roots.runtime.namespaceRoot, "runtime", "desktop-root.json");
 }

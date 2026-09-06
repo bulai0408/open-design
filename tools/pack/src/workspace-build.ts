@@ -1,48 +1,77 @@
 import { createHash } from "node:crypto";
-import { access, cp, lstat, mkdir, readdir, readFile, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { access, cp, lstat, mkdir, readdir, readFile, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 
-import { hashJson, hashPath, ToolPackCache } from "./cache.js";
-import type { ToolPackConfig } from "./config.js";
+import { hashJson, hashPath, ToolPackCache } from "./cache/index.js";
+import type { ToolPackConfig } from "./config/index.js";
 import { hashPackageSourcePath } from "./package-source-hash.js";
-import { readRuntimeAppVersion, versionFamilyForAppVersion } from "./versions.js";
+import { readRuntimeAppVersion, versionFamilyForAppVersion } from "./versioning/index.js";
+import { processWebSourcemaps } from "./web-sourcemaps.js";
 
-const WORKSPACE_BUILD_PACKAGES = [
+export const WORKSPACE_BUILD_PACKAGES = [
+  { directory: "packages/release", name: "@open-design/release" },
   { directory: "packages/components", name: "@open-design/components" },
   { directory: "packages/contracts", name: "@open-design/contracts" },
   { directory: "packages/registry-protocol", name: "@open-design/registry-protocol" },
   { directory: "packages/sidecar-proto", name: "@open-design/sidecar-proto" },
-  { directory: "packages/sidecar", name: "@open-design/sidecar" },
+  { directory: "packages/launcher-proto", name: "@open-design/launcher-proto" },
   { directory: "packages/platform", name: "@open-design/platform" },
+  { directory: "packages/sidecar", name: "@open-design/sidecar" },
   { directory: "packages/download", name: "@open-design/download" },
   { directory: "packages/host", name: "@open-design/host" },
   { directory: "packages/agui-adapter", name: "@open-design/agui-adapter" },
   { directory: "packages/plugin-runtime", name: "@open-design/plugin-runtime" },
   { directory: "packages/diagnostics", name: "@open-design/diagnostics" },
+  { directory: "packages/dsh-runtime", name: "@open-design/dsh-runtime" },
   { directory: "apps/daemon", name: "@open-design/daemon" },
   { directory: "apps/web", name: "@open-design/web" },
   { directory: "apps/desktop", name: "@open-design/desktop" },
   { directory: "apps/packaged", name: "@open-design/packaged" },
 ] as const;
 
-const BUILD_COMMANDS = [
-  { args: ["--filter", "@open-design/components", "build"] },
-  { args: ["--filter", "@open-design/contracts", "build"] },
-  { args: ["--filter", "@open-design/registry-protocol", "build"] },
-  { args: ["--filter", "@open-design/sidecar-proto", "build"] },
-  { args: ["--filter", "@open-design/sidecar", "build"] },
-  { args: ["--filter", "@open-design/platform", "build"] },
-  { args: ["--filter", "@open-design/download", "build"] },
-  { args: ["--filter", "@open-design/host", "build"] },
-  { args: ["--filter", "@open-design/agui-adapter", "build"] },
-  { args: ["--filter", "@open-design/plugin-runtime", "build"] },
-  { args: ["--filter", "@open-design/diagnostics", "build"] },
-  { args: ["--filter", "@open-design/daemon", "build"] },
-  { args: ["--filter", "@open-design/web", "build"], env: ["OD_WEB_OUTPUT_MODE"] },
-  { args: ["--filter", "@open-design/web", "build:sidecar"] },
-  { args: ["--filter", "@open-design/desktop", "build"] },
-  { args: ["--filter", "@open-design/packaged", "build"] },
+export const WORKSPACE_BUILD_COMMANDS = [
+  {
+    args: [
+      "--filter", "@open-design/dsh-runtime...",
+      "--workspace-concurrency=1", "--if-present", "run", "build",
+    ],
+  },
+  {
+    args: [
+      "--filter", "@open-design/packaged^...",
+      "--workspace-concurrency=1", "--if-present", "run", "build",
+    ],
+    env: ["OD_WEB_OUTPUT_MODE"],
+  },
+  { args: ["--filter", "@open-design/web", "run", "build:sidecar"] },
+  { args: ["--filter", "@open-design/packaged", "run", "build"] },
 ] as const;
+
+export const WORKSPACE_BUILD_CACHE_SCHEMA_VERSION = 10;
+
+export type WorkspaceBuildCacheKeyInputs = {
+  buildCommands: unknown;
+  node: string;
+  nodeVersion: string;
+  packageHashes: Readonly<Record<string, string>>;
+  packageManager: unknown;
+  platform: ToolPackConfig["platform"];
+  pnpmLock: string;
+  pnpmWorkspace: string;
+  schemaVersion: number;
+  webOutputMode: ToolPackConfig["webOutputMode"];
+};
+
+export function createWorkspaceBuildCacheKeyFromInputs(inputs: WorkspaceBuildCacheKeyInputs): string {
+  return hashJson(inputs);
+}
+
+export type WorkspaceBuildRunner = (
+  args: string[],
+  extraEnv?: NodeJS.ProcessEnv,
+) => Promise<void>;
+
+export type WorkspaceBuildMaterializer = (config: ToolPackConfig) => Promise<void>;
 
 type WorkspaceBuildMetadata = {
   builtAt: string;
@@ -81,24 +110,52 @@ async function readPackageManager(workspaceRoot: string): Promise<unknown> {
   return rootPackageJson.packageManager;
 }
 
-async function createWorkspaceBuildCacheKey(config: ToolPackConfig): Promise<string> {
+export async function createWorkspaceBuildCacheKey(config: ToolPackConfig): Promise<string> {
   const packageHashes: Record<string, string> = {};
   for (const packageInfo of WORKSPACE_BUILD_PACKAGES) {
     packageHashes[packageInfo.name] = await hashPackageSourcePath(join(config.workspaceRoot, packageInfo.directory));
   }
   const nodeId = `${config.platform}.workspace-build`;
 
-  return hashJson({
-    buildCommands: BUILD_COMMANDS,
+  return createWorkspaceBuildCacheKeyFromInputs({
+    buildCommands: WORKSPACE_BUILD_COMMANDS,
     node: nodeId,
     nodeVersion: process.version,
     packageHashes,
     packageManager: await readPackageManager(config.workspaceRoot),
     platform: config.platform,
     pnpmLock: await hashPath(join(config.workspaceRoot, "pnpm-lock.yaml")),
-    schemaVersion: 6,
+    pnpmWorkspace: await hashPath(join(config.workspaceRoot, "pnpm-workspace.yaml")),
+    schemaVersion: WORKSPACE_BUILD_CACHE_SCHEMA_VERSION,
     webOutputMode: config.webOutputMode,
   });
+}
+
+/**
+ * Build the packaged workspace closure while leaving dependency ordering to
+ * pnpm's workspace graph. The explicit stages here are packaging stages, not a
+ * second dependency graph: DSH is an independently bundled resource, Web has
+ * one non-standard sidecar output, and packaged is the final assembly root.
+ */
+export async function runWorkspaceBuild(
+  config: ToolPackConfig,
+  runPnpm: WorkspaceBuildRunner,
+): Promise<void> {
+  const webNextEnvPath = join(config.workspaceRoot, "apps", "web", "next-env.d.ts");
+  const previousWebNextEnv = await readFile(webNextEnvPath, "utf8").catch(() => null);
+
+  try {
+    await runPnpm([...WORKSPACE_BUILD_COMMANDS[0].args]);
+    await runPnpm(
+      [...WORKSPACE_BUILD_COMMANDS[1].args],
+      { OD_WEB_OUTPUT_MODE: config.webOutputMode },
+    );
+    await runPnpm([...WORKSPACE_BUILD_COMMANDS[2].args]);
+    await runPnpm([...WORKSPACE_BUILD_COMMANDS[3].args]);
+  } finally {
+    if (previousWebNextEnv == null) await rm(webNextEnvPath, { force: true });
+    else await writeFile(webNextEnvPath, previousWebNextEnv, "utf8");
+  }
 }
 
 function workspaceBuildOutputFiles(config: ToolPackConfig): string[] {
@@ -109,16 +166,20 @@ function workspaceBuildOutputFiles(config: ToolPackConfig): string[] {
   return [
     "packages/components/dist/index.mjs",
     "packages/components/dist/index.d.ts",
+    "packages/release/dist/index.mjs",
+    "packages/release/dist/index.d.ts",
     "packages/contracts/dist/index.mjs",
     "packages/contracts/dist/index.d.ts",
     "packages/registry-protocol/dist/index.mjs",
     "packages/registry-protocol/dist/index.d.ts",
     "packages/sidecar-proto/dist/index.mjs",
     "packages/sidecar-proto/dist/index.d.ts",
-    "packages/sidecar/dist/index.mjs",
-    "packages/sidecar/dist/index.d.ts",
+    "packages/launcher-proto/dist/index.mjs",
+    "packages/launcher-proto/dist/index.d.ts",
     "packages/platform/dist/index.mjs",
     "packages/platform/dist/index.d.ts",
+    "packages/sidecar/dist/index.mjs",
+    "packages/sidecar/dist/index.d.ts",
     "packages/download/dist/index.mjs",
     "packages/download/dist/index.d.ts",
     "packages/host/dist/index.mjs",
@@ -129,6 +190,8 @@ function workspaceBuildOutputFiles(config: ToolPackConfig): string[] {
     "packages/plugin-runtime/dist/index.d.ts",
     "packages/diagnostics/dist/index.mjs",
     "packages/diagnostics/dist/index.d.ts",
+    "packages/dsh-runtime/dist/index.js",
+    "packages/dsh-runtime/dist/types/index.d.ts",
     "apps/daemon/dist/cli.js",
     "apps/daemon/dist/cli.d.ts",
     "apps/daemon/dist/sidecar/index.js",
@@ -145,16 +208,19 @@ function workspaceBuildOutputFiles(config: ToolPackConfig): string[] {
 function workspaceBuildArtifacts(config: ToolPackConfig): WorkspaceBuildArtifact[] {
   const artifacts = [
     "packages/components/dist",
+    "packages/release/dist",
     "packages/contracts/dist",
     "packages/registry-protocol/dist",
     "packages/sidecar-proto/dist",
-    "packages/sidecar/dist",
+    "packages/launcher-proto/dist",
     "packages/platform/dist",
+    "packages/sidecar/dist",
     "packages/download/dist",
     "packages/host/dist",
     "packages/agui-adapter/dist",
     "packages/plugin-runtime/dist",
     "packages/diagnostics/dist",
+    "packages/dsh-runtime/dist",
     "apps/daemon/dist",
     "apps/web/dist",
     "apps/desktop/dist",
@@ -210,6 +276,7 @@ async function stripBrokenSymlinks(rootPath: string): Promise<void> {
 }
 
 const WEB_STANDALONE_ARTIFACT = "apps/web/.next/standalone";
+const WEB_STATIC_ARTIFACT = "apps/web/.next/static";
 const WEB_STANDALONE_APP_NODE_MODULES = "apps/web/node_modules";
 // Peer deps the web-standalone after-pack audit looks up through
 // `createRequire(server.js).resolve(<pkg>/package.json)`. Next 16
@@ -217,6 +284,14 @@ const WEB_STANDALONE_APP_NODE_MODULES = "apps/web/node_modules";
 // `<standalone>/apps/web/node_modules`, so the require walk falls out
 // of the standalone tree and the audit aborts the packaged build.
 const STANDALONE_HOISTED_PEER_DEPS = ["react", "react-dom", "styled-jsx"];
+
+async function symlinkDirectoryForWorkspaceBuild(target: string, linkPath: string): Promise<void> {
+  if (process.platform === "win32") {
+    await symlink(target, linkPath, "junction");
+    return;
+  }
+  await symlink(relative(dirname(linkPath), target), linkPath, "dir");
+}
 
 async function hoistStandaloneNextPeerDeps(standaloneRoot: string): Promise<void> {
   const appNodeModules = join(standaloneRoot, WEB_STANDALONE_APP_NODE_MODULES);
@@ -245,12 +320,11 @@ async function hoistStandaloneNextPeerDeps(standaloneRoot: string): Promise<void
     if (!match) continue;
     const target = join(pnpmRoot, match, "node_modules", pkg);
     if (!(await pathExists(target))) continue;
-    const relativeTarget = relative(dirname(linkPath), target);
     // Idempotent re-run: drop any pre-existing entry (stale symlink
     // from a previous build with different react/react-dom versions)
     // before recreating, so repeated invocations don't EEXIST.
     if (existing) await unlink(linkPath).catch(() => undefined);
-    await symlink(relativeTarget, linkPath);
+    await symlinkDirectoryForWorkspaceBuild(target, linkPath);
   }
 }
 
@@ -288,8 +362,9 @@ async function missingWorkspaceBuildOutput(config: ToolPackConfig): Promise<stri
 export async function ensureWorkspaceBuildArtifacts(
   config: ToolPackConfig,
   cache: ToolPackCache,
-  build: () => Promise<void>,
-): Promise<void> {
+  runPnpm: WorkspaceBuildRunner,
+  materializeWebSourcemaps: WorkspaceBuildMaterializer = processWebSourcemaps,
+): Promise<string> {
   const key = await createWorkspaceBuildCacheKey(config);
   const nodeId = `${config.platform}.workspace-build`;
   const artifacts = workspaceBuildArtifacts(config);
@@ -307,7 +382,9 @@ export async function ensureWorkspaceBuildArtifacts(
       });
   const materialize = artifacts.map((artifact) => ({
     from: artifact.cachePath,
-    reuse: true,
+    // Sourcemap processing removes maps from the workspace copy. Restore the
+    // pristine cached static tree before every materialization-time pass.
+    reuse: artifact.workspacePath !== WEB_STATIC_ARTIFACT,
     reuseRequiredPaths: artifact.requiredPathGroups,
     to: join(config.workspaceRoot, artifact.workspacePath),
   }));
@@ -320,7 +397,7 @@ export async function ensureWorkspaceBuildArtifacts(
       outputs: ["stamp.json", ...artifacts.map((artifact) => artifact.cachePath)],
       invalidate: async () => null,
       build: async ({ entryRoot }) => {
-        await build();
+        await runWorkspaceBuild(config, runPnpm);
         const missingOutput = await missingWorkspaceBuildOutput(config);
         if (missingOutput != null) {
           throw new Error(`workspace build completed but output is missing: ${missingOutput}`);
@@ -347,4 +424,9 @@ export async function ensureWorkspaceBuildArtifacts(
     },
     seedFrom: versionFamilyAlias == null ? [] : [{ aliasKey: versionFamilyAlias, materialize }],
   });
+  // Sourcemap injection/upload depends on release credentials and appVersion,
+  // and upload is a materialization side effect. Keep pristine JS/map pairs in
+  // the internal cache, then process the materialized copy on every hit/miss.
+  await materializeWebSourcemaps(config);
+  return key;
 }

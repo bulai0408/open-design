@@ -16,7 +16,11 @@
 // branch on a single discriminator and lets the unit tests assert
 // classification without touching React.
 
-import type { InstalledPluginRecord } from '@open-design/contracts';
+import type {
+  InstalledPluginRecord,
+  WorkspaceCollabContext,
+} from '@open-design/contracts';
+import { workspaceResourceUrl } from '../../collab/workspace-identity';
 
 export type PluginPreviewKind = 'media' | 'html' | 'design' | 'text';
 
@@ -34,6 +38,13 @@ export interface MediaPreviewSpec {
   audioUrl: string | null;
   /** True when the plugin only ships a still image, no video stream. */
   imageOnly: boolean;
+  /**
+   * For baked hover-pan clips: the leading `[0, loopHoldMs]` span is the page's
+   * in-place animation (no scroll), which the gallery loops while idle; hover
+   * plays on past it (the pan). Null for plain video-template plugins, which
+   * just loop the whole clip.
+   */
+  loopHoldMs?: number | null;
 }
 
 export interface HtmlPreviewSpec {
@@ -57,6 +68,7 @@ export interface DesignPreviewSpec {
   brand: string;
   designSystemId: string | null;
   swatches: string[];
+  workspaceContext?: WorkspaceCollabContext | null;
 }
 
 export interface TextPreviewSpec {
@@ -76,6 +88,7 @@ interface PreviewBlock {
   gif?: unknown;
   entry?: unknown;
   audio?: unknown;
+  holdMs?: unknown;
 }
 
 interface ExampleOutputEntry {
@@ -91,6 +104,19 @@ function readPreview(record: InstalledPluginRecord): PreviewBlock | null {
   const od = record.manifest?.od as { preview?: unknown } | undefined;
   if (!od || typeof od.preview !== 'object' || od.preview === null) return null;
   return od.preview as PreviewBlock;
+}
+
+// Pre-baked hover-pan clip attached by the daemon (scripts/bake-plugin-previews.mjs),
+// kept separate from `od.preview` so only gallery tiles use it.
+function readBakedPreview(
+  record: InstalledPluginRecord,
+): { poster: string; video: string; holdMs: number | null } | null {
+  const od = record.manifest?.od as { bakedPreview?: unknown } | undefined;
+  const b = od?.bakedPreview;
+  if (!b || typeof b !== 'object') return null;
+  const { poster, video, holdMs } = b as Record<string, unknown>;
+  if (typeof poster !== 'string' || typeof video !== 'string') return null;
+  return { poster, video, holdMs: typeof holdMs === 'number' ? holdMs : null };
 }
 
 function readExamples(record: InstalledPluginRecord): ExampleOutputEntry[] {
@@ -161,7 +187,29 @@ function brandLabel(record: InstalledPluginRecord): string {
 
 export function inferPluginPreview(
   record: InstalledPluginRecord,
+  opts?: {
+    preferBaked?: boolean;
+    workspaceContext?: WorkspaceCollabContext | null;
+  },
 ): PluginPreviewSpec {
+  // Gallery tiles opt in to a pre-baked hover-pan clip (cheap thumbnail) when
+  // the daemon has attached one. Everything else — crucially the detail modal —
+  // falls through to the real `od.preview`, so opening a plugin still shows the
+  // live, interactive page rather than the baked video.
+  if (opts?.preferBaked) {
+    const baked = readBakedPreview(record);
+    if (baked) {
+      return {
+        kind: 'media',
+        mediaType: 'video',
+        poster: baked.poster,
+        videoUrl: baked.video,
+        audioUrl: null,
+        imageOnly: false,
+        loopHoldMs: baked.holdMs,
+      };
+    }
+  }
   const preview = readPreview(record);
   const examples = readExamples(record);
 
@@ -174,6 +222,7 @@ export function inferPluginPreview(
     const entry = typeof preview.entry === 'string' ? preview.entry : null;
 
     if (t === 'video' || video) {
+      const holdMs = typeof preview.holdMs === 'number' ? preview.holdMs : null;
       return {
         kind: 'media',
         mediaType: 'video',
@@ -181,6 +230,7 @@ export function inferPluginPreview(
         videoUrl: video,
         audioUrl: null,
         imageOnly: !video,
+        loopHoldMs: holdMs,
       };
     }
     if (t === 'audio' || audio) {
@@ -206,7 +256,10 @@ export function inferPluginPreview(
     if (t === 'html' && entry) {
       return {
         kind: 'html',
-        src: `/api/plugins/${encodeURIComponent(record.id)}/preview`,
+        src: workspaceResourceUrl(
+          `/api/plugins/${encodeURIComponent(record.id)}/preview`,
+          opts?.workspaceContext,
+        ),
         label: entry.replace(/^\.\//, '').split(/[\\/]/).pop() ?? entry,
         source: 'preview',
       };
@@ -220,7 +273,10 @@ export function inferPluginPreview(
         typeof examples[0]!.title === 'string' ? (examples[0]!.title as string) : stem;
       return {
         kind: 'html',
-        src: `/api/plugins/${encodeURIComponent(record.id)}/example/${encodeURIComponent(stem)}`,
+        src: workspaceResourceUrl(
+          `/api/plugins/${encodeURIComponent(record.id)}/example/${encodeURIComponent(stem)}`,
+          opts?.workspaceContext,
+        ),
         label: title,
         source: 'example',
         exampleStem: stem,
@@ -234,6 +290,9 @@ export function inferPluginPreview(
       brand: brandLabel(record),
       designSystemId: designSystemRef(record),
       swatches: deriveSwatches(record),
+      ...(opts?.workspaceContext
+        ? { workspaceContext: opts.workspaceContext }
+        : {}),
     };
   }
 

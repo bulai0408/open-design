@@ -16,6 +16,13 @@ export interface ClaudeCliDiagnostic {
   message: string;
   detail: string;
   retryable: boolean;
+  /**
+   * Stable `ApiErrorCode` for this failure class, when one is more specific
+   * than the generic `AGENT_EXECUTION_FAILED`. Lets the web map the code to a
+   * localized message and lets triage count failures by class. Omitted for
+   * branches that have no dedicated code yet.
+   */
+  code?: string;
 }
 
 function envValue(
@@ -39,18 +46,23 @@ function withContext(
   message: string,
   detail: string,
   input: ClaudeCliDiagnosticInput,
+  code?: string,
 ): ClaudeCliDiagnostic {
   const configDir = envValue(input.env, 'CLAUDE_CONFIG_DIR');
   const baseUrl = envValue(input.env, 'ANTHROPIC_BASE_URL');
+  const runtimeLabel = selectedClaudeCompatibleRuntime(input) === 'openclaude'
+    ? 'OpenClaude'
+    : 'Claude Code';
   const diagnosticTail = redactSecrets(body(input)).replace(/\s+/g, ' ').trim().slice(-240);
   const context: string[] = [message, detail];
   if (diagnosticTail) context.push(`Claude output: ${diagnosticTail}`);
   if (configDir) context.push(`Effective CLAUDE_CONFIG_DIR: ${configDir}.`);
-  if (baseUrl) context.push('ANTHROPIC_BASE_URL is set for this Claude Code process.');
+  if (baseUrl) context.push(`ANTHROPIC_BASE_URL is set for this ${runtimeLabel} process.`);
   return {
     message: redactSecrets(message),
     detail: redactSecrets(context.filter(Boolean).join(' ')),
     retryable: true,
+    ...(code ? { code } : {}),
   };
 }
 
@@ -75,6 +87,8 @@ export function diagnoseClaudeCliFailure(
   const hasConfigDir = envValue(input.env, 'CLAUDE_CONFIG_DIR') !== null;
   const runtime = selectedClaudeCompatibleRuntime(input);
   const isOpenClaude = runtime === 'openclaude';
+  const runtimeLabel = isOpenClaude ? 'OpenClaude' : 'Claude Code';
+  const defaultEndpointLabel = isOpenClaude ? 'its configured endpoint' : 'the Anthropic API';
 
   const customEndpointConnectionFailure =
     hasCustomBaseUrl &&
@@ -86,6 +100,53 @@ export function diagnoseClaudeCliFailure(
       'Claude Code could not reach the configured custom Anthropic endpoint.',
       'ANTHROPIC_BASE_URL appears to point at a local or proxy endpoint that refused the connection. Start or fix that proxy, clear the stale endpoint, or remove the custom endpoint to retry with standard Claude Code auth.',
       input,
+    );
+  }
+
+  // A connection that *was established* and then dropped (or kept resetting),
+  // distinct from the `connection refused` case above (which never connects).
+  // The exact text has several faces depending on where the failure lands;
+  // these were captured by driving the real Claude Code CLI (2.1.168) against
+  // a flaky local hop:
+  //   - SSE stream cut after it started  -> "API Error: The socket connection
+  //     was closed unexpectedly. ... pass verbose: true ..."
+  //   - TLS tunnel reset/timeout         -> "API Error: Unable to connect to
+  //     API (ECONNRESET)" / "API Error: Unable to connect to API (ETIMEDOUT)"
+  // Both are transient and worth retrying; the CLI retries internally for a
+  // minute or more before surfacing them, which is why long runs appear to
+  // "abort after a while". Most visible on large generations whose streaming
+  // response outlives a flaky hop (VPN, GFW/relay, corporate proxy, or a
+  // self-hosted ANTHROPIC_BASE_URL relay that caps streaming-request duration).
+  const connectionDropped =
+    /socket connection was closed/i.test(text) ||
+    /closed unexpectedly/i.test(text) ||
+    /unable to connect to api \((econnreset|etimedout)\)/i.test(text) ||
+    /socket hang up/i.test(text) ||
+    /econnreset/i.test(text) ||
+    /etimedout/i.test(text) ||
+    /epipe/i.test(text) ||
+    /und_err_socket/i.test(text) ||
+    /premature close/i.test(text) ||
+    /other side closed/i.test(text) ||
+    /fetch failed/i.test(text) ||
+    /\bconnection (error|reset|closed)\b/i.test(text);
+  if (connectionDropped) {
+    if (hasCustomBaseUrl) {
+      const customEndpointFallback = isOpenClaude
+        ? 'check the OpenClaude endpoint configuration.'
+        : 'remove ANTHROPIC_BASE_URL to retry with standard Claude Code auth.';
+      return withContext(
+        `${runtimeLabel} lost its connection to the configured custom Anthropic endpoint before the response finished.`,
+        `The connection to ANTHROPIC_BASE_URL was closed mid-stream — often a proxy or relay that drops long-lived streaming requests, and most likely on large generations. Retry; if it keeps happening, raise the proxy idle/stream timeout, or ${customEndpointFallback}`,
+        input,
+        'AGENT_CONNECTION_DROPPED',
+      );
+    }
+    return withContext(
+      `${runtimeLabel} lost its connection to ${defaultEndpointLabel} before the response finished.`,
+      'The network connection was closed mid-response — common on unstable networks, VPNs, or proxies that drop long-lived streaming requests, and most likely on large generations. Retry the request.',
+      input,
+      'AGENT_CONNECTION_DROPPED',
     );
   }
 
@@ -113,9 +174,9 @@ export function diagnoseClaudeCliFailure(
     }
     const configHint = hasConfigDir
       ? 'The configured Claude config directory may contain stale or expired auth state.'
-      : 'If you use multiple Claude profiles, set CLAUDE_CONFIG_DIR in Settings so Open Design spawns the same profile that works in your terminal.';
+      : 'If you use multiple Claude profiles, set CLAUDE_CONFIG_DIR in Settings so OpenDesign spawns the same profile that works in your terminal.';
     return withContext(
-      'Claude Code could not authenticate. Run `claude`, use `/login`, then retry the Open Design request.',
+      'Claude Code could not authenticate. Run `claude`, use `/login`, then retry the OpenDesign request.',
       `The spawned Claude Code process exited before producing a response. ${configHint}`,
       input,
     );
@@ -141,7 +202,7 @@ export function diagnoseClaudeCliFailure(
   if (windowsCredentialMismatch) {
     return withContext(
       'Claude Code appears to be using credentials from a different local environment.',
-      'Re-authenticate Claude Code in the same Windows, WSL, or shell environment that Open Design uses. On native Windows, check Windows Credential Manager if `/login` does not repair the session.',
+      'Re-authenticate Claude Code in the same Windows, WSL, or shell environment that OpenDesign uses. On native Windows, check Windows Credential Manager if `/login` does not repair the session.',
       input,
     );
   }
@@ -154,7 +215,7 @@ export function diagnoseClaudeCliFailure(
       ? 'Claude Code failed while using the configured Claude profile.'
       : 'Claude Code may be using a different or stale local profile than your terminal.';
     const detail = hasConfigDir
-      ? 'Re-run `claude` and `/login` for that profile, then retry Open Design.'
+      ? 'Re-run `claude` and `/login` for that profile, then retry OpenDesign.'
       : 'Run `claude` and `/login`, or set CLAUDE_CONFIG_DIR in Settings when you use multiple Claude profiles.';
     return withContext(message, detail, input);
   }
@@ -179,8 +240,8 @@ export function diagnoseClaudeCliFailure(
       ? 'Claude Code exited before producing diagnostics while using the configured Claude profile.'
       : 'Claude Code exited before producing diagnostics.';
     const detail = hasConfigDir
-      ? 'Re-run `claude` and `/login` for that profile, then retry Open Design.'
-      : 'Run `claude`, use `/login`, and retry. If you use multiple Claude profiles, set CLAUDE_CONFIG_DIR in Settings so Open Design uses the same profile as your terminal.';
+      ? 'Re-run `claude` and `/login` for that profile, then retry OpenDesign.'
+      : 'Run `claude`, use `/login`, and retry. If you use multiple Claude profiles, set CLAUDE_CONFIG_DIR in Settings so OpenDesign uses the same profile as your terminal.';
     return withContext(
       message,
       detail,

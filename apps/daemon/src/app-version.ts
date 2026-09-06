@@ -1,8 +1,10 @@
 import { readFile, stat } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, parse as parsePath } from 'node:path';
+import { releaseChannelFromVersion } from '@open-design/release';
 
 export const APP_VERSION_FALLBACK = '0.0.0';
+export const UNKNOWN_APP_VERSION = 'unknown';
 
 // Keep this structurally aligned with `@open-design/contracts` AppVersionInfo.
 // Daemon cannot import the package root type directly yet because its NodeNext
@@ -14,6 +16,26 @@ export interface AppVersionInfo {
   packaged: boolean;
   platform: string;
   arch: string;
+}
+
+export function normalizeTelemetryAppVersion(value: unknown): string | null {
+  const version = cleanString(value);
+  return version && version !== APP_VERSION_FALLBACK && version !== UNKNOWN_APP_VERSION
+    ? version
+    : null;
+}
+
+export function normalizeTelemetryAppVersionInfo(value: unknown): AppVersionInfo | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as Partial<AppVersionInfo>;
+  const version = normalizeTelemetryAppVersion(candidate.version);
+  const channel = cleanString(candidate.channel);
+  const platform = cleanString(candidate.platform);
+  const arch = cleanString(candidate.arch);
+  if (!version || !channel || !platform || !arch || typeof candidate.packaged !== 'boolean') {
+    return null;
+  }
+  return { version, channel, packaged: candidate.packaged, platform, arch };
 }
 
 interface PackageMetadata {
@@ -75,10 +97,9 @@ function cleanString(value: unknown): string | null {
 }
 
 function inferReleaseChannelFromVersion(version: string): string | null {
-  if (/(?:^|[-.])beta(?:[-.]|$)/i.test(version)) return 'beta';
-  if (/(?:^|[-.])preview(?:[-.]|$)/i.test(version)) return 'preview';
-  if (/(?:^|[-.])nightly(?:[-.]|$)/i.test(version)) return 'nightly';
-  return version.match(/^\d+\.\d+\.\d+-([0-9A-Za-z-]+)/)?.[1]?.split('.')[0] ?? null;
+  return releaseChannelFromVersion(version)
+    ?? version.match(/^\d+\.\d+\.\d+-([0-9A-Za-z-]+)/)?.[1]?.split('.')[0]
+    ?? null;
 }
 
 export function isPackagedRuntime({

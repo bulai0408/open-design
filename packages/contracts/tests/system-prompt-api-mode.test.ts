@@ -59,6 +59,11 @@ describe('composeSystemPrompt — API mode (#313)', () => {
       const prompt = composeSystemPrompt({});
       expect(prompt).not.toMatch(/API mode — no tools available/i);
     });
+
+    it('carries the on-demand clarification guidance for daemon mode too', () => {
+      const prompt = composeSystemPrompt({});
+      expect(prompt).toContain('Structured clarification on any turn');
+    });
   });
 
   describe('API mode (streamFormat: plain)', () => {
@@ -106,6 +111,13 @@ describe('composeSystemPrompt — API mode (#313)', () => {
       expect(prompt).toMatch(/state.*plan.*prose|describe.*plan.*prose|plan.*as prose/i);
     });
 
+    it('keeps tool-unavailable details out of user-visible prose', () => {
+      const prompt = composeSystemPrompt({ streamFormat: 'plain' });
+      expect(prompt).toContain('Do not mention tool unavailability to the user');
+      expect(prompt).toContain('Avoid phrases such as "TodoWrite is unavailable"');
+      expect(prompt).toContain('without mentioning missing tools');
+    });
+
     it('explicitly invalidates later "call TodoWrite" / tool-use instructions', () => {
       const prompt = composeSystemPrompt({ streamFormat: 'plain' });
       // The override must say "ignore later instructions that tell you to
@@ -120,6 +132,20 @@ describe('composeSystemPrompt — API mode (#313)', () => {
       expect(prompt).toMatch(/<artifact>/);
     });
 
+    // Regression coverage for the unified ask-user flow: API/BYOK mode must
+    // route material clarification through the same `<question-form>`
+    // Questions-tab surface as daemon mode, not fall back to plain-text
+    // markdown option lists. The API-mode allowed-output list and the
+    // daemon-mirrored guidance must both keep the trigger on demand.
+    it('permits clarification forms when materially needed on any turn', () => {
+      const prompt = composeSystemPrompt({ streamFormat: 'plain' });
+      expect(prompt).toContain('Structured clarification on any turn');
+      expect(prompt).toContain(
+        '<question-form>` blocks when material clarification is needed on any turn',
+      );
+      expect(prompt).not.toMatch(/discovery \(turn 1\)/);
+    });
+
     it('honors metadata.skipDiscoveryBrief before the discovery rules', () => {
       const prompt = composeSystemPrompt({
         streamFormat: 'plain',
@@ -129,8 +155,8 @@ describe('composeSystemPrompt — API mode (#313)', () => {
       const discoveryIdx = prompt.indexOf('# OD core directives');
       expect(skipIdx).toBeGreaterThanOrEqual(0);
       expect(skipIdx).toBeLessThan(discoveryIdx);
-      expect(prompt).toMatch(/do NOT emit `?<question-form id="discovery">`?/i);
-      expect(prompt).toContain('Do not call AskUserQuestion');
+      expect(prompt).toMatch(/do NOT emit a project-opening `?<question-form id="discovery">`?/i);
+      expect(prompt).not.toContain('Do not emit any question form');
       expect(prompt).toContain('choose reasonable defaults for any missing details');
     });
   });

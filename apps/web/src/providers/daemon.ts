@@ -12,6 +12,14 @@
 import type { AgentEvent, ChatCommentAttachment, ChatMessage } from '../types';
 import type { AmrEntryAttribution } from '../analytics/amr-attribution';
 import type {
+  AmrAuthErrorKind,
+  AmrAuthNetworkPath,
+  AmrAuthStage,
+  AmrAuthStageResult,
+  AmrAuthStageSource,
+} from '@open-design/contracts/analytics';
+import type {
+  ApiErrorResponse,
   ChatAnalyticsHints,
   ChatRunCreateResponse,
   ChatRunListResponse,
@@ -23,12 +31,18 @@ import type {
   ChatSseStartPayload,
   DaemonAgentPayload,
   AmrModelsResponse,
+  AmrWalletSnapshot,
+  ByokChatProviderConfig,
   MediaExecutionPolicy,
   ResearchOptions,
   RunContextSelection,
   SseErrorPayload,
+  StrategyTaskProjectionV2,
+  WorkspaceCollabContext,
 } from '@open-design/contracts';
 import type { StreamHandlers } from './anthropic';
+import { workspaceProjectHeaders } from '../state/projects';
+import { setRuntimeAmrConsoleOrigin } from '../runtime/amr-guidance';
 
 /**
  * Returns the front-end carrier that's about to send this request:
@@ -47,11 +61,27 @@ function detectClientType(): 'desktop' | 'web' | 'unknown' {
   return 'unknown';
 }
 import { parseSseFrame } from './sse';
+import {
+  summarizeArtifactsForTranscript,
+  type PersistedArtifactFileRef,
+} from '../artifacts/strip';
 import { trackRunProgress, trackRunStart, trackRunTerminal } from '../observability/stuck-run';
 
 const MAX_TRANSCRIPT_MESSAGE_CHARS = 12_000;
 const LARGE_TOOL_RESULT_CHARS = 8_000;
 const HIGH_INPUT_TOKEN_WARNING_THRESHOLD = 200_000;
+const RUN_CREATE_AUTHORITY_RETRY_DELAYS_MS = [500, 1_000, 2_000] as const;
+const BYOK_OPENCODE_AGENT_ID = 'byok-opencode';
+const API_MODE_AGENT_IDS = new Set([
+  'anthropic-api',
+  'openai-api',
+  'azure-openai-api',
+  'google-gemini-api',
+  'ollama-cloud-api',
+  'senseaudio-api',
+  'aihubmix-api',
+  'bedrock-api',
+]);
 
 export function latestUserPromptFromHistory(history: ChatMessage[]): string {
   for (let i = history.length - 1; i >= 0; i -= 1) {
@@ -64,7 +94,7 @@ export function latestUserPromptFromHistory(history: ChatMessage[]): string {
 function truncateForTranscript(content: string): string {
   if (content.length <= MAX_TRANSCRIPT_MESSAGE_CHARS) return content;
   const omitted = content.length - MAX_TRANSCRIPT_MESSAGE_CHARS;
-  return `${content.slice(0, MAX_TRANSCRIPT_MESSAGE_CHARS)}\n\n[Open Design truncated ${omitted} chars from this prior message before sending it to the agent. Full content remains in persisted history.]`;
+  return `${content.slice(0, MAX_TRANSCRIPT_MESSAGE_CHARS)}\n\n[OpenDesign truncated ${omitted} chars from this prior message before sending it to the agent. Full content remains in persisted history.]`;
 }
 
 function escapeTranscriptRoleDelimiters(content: string): string {
@@ -123,7 +153,7 @@ function buildPriorRunContextWarning(history: ChatMessage[]): string | null {
 
   return [
     '## context warning',
-    `Open Design detected ${notes.join(', ')}.`,
+    `OpenDesign detected ${notes.join(', ')}.`,
     'Keep this turn compact: summarize prior tool output, read large references from temp files, and quote only task-relevant lines.',
   ].join('\n');
 }
@@ -132,28 +162,46 @@ function scopeHistoryToAgent(history: ChatMessage[], targetAgentId?: string): Ch
   if (!targetAgentId) return history;
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const message = history[i];
-    if (message?.role === 'assistant' && message.agentId && message.agentId !== targetAgentId) {
+    if (
+      message?.role === 'assistant' &&
+      message.agentId &&
+      !isSameTranscriptAgentFamily(message.agentId, targetAgentId)
+    ) {
       return history.slice(i + 1);
     }
   }
   return history;
 }
 
+function isSameTranscriptAgentFamily(agentId: string, targetAgentId: string): boolean {
+  if (agentId === targetAgentId) return true;
+  if (targetAgentId !== BYOK_OPENCODE_AGENT_ID) return false;
+  return API_MODE_AGENT_IDS.has(agentId);
+}
+
 // Strip OD-specific markup that the agent emitted on a prior turn but
 // that the model would otherwise pattern-match as a template to echo.
-// Today this is `<question-form>` blocks and the ```json fenced schemas
+// Today this is `<question-form>` blocks (and the `<ask-question>` alias the
+// UI parser and the daemon open-tag matcher both accept) and the ```json
+// fenced schemas
 // some models (GPT-OSS-120B Medium, Gemini 3.5 Flash) emit alongside
 // them — leaving those literal in the transcript causes weak/medium
 // plain-stream models to re-emit an identical form on the user's
 // follow-up turn, looking like the discovery form loop never breaks
-// (see PR #3157 form-loop investigation).
+// (see PR #3157 form-loop investigation). If we only scrubbed the canonical
+// tag, an alias-form turn would replay verbatim and re-trigger that loop.
 //
 // User content is preserved verbatim — a user message that legitimately
 // quotes `<question-form>` (e.g. discussing the markup with the agent)
 // must not be mangled.
-export function sanitizePriorAssistantTurnForTranscript(content: string): string {
+export function sanitizePriorAssistantTurnForTranscript(
+  content: string,
+  persistedArtifactFiles: ReadonlyArray<PersistedArtifactFileRef> = [],
+): string {
   let sanitized = content.replace(
-    /<question-form\b[^>]*>[\s\S]*?<\/question-form>/g,
+    // `\1` backreference keeps the open/close tag names matched so we never
+    // splice across a `<question-form>…</ask-question>` mismatch.
+    /<(question-form|ask-question)\b[^>]*>[\s\S]*?<\/\1>/g,
     '[question-form was emitted here on a prior turn; the user already answered, see their reply below.]',
   );
   // Strip ```json (or plain ```) fenced blocks whose body matches the
@@ -169,7 +217,42 @@ export function sanitizePriorAssistantTurnForTranscript(content: string): string
       return match;
     },
   );
+  // Replace prior-turn `<artifact>` HTML with a one-line summary — but ONLY
+  // for artifacts whose save to the project files is confirmed by the
+  // message's producedFiles record. persistArtifact has refusal and
+  // write-failure branches; on those paths the transcript copy is the only
+  // surviving artifact body, so an unconfirmed block stays verbatim (the
+  // 12K truncation below still bounds it) and a follow-up turn can repair it.
+  // For confirmed saves the agent reads/edits the file from disk, never from
+  // this transcript copy, so re-sending the whole document each turn is pure
+  // waste — the summary keeps identifier/title/type plus the saved file name.
+  // Runs before truncateForTranscript so the summarized message no longer
+  // trips the 12K cap. Uses markdown-aware detection so a literal
+  // `<artifact>` recited in a code fence survives.
+  sanitized = summarizeArtifactsForTranscript(sanitized, persistedArtifactFiles);
   return sanitized;
+}
+
+// producedFiles → the persistence evidence summarizeArtifactsForTranscript
+// matches artifact blocks against. producedFiles is the whole per-turn file
+// diff — tool-written files included — so a name collision with an unrelated
+// same-turn file must not count as proof the <artifact> body was saved. Only
+// artifact-originated saves qualify: persistArtifact always writes an explicit
+// (non-inferred) manifest, whereas tool-written files surface with no manifest
+// or a daemon-inferred one (`metadata.inferred === true`). Within that
+// narrowed set, the manifest identifier is the strongest link (it survives
+// `-2`/`-3` collision renames); the file name is the fallback for artifact
+// saves whose manifest predates identifier metadata.
+function persistedArtifactFilesOf(message: ChatMessage): PersistedArtifactFileRef[] {
+  return (message.producedFiles ?? [])
+    .filter((file) => file.artifactManifest && file.artifactManifest.metadata?.inferred !== true)
+    .map((file) => {
+      const identifier = file.artifactManifest?.metadata?.identifier;
+      return {
+        name: file.name,
+        identifier: typeof identifier === 'string' && identifier ? identifier : undefined,
+      };
+    });
 }
 
 export function buildDaemonTranscript(history: ChatMessage[], targetAgentId?: string): string {
@@ -179,7 +262,7 @@ export function buildDaemonTranscript(history: ChatMessage[], targetAgentId?: st
       const trimmed = m.content.trim();
       const sanitized =
         m.role === 'assistant'
-          ? sanitizePriorAssistantTurnForTranscript(trimmed)
+          ? sanitizePriorAssistantTurnForTranscript(trimmed, persistedArtifactFilesOf(m))
           : trimmed;
       return `## ${m.role}\n${escapeTranscriptRoleDelimiters(truncateForTranscript(sanitized))}`;
     })
@@ -188,8 +271,27 @@ export function buildDaemonTranscript(history: ChatMessage[], targetAgentId?: st
   return warning ? `${warning}\n\n${transcript}` : transcript;
 }
 
+/** Build only the turns before the latest user message without text subtraction. */
+export function buildDaemonPriorTranscript(
+  history: ChatMessage[],
+  targetAgentId?: string,
+): string {
+  let latestUserIndex = -1;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (history[index]?.role === 'user') {
+      latestUserIndex = index;
+      break;
+    }
+  }
+  return latestUserIndex < 0
+    ? buildDaemonTranscript(history, targetAgentId)
+    : buildDaemonTranscript(history.slice(0, latestUserIndex), targetAgentId);
+}
+
 export interface DaemonStreamHandlers extends StreamHandlers {
   onAgentEvent: (ev: AgentEvent) => void;
+  /** Authoritative artifact count from the daemon's terminal run record. */
+  onArtifactCount?: (count: number) => void;
   /**
    * Live-only incremental tool-input fragment (Claude `input_json_delta`).
    * Kept off `AgentEvent`/`PersistedAgentEvent` because it is ephemeral and
@@ -216,6 +318,7 @@ export interface DaemonStreamOptions {
   projectId?: string | null;
   conversationId?: string | null;
   sessionMode?: ChatSessionMode;
+  userMessageId?: string | null;
   assistantMessageId?: string | null;
   clientRequestId?: string | null;
   skillId?: string | null;
@@ -229,38 +332,114 @@ export interface DaemonStreamOptions {
   // exist, and stitches them into the user message as `@<path>` hints.
   attachments?: string[];
   commentAttachments?: ChatCommentAttachment[];
-  // Per-CLI model + reasoning the user picked in the model menu. Both are
+  // Per-CLI model + reasoning / service tier the user picked in the model menu. These are
   // optional; the daemon validates them against the agent's declared
   // options and falls back to the CLI default when missing.
   model?: string | null;
   reasoning?: string | null;
+  serviceTier?: string | null;
+  byokProvider?: ByokChatProviderConfig;
+  byokMediaDefaults?: ChatRequest['byokMediaDefaults'];
   research?: ResearchOptions;
   context?: RunContextSelection;
   appliedPluginSnapshotId?: string | null;
   mediaExecution?: MediaExecutionPolicy;
+  titleGeneration?: { enabled?: boolean };
   locale?: string;
+  // The caller's current workspace identity, attached as `x-od-workspace-*`
+  // headers on POST /api/runs so the daemon's workspace-resource mutation
+  // gate (see `enforceWorkspaceProjectMutation` in
+  // `apps/daemon/src/routes/runs.ts`) can tell a team member apart from a
+  // headerless caller. Mirrors `workspaceProjectHeaders` usage on every
+  // other project write (rename/delete/duplicate/comments/file writes) —
+  // omitting it here would make POST /api/runs the one write path that
+  // forgets to identify the caller. Null/omitted for signed-out / personal
+  // (non-workspace) usage, matching those other call sites.
+  workspaceContext?: WorkspaceCollabContext | null;
   initialLastEventId?: string | null;
-  onRunCreated?: (runId: string) => void;
   onRunStatus?: (status: ChatRunStatus) => void;
+  /** Authoritative project-relative artifacts created or modified by the run. */
+  onArtifactPaths?: (paths: string[]) => void;
   onRunEventId?: (eventId: string) => void;
   // v2 analytics context propagated to run_created / run_finished.
   // Optional; the daemon only consumes these to shape PostHog props
   // (page_name / area / entry_from / DS context). Behavior never
   // depends on them.
   analyticsHints?: ChatAnalyticsHints;
+  /** Daemon-issued continuation handle used only for an explicit task reply. */
+  taskExecutionId?: string;
+  /** Called for the initial Run and every daemon-projected successor Run. */
+  onRunCreated?: (runId: string, strategyTask?: StrategyTaskProjectionV2) => void;
+  /** Called once the daemon projects the logical strategy task as terminal
+   *  (completed / blocked / canceled), with the terminal projection. */
+  onStrategyTaskSettled?: (strategyTask: StrategyTaskProjectionV2) => void;
 }
 
 export interface DaemonReattachOptions {
+  /** Runtime that owns the reattached run, when persisted with its message. */
+  agentId?: string;
   runId: string;
+  projectId?: string | null;
+  conversationId?: string | null;
+  workspaceContext?: WorkspaceCollabContext | null;
   signal: AbortSignal;
   cancelSignal?: AbortSignal;
   handlers: DaemonStreamHandlers;
   initialLastEventId?: string | null;
   onRunStatus?: (status: ChatRunStatus) => void;
+  onArtifactPaths?: (paths: string[]) => void;
   onRunEventId?: (eventId: string) => void;
+  /** Publish a current-run success outcome to the app-level upgrade gate. */
+  publishRunFinishedEvent?: boolean;
+  /** Called when reattach discovers a newer active Run in the same task. */
+  onRunCreated?: (runId: string, strategyTask?: StrategyTaskProjectionV2) => void;
+  /** Called once the daemon projects the logical strategy task as terminal
+   *  (completed / blocked / canceled), with the terminal projection. */
+  onStrategyTaskSettled?: (strategyTask: StrategyTaskProjectionV2) => void;
 }
 
 export const RUNS_CHANGED_EVENT = 'open-design:runs-changed';
+export const DAEMON_RUN_FINISHED_EVENT = 'open-design:daemon-run-finished';
+
+export interface DaemonRunFinishedEventDetail {
+  agentId: string;
+  runId: string;
+  projectId: string;
+  conversationId: string;
+  result: 'success';
+  artifactCount: number;
+}
+
+export function publishDaemonRunFinishedEvent(
+  detail: DaemonRunFinishedEventDetail,
+): void {
+  if (
+    typeof window === 'undefined'
+    || detail.agentId !== 'amr'
+    || !detail.runId.trim()
+    || !detail.projectId.trim()
+    || !detail.conversationId.trim()
+    || detail.result !== 'success'
+    || !Number.isFinite(detail.artifactCount)
+    || detail.artifactCount <= 0
+  ) {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent<DaemonRunFinishedEventDetail>(
+    DAEMON_RUN_FINISHED_EVENT,
+    { detail },
+  ));
+}
+
+export const GENERIC_DAEMON_DISCONNECT_MESSAGE =
+  'daemon stream disconnected before run completed';
+export const GENERIC_DAEMON_DISCONNECT_CODE = 'DAEMON_STREAM_DISCONNECTED';
+
+export function createGenericDaemonDisconnectError(): Error & { code: string } {
+  const error = new Error(GENERIC_DAEMON_DISCONNECT_MESSAGE) as Error & { code: string };
+  error.code = GENERIC_DAEMON_DISCONNECT_CODE;
+  return error;
+}
 
 function notifyRunsChanged() {
   if (typeof window === 'undefined') return;
@@ -312,7 +491,7 @@ function shouldSuppressLifecycleExitFallback(
 }
 
 const AMR_OPENCODE_INCOMPLETE_MESSAGE =
-  'AMR/OpenCode started, but the run did not complete. Please retry or check the run details for the session stream error.';
+  'OpenDesign started, but the run did not complete. Please retry or check the run details for the session stream error.';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -333,7 +512,33 @@ function readBooleanField(record: Record<string, unknown> | null, key: string): 
   return typeof value === 'boolean' ? value : null;
 }
 
+function daemonCreateRunError(response: Response, responseText: string): Error {
+  let payload: ApiErrorResponse | null = null;
+  try {
+    payload = JSON.parse(responseText) as ApiErrorResponse;
+  } catch {
+    // Older daemons and proxy failures can return plain text.
+  }
+  const apiError = payload?.error;
+  if (!apiError || typeof apiError !== 'object') {
+    return new Error(`daemon ${response.status}: ${responseText || 'no body'}`);
+  }
+  const error = new Error(apiError.message || `OpenDesign service returned ${response.status}`) as Error & {
+    code?: string;
+    requestId?: string;
+    retryable?: boolean;
+    status?: number;
+  };
+  error.status = response.status;
+  error.code = apiError.code;
+  error.retryable = apiError.retryable === true;
+  if (apiError.requestId) error.requestId = apiError.requestId;
+  return error;
+}
+
 interface OpenCodeSessionErrorDetails {
+  source: string | null;
+  code: string | null;
   message: string | null;
   statusCode: number | null;
   retryable: boolean | null;
@@ -350,6 +555,8 @@ function normalizeOpenCodeSessionErrorDetails(value: unknown): OpenCodeSessionEr
   if (!isRecord(value) || value.kind !== 'opencode_session_error') return null;
   const statusCode = readNumberField(value, 'statusCode');
   return {
+    source: readStringField(value, 'source'),
+    code: readStringField(value, 'code'),
     message: readStringField(value, 'message'),
     statusCode,
     retryable: readBooleanField(value, 'retryable') ?? inferOpenCodeRetryable(statusCode),
@@ -388,11 +595,14 @@ function formatOpenCodeSessionError(value: unknown): string | null {
   if (!details) return null;
   const statusCode = details.statusCode;
   const message = details.message;
+  if (details.source === 'opencode' && details.code === 'ROLE_MARKER_HALLUCINATION') {
+    return message;
+  }
   if (statusCode === 404) {
-    return 'The model service returned 404 Not Found for the configured runtime endpoint. Check the AMR Link URL or model route.';
+    return 'The model service returned 404 Not Found for the configured runtime endpoint. Check the OpenDesign link URL or model route.';
   }
   if (statusCode === 401 || statusCode === 403) {
-    return 'AMR authentication failed. Please sign in again or refresh the runtime key.';
+    return 'OpenDesign authentication failed. Please sign in again or refresh the runtime key.';
   }
   if (statusCode === 429) {
     return 'The model service rejected the request due to quota or rate limits. Retry later or check quota and rate limits.';
@@ -456,6 +666,8 @@ function legacyOpenCodeSessionErrorDetails(text: string): OpenCodeSessionErrorDe
   const statusCode = readNumberField(data, 'statusCode');
   const retryable = readBooleanField(data, 'isRetryable') ?? inferOpenCodeRetryable(statusCode);
   return {
+    source: null,
+    code: null,
     message: readStringField(data, 'message') ?? readStringField(error, 'message'),
     statusCode,
     retryable,
@@ -509,6 +721,7 @@ export async function streamViaDaemon({
   projectId,
   conversationId,
   sessionMode,
+  userMessageId,
   assistantMessageId,
   clientRequestId,
   skillId,
@@ -518,16 +731,24 @@ export async function streamViaDaemon({
   commentAttachments,
   model,
   reasoning,
+  serviceTier,
+  byokProvider,
+  byokMediaDefaults,
   research,
   context,
   appliedPluginSnapshotId,
   mediaExecution,
+  titleGeneration,
   locale,
+  workspaceContext,
   initialLastEventId,
   onRunCreated,
   onRunStatus,
+  onArtifactPaths,
   onRunEventId,
   analyticsHints,
+  taskExecutionId,
+  onStrategyTaskSettled,
 }: DaemonStreamOptions): Promise<void> {
   const emitRunStatus = (status: ChatRunStatus) => {
     onRunStatus?.(status);
@@ -540,10 +761,13 @@ export async function streamViaDaemon({
   const request: ChatRequest = {
     agentId,
     message: transcript,
+    ...(taskExecutionId ? { taskExecutionId } : {}),
     currentPrompt: latestUserPromptFromHistory(history),
+    priorTranscript: buildDaemonPriorTranscript(history, agentId),
     projectId: projectId ?? null,
     conversationId: conversationId ?? null,
     sessionMode,
+    userMessageId: userMessageId ?? null,
     assistantMessageId: assistantMessageId ?? null,
     clientRequestId: clientRequestId ?? null,
     skillId: skillId ?? null,
@@ -553,39 +777,66 @@ export async function streamViaDaemon({
     commentAttachments: commentAttachments ?? [],
     model: model ?? null,
     reasoning: reasoning ?? null,
+    serviceTier: serviceTier ?? null,
+    ...(byokProvider ? { byokProvider } : {}),
+    ...(byokMediaDefaults ? { byokMediaDefaults } : {}),
     locale,
     ...(appliedPluginSnapshotId ? { appliedPluginSnapshotId } : {}),
     ...(context ? { context } : {}),
     ...(research ? { research } : {}),
     ...(mediaExecution ? { mediaExecution } : {}),
+    ...(titleGeneration?.enabled ? { titleGeneration: { enabled: true } } : {}),
     ...(analyticsHints ? { analyticsHints } : {}),
   };
   const body = JSON.stringify(request);
 
   try {
-    const createResp = await fetch('/api/runs', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Tells the daemon which front-end carrier started the run so the
-        // telemetry trace can be tagged 'client:desktop' vs 'client:web'.
-        // The daemon falls back to a User-Agent sniff when this header is
-        // absent (e.g. third-party clients), so omitting it in tests is OK.
-        'X-OD-Client': detectClientType(),
-      },
-      body,
-    });
+    let createResp: Response;
+    for (let attempt = 0; ; attempt += 1) {
+      createResp = await fetch('/api/runs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // Tells the daemon which front-end carrier started the run so the
+          // telemetry trace can be tagged 'client:desktop' vs 'client:web'.
+          // The daemon falls back to a User-Agent sniff when this header is
+          // absent (e.g. third-party clients), so omitting it in tests is OK.
+          'X-OD-Client': detectClientType(),
+          // Identifies the caller's workspace to the daemon's workspace-resource
+          // mutation gate (see `enforceWorkspaceProjectMutation` in
+          // apps/daemon/src/routes/runs.ts) — without it, a team member's own
+          // run on a team-bound project 401s exactly like an unauthenticated
+          // caller's would. Omitted (headers stay absent) for signed-out /
+          // personal usage, matching every other workspace-gated write.
+          ...(workspaceContext ? workspaceProjectHeaders(workspaceContext) : {}),
+        },
+        body,
+      });
+      if (createResp.ok) break;
+
+      const errorBody = await createResp.clone().json().catch(() => null) as ApiErrorResponse | null;
+      const error = errorBody?.error;
+      const retryableAuthorityOutage =
+        createResp.status === 503
+        && error?.code === 'WORKSPACE_AUTHORITY_UNAVAILABLE'
+        && error.retryable === true;
+      const delayMs = RUN_CREATE_AUTHORITY_RETRY_DELAYS_MS[attempt];
+      if (!retryableAuthorityOutage || delayMs === undefined || cancelSignal?.aborted) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      if (cancelSignal?.aborted) return;
+    }
 
     if (!createResp.ok) {
       const text = await createResp.text().catch(() => '');
       emitRunStatus('failed');
-      handlers.onError(new Error(`daemon ${createResp.status}: ${text || 'no body'}`));
+      handlers.onError(daemonCreateRunError(createResp, text));
       return;
     }
 
     const created = (await createResp.json()) as ChatRunCreateResponse;
     const runId = created.runId;
-    onRunCreated?.(runId);
+    if (created.strategyTask) onRunCreated?.(runId, created.strategyTask);
+    else onRunCreated?.(runId);
     // Start the stuck-run watchdog. trackRunProgress is called inside the
     // SSE consumer below on every event; trackRunTerminal fires when the
     // stream resolves to a terminal state (or errors out).
@@ -605,7 +856,14 @@ export async function streamViaDaemon({
       handlers,
       initialLastEventId,
       onRunStatus: emitRunStatus,
+      onArtifactPaths,
       onRunEventId,
+      projectId,
+      conversationId,
+      workspaceContext,
+      publishRunFinishedEvent: true,
+      onRunCreated,
+      onStrategyTaskSettled,
     });
   } catch (err) {
     if ((err as Error).name === 'AbortError') return;
@@ -624,37 +882,20 @@ export async function reattachDaemonRun(options: DaemonReattachOptions): Promise
   });
 }
 
-export async function fetchChatRunStatus(runId: string): Promise<ChatRunStatusResponse | null> {
+export async function fetchChatRunStatus(
+  runId: string,
+  workspaceContext?: WorkspaceCollabContext | null,
+): Promise<ChatRunStatusResponse | null> {
   try {
-    const resp = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
+    const resp = await fetch(`/api/runs/${encodeURIComponent(runId)}`, {
+      ...(workspaceContext
+        ? { headers: workspaceProjectHeaders(workspaceContext) }
+        : {}),
+    });
     if (!resp.ok) return null;
     return (await resp.json()) as ChatRunStatusResponse;
   } catch {
     return null;
-  }
-}
-
-// Push a `tool_result` content block back into a running stream-json child.
-// Used to answer Claude's `AskUserQuestion` tool: the host card collects the
-// user's pick, formats it as one text string, and we route it through the
-// daemon's POST /api/runs/:id/tool-result. The daemon writes it as a JSONL
-// line on the still-open stdin so claude-code can resume mid-call instead
-// of auto-erroring the tool in headless mode.
-export async function submitChatRunToolResult(
-  runId: string,
-  toolUseId: string,
-  content: string,
-  options: { isError?: boolean } = {},
-): Promise<{ ok: boolean; status?: number }> {
-  try {
-    const resp = await fetch(`/api/runs/${encodeURIComponent(runId)}/tool-result`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ toolUseId, content, isError: !!options.isError }),
-    });
-    return { ok: resp.ok, status: resp.status };
-  } catch {
-    return { ok: false };
   }
 }
 
@@ -704,14 +945,87 @@ export interface VelaUser {
   name?: string;
   image?: string | null;
   plan?: string;
+  /** Wallet balance (USD, string) from the live `/api/v1/me` projection; `null` when unknown. */
+  balanceUsd?: string | null;
+}
+
+/**
+ * Format a raw wallet `balanceUsd` string (e.g. "12.3") into a display string
+ * (e.g. "$12.30"). Returns `null` when the balance is unknown/unparseable so
+ * callers can simply hide the balance area.
+ */
+export function formatVelaBalanceUsd(raw?: string | null): string | null {
+  if (raw == null || raw === '') return null;
+  const amount = Number(raw);
+  if (!Number.isFinite(amount)) return null;
+  // Sign before the currency symbol: an overdrawn wallet reads "-$1.25",
+  // never the malformed "$-1.25".
+  const sign = amount < 0 ? '-' : '';
+  return `${sign}$${Math.abs(amount).toFixed(2)}`;
+}
+
+/** Top subscription tier — no upgrade affordance is shown at/above this. */
+export const VELA_TOP_PLAN_TIER = 'max';
+
+/**
+ * Whether to surface an "Upgrade" affordance for the given plan tier. True for
+ * a KNOWN tier below the top (free/plus/pro); false at the top tier AND when
+ * the plan is unknown. The unknown case matters: a signed-in session whose live
+ * billing summary has not resolved yet has no plan, and treating that as
+ * upgradeable would flash an Upgrade CTA at top-tier users until billing loads.
+ */
+export function canUpgradeVelaPlan(plan?: string | null): boolean {
+  const normalized = plan?.trim().toLowerCase();
+  if (!normalized) return false;
+  return normalized !== VELA_TOP_PLAN_TIER;
+}
+
+/**
+ * Live billing projection (plan tier + wallet balance) for the signed-in
+ * account, surfaced on its OWN field rather than on {@link VelaUser} so
+ * env-backed sessions (where `user` is null) can show plan/balance without a
+ * fabricated identity. Absent means unknown → hide the fields.
+ */
+export interface VelaLiveAccount {
+  plan?: string;
+  balanceUsd?: string | null;
 }
 
 export interface VelaLoginStatus {
   loggedIn: boolean;
+  sessionState?: import('@open-design/contracts').AmrSessionState;
+  credentialRevision?: string;
   loginInFlight?: boolean;
   profile: string;
   user: VelaUser | null;
+  account?: VelaLiveAccount;
   configPath: string;
+  // Device-authorization details parsed from `vela login` output while a login
+  // is in flight, so the UI can offer a manual sign-in link when the browser
+  // did not auto-open. See parseVelaLoginActivation in the daemon's vela.ts.
+  activationUrl?: string;
+  userCode?: string;
+  browserOpenFailed?: boolean;
+  // Origin of the vela web console this runtime talks to, when the daemon was
+  // given one (OD_VELA_WEB_URL, baked into packaged builds from a CI secret).
+  // The client builds wallet / plans / upgrade links from it; internal AMR
+  // environments therefore need no hostname literal in this public bundle.
+  // Absent for prod and fork builds.
+  consoleOrigin?: string;
+  authAttemptId?: string;
+  authStages?: VelaLoginAuthStage[];
+  authRoute?: AmrAuthNetworkPath;
+  fallbackUsed?: boolean;
+}
+
+export interface VelaLoginAuthStage {
+  sequence: number;
+  stage: AmrAuthStage;
+  result: AmrAuthStageResult;
+  source: AmrAuthStageSource;
+  occurredAt: string;
+  route: AmrAuthNetworkPath;
+  errorKind?: AmrAuthErrorKind;
 }
 
 // AMR (vela) login surfaces three thin endpoints on the daemon:
@@ -720,11 +1034,30 @@ export interface VelaLoginStatus {
 //   POST /api/integrations/vela/login/cancel — terminate a still-pending login
 //   POST /api/integrations/vela/logout   — clear ~/.amr auth and Settings-backed AMR auth env
 // The Settings UI polls /status after kicking off /login to detect completion.
-export async function fetchVelaLoginStatus(): Promise<VelaLoginStatus | null> {
+export async function fetchVelaLoginStatus(options: { refresh?: boolean } = {}): Promise<VelaLoginStatus | null> {
   try {
-    const resp = await fetch('/api/integrations/vela/status');
+    const query = options.refresh ? '?refresh=1' : '';
+    const resp = await fetch(`/api/integrations/vela/status${query}`, { cache: 'no-store' });
     if (!resp.ok) return null;
-    return (await resp.json()) as VelaLoginStatus;
+    const status = (await resp.json()) as VelaLoginStatus;
+    // Every AMR status read refreshes the runtime console origin, so the console
+    // links stay correct no matter which surface (login pill, model switcher,
+    // avatar menu, low-balance dialog) triggered the fetch. Doing it here rather
+    // than in each caller is what keeps the origin out of web source: no caller
+    // needs to know the hostname of the environment it is pointed at.
+    setRuntimeAmrConsoleOrigin(status.consoleOrigin);
+    return status;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchAmrWalletSnapshot(options: { refresh?: boolean } = {}): Promise<AmrWalletSnapshot | null> {
+  try {
+    const query = options.refresh ? '?refresh=1' : '';
+    const resp = await fetch(`/api/integrations/vela/wallet${query}`, { cache: 'no-store' });
+    if (!resp.ok) return null;
+    return (await resp.json()) as AmrWalletSnapshot;
   } catch {
     return null;
   }
@@ -746,36 +1079,89 @@ export interface StartVelaLoginResult {
   pid?: number;
   alreadyRunning?: boolean;
   error?: string;
+  authAttemptId?: string;
+  authStages?: VelaLoginAuthStage[];
+  authRoute?: AmrAuthNetworkPath;
+  fallbackUsed?: boolean;
 }
 
 export async function startVelaLogin(
   attribution?: AmrEntryAttribution | null,
+  odDeviceId?: string | null,
+  authAttemptId?: string,
 ): Promise<StartVelaLoginResult> {
   try {
+    const loginAttribution =
+      attribution && odDeviceId ? { ...attribution, odDeviceId } : attribution;
+    const canonicalAuthAttemptId = authAttemptId
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(authAttemptId)
+      ? authAttemptId
+      : null;
+    const authRequestId = authAttemptId
+      && /^pending-amr-auth-[a-z0-9]+-[a-z0-9]+$/.test(authAttemptId)
+      ? authAttemptId
+      : null;
+    const payload = {
+      ...(loginAttribution ? { attribution: loginAttribution } : {}),
+      ...(canonicalAuthAttemptId ? { authAttemptId: canonicalAuthAttemptId } : {}),
+      ...(authRequestId ? { authRequestId } : {}),
+    };
     const resp = await fetch('/api/integrations/vela/login', {
       method: 'POST',
-      headers: attribution ? { 'Content-Type': 'application/json' } : undefined,
-      body: attribution ? JSON.stringify({ attribution }) : undefined,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
+    const body = (await resp.json().catch(() => null)) as Omit<
+      StartVelaLoginResult,
+      'ok' | 'status' | 'alreadyRunning'
+    > | null;
     if (resp.ok) {
-      const body = (await resp.json()) as { pid?: number };
-      return { ok: true, status: resp.status, pid: body.pid };
+      return { ok: true, status: resp.status, ...(body ?? {}) };
     }
-    const body = (await resp.json().catch(() => null)) as { error?: string } | null;
     return {
       ok: false,
       status: resp.status,
       alreadyRunning: resp.status === 409,
       error: body?.error ?? '',
+      ...(body?.authAttemptId ? { authAttemptId: body.authAttemptId } : {}),
+      ...(body?.authStages ? { authStages: body.authStages } : {}),
+      ...(body?.authRoute ? { authRoute: body.authRoute } : {}),
+      ...(body?.fallbackUsed !== undefined
+        ? { fallbackUsed: body.fallbackUsed }
+        : {}),
     };
   } catch (err) {
     return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
-export async function cancelVelaLogin(): Promise<{ ok: boolean; canceled?: boolean }> {
+export async function cancelVelaLogin(
+  authAttemptId?: string,
+): Promise<{ ok: boolean; canceled?: boolean }> {
+  const hasTarget = authAttemptId !== undefined;
+  const canonicalAuthAttemptId = authAttemptId
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(authAttemptId)
+    ? authAttemptId
+    : null;
+  const authRequestId = authAttemptId
+    && /^pending-amr-auth-[a-z0-9]+-[a-z0-9]+$/.test(authAttemptId)
+    ? authAttemptId
+    : null;
+  if (hasTarget && !canonicalAuthAttemptId && !authRequestId) {
+    return { ok: false };
+  }
   try {
-    const resp = await fetch('/api/integrations/vela/login/cancel', { method: 'POST' });
+    const resp = await fetch('/api/integrations/vela/login/cancel', {
+      method: 'POST',
+      ...(hasTarget
+        ? {
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(canonicalAuthAttemptId
+              ? { authAttemptId: canonicalAuthAttemptId }
+              : { authRequestId }),
+          }
+        : {}),
+    });
     if (!resp.ok) return { ok: false };
     const body = (await resp.json().catch(() => null)) as { canceled?: boolean } | null;
     return { ok: true, canceled: body?.canceled };
@@ -799,19 +1185,20 @@ export async function velaLogout(): Promise<{ ok: boolean }> {
 // the PUT /messages/:id round-trip).
 export async function reportChatRunFeedback(req: {
   runId: string;
-  projectId: string;
-  conversationId: string;
-  assistantMessageId: string;
   rating: 'positive' | 'negative';
   reasonCodes: string[];
   hasCustomReason: boolean;
   customReason: string;
-}): Promise<void> {
+}, workspaceContext?: WorkspaceCollabContext | null): Promise<void> {
   try {
-    await fetch(`/api/runs/${encodeURIComponent(req.runId)}/feedback`, {
+    const { runId, ...feedback } = req;
+    await fetch(`/api/runs/${encodeURIComponent(runId)}/feedback`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
+      headers: {
+        'Content-Type': 'application/json',
+        ...(workspaceContext ? workspaceProjectHeaders(workspaceContext) : {}),
+      },
+      body: JSON.stringify(feedback),
     });
   } catch {
     // Best-effort.
@@ -821,10 +1208,15 @@ export async function reportChatRunFeedback(req: {
 export async function listActiveChatRuns(
   projectId: string,
   conversationId: string,
+  workspaceContext?: WorkspaceCollabContext | null,
 ): Promise<ChatRunStatusResponse[]> {
   try {
     const qs = new URLSearchParams({ projectId, conversationId, status: 'active' });
-    const resp = await fetch(`/api/runs?${qs.toString()}`);
+    const resp = await fetch(`/api/runs?${qs.toString()}`, {
+      ...(workspaceContext
+        ? { headers: workspaceProjectHeaders(workspaceContext) }
+        : {}),
+    });
     if (!resp.ok) return [];
     const body = (await resp.json()) as ChatRunListResponse;
     return body.runs ?? [];
@@ -833,9 +1225,15 @@ export async function listActiveChatRuns(
   }
 }
 
-export async function listProjectRuns(): Promise<ChatRunStatusResponse[]> {
+export async function listProjectRuns(
+  workspaceContext?: WorkspaceCollabContext | null,
+): Promise<ChatRunStatusResponse[]> {
   try {
-    const resp = await fetch('/api/runs');
+    const resp = await fetch('/api/runs', {
+      ...(workspaceContext
+        ? { headers: workspaceProjectHeaders(workspaceContext) }
+        : {}),
+    });
     if (!resp.ok) return [];
     const body = (await resp.json()) as ChatRunListResponse;
     return body.runs ?? [];
@@ -844,7 +1242,86 @@ export async function listProjectRuns(): Promise<ChatRunStatusResponse[]> {
   }
 }
 
-async function consumeDaemonRun({
+/**
+ * One project's runs plus the awaiting-input flag the run bodies cannot carry.
+ *
+ * Scoped to a single project ON PURPOSE. The catalogue-wide `listProjectRuns`
+ * above 400s (`PROJECT_SCOPE_REQUIRED`) the moment any run belongs to a
+ * workspace-bound project — which, in a workspace session, is all of them — so
+ * it silently returns `[]` there. Asking per project id takes the route's
+ * authorized branch instead and actually works.
+ *
+ * Returns `null` when the project is unreadable or the daemon is unreachable,
+ * so a caller can tell "no runs" apart from "could not ask".
+ */
+export async function listRunsForProject(
+  projectId: string,
+  workspaceContext?: WorkspaceCollabContext | null,
+): Promise<{ runs: ChatRunStatusResponse[]; awaitingInputProjectIds: string[] } | null> {
+  try {
+    const resp = await fetch(`/api/runs?projectId=${encodeURIComponent(projectId)}`, {
+      ...(workspaceContext
+        ? { headers: workspaceProjectHeaders(workspaceContext) }
+        : {}),
+    });
+    if (!resp.ok) return null;
+    const body = (await resp.json()) as ChatRunListResponse;
+    return {
+      runs: body.runs ?? [],
+      // Absent on daemons older than this field; treat as "no pending
+      // question" rather than failing the whole read.
+      awaitingInputProjectIds: body.awaitingInputProjectIds ?? [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+interface DaemonPhysicalRunResult {
+  nextRunId?: string;
+  strategyTask?: StrategyTaskProjectionV2;
+}
+
+async function consumeDaemonRun(options: DaemonReattachOptions): Promise<void> {
+  let runId = options.runId;
+  let initialLastEventId = options.initialLastEventId;
+  let taskText = '';
+  const visited = new Set<string>();
+  const taskHandlers: DaemonStreamHandlers = {
+    ...options.handlers,
+    onDelta: (delta) => {
+      taskText += delta;
+      options.handlers.onDelta(delta);
+    },
+    onDone: () => options.handlers.onDone(taskText),
+  };
+  while (true) {
+    if (visited.has(runId)) {
+      options.onRunStatus?.('failed');
+      options.handlers.onError(new Error('daemon returned a cyclic strategy task Run chain'));
+      return;
+    }
+    visited.add(runId);
+    const result = await consumeDaemonPhysicalRun({
+      ...options,
+      handlers: taskHandlers,
+      runId,
+      initialLastEventId,
+    });
+    if (!result?.nextRunId) return;
+    runId = result.nextRunId;
+    initialLastEventId = null;
+    trackRunStart(runId, {
+      agent_id: options.agentId,
+      project_id: options.projectId ?? undefined,
+      conversation_id: options.conversationId ?? undefined,
+      client_type: detectClientType(),
+    });
+    options.onRunCreated?.(runId, result.strategyTask);
+  }
+}
+
+async function consumeDaemonPhysicalRun({
   agentId,
   runId,
   signal,
@@ -852,13 +1329,21 @@ async function consumeDaemonRun({
   handlers,
   initialLastEventId,
   onRunStatus,
+  onArtifactPaths,
   onRunEventId,
-}: DaemonReattachOptions & { agentId?: string }): Promise<void> {
+  projectId,
+  conversationId,
+  workspaceContext,
+  publishRunFinishedEvent,
+  onStrategyTaskSettled,
+}: DaemonReattachOptions): Promise<DaemonPhysicalRunResult | void> {
   let acc = '';
   let stderrBuf = '';
   let exitCode: number | null = null;
   let exitSignal: string | null = null;
   let endStatus: ChatRunStatus | null = null;
+  let endStrategyTask: StrategyTaskProjectionV2 | undefined;
+  let pendingStructuredError: Error | null = null;
   // Tracks whether the server explicitly declared `status: 'succeeded'` in
   // the SSE end payload (or via the fallback run-status fetch). Distinct
   // from `endStatus === 'succeeded'`, which can be a local fallback when
@@ -868,12 +1353,41 @@ async function consumeDaemonRun({
   // failure response with `{code:1}` or `{code:null,signal:"SIGTERM"}` and
   // no `status` field still surfaces an error banner.
   let serverDeclaredSuccess = false;
+  // Set when the daemon reports this terminal failure can be recovered by
+  // resuming the agent's CLI session (transient upstream drop / inactivity on
+  // a session-resuming runtime). Carried onto the surfaced error so the chat
+  // can offer a Continue affordance. See ChatRunStatusResponse.resumable.
+  let endResumable = false;
+  // Daemon failure classification carried onto the surfaced error so the chat's
+  // error card can name a specific failure type + fix (see resolveRunFailureUi).
+  // Sourced from the run-status fetch on the error frame and from the SSE `end`
+  // frame — both mirror the same finalize-time classification.
+  let endFailureCategory: ChatRunStatusResponse['failureCategory'] = null;
+  let endFailureDetail: ChatRunStatusResponse['failureDetail'] = null;
+  let resolvedArtifactCount: number | undefined;
+  const reportArtifactCount = (value: unknown) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return;
+    resolvedArtifactCount = value;
+    handlers.onArtifactCount?.(value);
+  };
+  const reportArtifactPaths = (value: unknown) => {
+    if (!Array.isArray(value)) return;
+    const paths = value.filter(
+      (item): item is string => typeof item === 'string' && item.trim().length > 0,
+    );
+    onArtifactPaths?.([...new Set(paths)]);
+  };
   let lastEventId: string | null = initialLastEventId ?? null;
   let canceled = false;
   const cancelRun = () => {
     if (canceled) return;
     canceled = true;
-    void fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }).catch(() => {});
+    void fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
+      method: 'POST',
+      ...(workspaceContext
+        ? { headers: workspaceProjectHeaders(workspaceContext) }
+        : {}),
+    }).catch(() => {});
   };
 
   cancelSignal?.addEventListener('abort', cancelRun, { once: true });
@@ -890,6 +1404,9 @@ async function consumeDaemonRun({
         resp = await fetch(`/api/runs/${encodeURIComponent(runId)}/events${qs}`, {
           method: 'GET',
           signal,
+          ...(workspaceContext
+            ? { headers: workspaceProjectHeaders(workspaceContext) }
+            : {}),
         });
       } catch (err) {
         if ((err as Error).name === 'AbortError') throw err;
@@ -909,7 +1426,19 @@ async function consumeDaemonRun({
       let sawStreamProgress = false;
 
       while (true) {
-        const { value, done } = await reader.read();
+        let readResult: ReadableStreamReadResult<Uint8Array>;
+        try {
+          readResult = await reader.read();
+        } catch (err) {
+          // Only catch reader.read() failures — a broken SSE connection
+          // (tab backgrounded, proxy idle timeout, network drop). Parsing
+          // and handler invocations stay OUTSIDE this catch so local
+          // processing bugs surface through the existing outer error path.
+          if ((err as Error).name === 'AbortError') throw err;
+          try { reader.cancel(); } catch {}
+          break;
+        }
+        const { value, done } = readResult;
         if (done) break;
         buf += decoder.decode(value, { stream: true });
         let idx: number;
@@ -979,30 +1508,74 @@ async function consumeDaemonRun({
           }
 
           if (event.event === 'error') {
-            onRunStatus?.('failed');
             const data = event.data as SseErrorPayload;
-            handlers.onError(daemonSseError(data));
-            return;
+            const structuredError = daemonSseError(data);
+            pendingStructuredError = structuredError;
+            // Error frames can be emitted for a failed first attempt before the
+            // same run's retry has completed. Do not classify the run from a
+            // point-in-time status probe here: that can catch a transient
+            // failed state, surface a stale error, and disconnect before the
+            // later successful retry frames arrive. Cache the structured error
+            // and let the terminal `end` event or the post-stream status
+            // fallback below decide whether it should be surfaced.
+            continue;
           }
 
           if (event.event === 'end') {
             exitCode = typeof event.data.code === 'number' ? event.data.code : null;
             exitSignal = typeof event.data.signal === 'string' ? event.data.signal : null;
+            if (event.data.resumable === true) endResumable = true;
+            if (event.data.failureCategory) endFailureCategory = event.data.failureCategory;
+            if (event.data.failureDetail) endFailureDetail = event.data.failureDetail;
+            reportArtifactCount(event.data.artifactCount);
+            reportArtifactPaths(event.data.artifactPaths);
+            if (event.data.strategyTask) endStrategyTask = event.data.strategyTask;
             // `serverDeclaredSuccess` records whether the server explicitly
             // set `status: 'succeeded'` in the end payload — the local
             // `'succeeded'` fallback below does not count and must keep
             // hitting the exit-code/signal safety net later.
             serverDeclaredSuccess = event.data.status === 'succeeded';
             endStatus = isChatRunStatus(event.data.status) ? event.data.status : 'succeeded';
-            onRunStatus?.(endStatus);
           }
         }
       }
-      reconnects = sawStreamProgress ? 0 : reconnects + 1;
+      let shouldResetReconnects = sawStreamProgress;
+      if (pendingStructuredError && endStatus === null) {
+        const status = await fetchChatRunStatus(runId, workspaceContext).catch(() => null);
+        if (status && isChatRunStatus(status.status) && status.status !== 'queued' && status.status !== 'running') {
+          endStatus = status.status;
+          exitCode = status.exitCode ?? null;
+          exitSignal = status.signal ?? null;
+          serverDeclaredSuccess = status.status === 'succeeded';
+          if (status.resumable === true) endResumable = true;
+          // Carry the daemon failure classification off this terminal status
+          // too — this error-frame-then-status recovery path breaks before the
+          // SSE `end` frame, so without it markErrorRunFailure() below stamps
+          // null and the specific failureDetail card degrades to the generic
+          // run-error UI on reconnect.
+          if (status.failureCategory) endFailureCategory = status.failureCategory;
+          if (status.failureDetail) endFailureDetail = status.failureDetail;
+          reportArtifactCount(status.artifactCount);
+          reportArtifactPaths(status.artifactPaths);
+          if (status.strategyTask) endStrategyTask = status.strategyTask;
+          break;
+        }
+        if (!status) {
+          onRunStatus?.('failed');
+          handlers.onError(pendingStructuredError);
+          return;
+        }
+        // The connection closed after an error frame but before a terminal
+        // frame. If the run is still active, retry the SSE stream, but count
+        // this as a reconnect attempt instead of letting the error frame reset
+        // the budget forever.
+        shouldResetReconnects = false;
+      }
+      reconnects = shouldResetReconnects ? 0 : reconnects + 1;
     }
 
     if (endStatus === null) {
-      const status = await fetchChatRunStatus(runId);
+      const status = await fetchChatRunStatus(runId, workspaceContext);
       if (status && isChatRunStatus(status.status) && status.status !== 'queued' && status.status !== 'running') {
         endStatus = status.status;
         exitCode = status.exitCode ?? null;
@@ -1012,13 +1585,64 @@ async function consumeDaemonRun({
         // explicit `'succeeded'` here is just as authoritative as the SSE
         // end-event success.
         serverDeclaredSuccess = status.status === 'succeeded';
-        onRunStatus?.(endStatus);
+        if (status.resumable === true) endResumable = true;
+        if (status.failureCategory) endFailureCategory = status.failureCategory;
+        if (status.failureDetail) endFailureDetail = status.failureDetail;
+        reportArtifactCount(status.artifactCount);
+        reportArtifactPaths(status.artifactPaths);
+        if (status.strategyTask) endStrategyTask = status.strategyTask;
       } else {
         onRunStatus?.('failed');
-        handlers.onError(new Error('daemon stream disconnected before run completed'));
+        handlers.onError(createGenericDaemonDisconnectError());
         return;
       }
     }
+
+    if (endStrategyTask && !endStrategyTask.terminal) {
+      const nextRunId = endStrategyTask.activeRunId !== runId
+        ? endStrategyTask.activeRunId
+        : endStrategyTask.nextRunId;
+      if (nextRunId && nextRunId !== runId) {
+        onRunStatus?.('running');
+        return { nextRunId, strategyTask: endStrategyTask };
+      }
+    }
+
+    if (endStrategyTask?.terminal) {
+      // Surface the terminal projection before the status/error handlers run,
+      // so a blocked verdict (with its gate attribution) is stamped onto the
+      // assistant message ahead of the failure finalization it triggers.
+      onStrategyTaskSettled?.(endStrategyTask);
+      if (endStrategyTask.outcome === 'canceled') {
+        endStatus = 'canceled';
+      } else if (endStrategyTask.outcome === 'blocked') {
+        // A blocked strategy verdict does not retroactively unmake a Run that
+        // already succeeded AND delivered. Observed across every runtime: the
+        // agent writes the canonical deliverable correctly, the daemon's own
+        // `validateRunDeliverable` resolves it, and then the turn is refused
+        // over a machine-block defect. Remapping that to `failed` hid the file
+        // the user asked for behind a generic error card and suppressed the
+        // next-step actions that reach it.
+        //
+        // The strategy contract is explicit that a post-claim failure keeps the
+        // current Run's own result rather than inventing a new one, so only a
+        // Run that did NOT succeed-and-deliver falls through to the failure
+        // branch. `deliverableValid` is filesystem-backed (entry resolved, this
+        // Run touched it, kind matches) — never the agent's own assertion — and
+        // an unreachable daemon fails closed to the previous behaviour.
+        const deliveredDespiteBlock = endStatus === 'succeeded'
+          && (await fetchChatRunStatus(runId, workspaceContext))?.deliverableValid === true;
+        if (!deliveredDespiteBlock) {
+          endStatus = 'failed';
+          pendingStructuredError ??= new Error('The strategy task could not continue.');
+        }
+      } else if (endStrategyTask.outcome === 'completed') {
+        endStatus = 'succeeded';
+        serverDeclaredSuccess = true;
+      }
+    }
+
+    onRunStatus?.(endStatus);
 
     if (endStatus === 'canceled') {
       handlers.onDone(acc);
@@ -1043,6 +1667,15 @@ async function consumeDaemonRun({
       (!serverDeclaredSuccess &&
         (exitSignal || (exitCode !== null && exitCode !== 0)));
     if (looksLikeFailure) {
+      if (pendingStructuredError) {
+        handlers.onError(
+          markErrorRunFailure(markErrorResumable(pendingStructuredError, endResumable), {
+            failureCategory: endFailureCategory,
+            failureDetail: endFailureDetail,
+          }),
+        );
+        return;
+      }
       if (shouldSuppressLifecycleExitFallback(agentId, exitCode, exitSignal, stderrBuf)) {
         handlers.onDone(acc);
         return;
@@ -1053,9 +1686,34 @@ async function consumeDaemonRun({
       const fallbackTail =
         tail || (isAmrOpenCodeExitFallback(agentId, stderrBuf) ? AMR_OPENCODE_INCOMPLETE_MESSAGE : '');
       handlers.onError(
-        new Error(`agent exited with ${exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`}${fallbackTail ? `\n${fallbackTail}` : ''}`),
+        markErrorRunFailure(
+          markErrorResumable(
+            new Error(`agent exited with ${exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`}${fallbackTail ? `\n${fallbackTail}` : ''}`),
+            endResumable,
+          ),
+          { failureCategory: endFailureCategory, failureDetail: endFailureDetail },
+        ),
       );
       return;
+    }
+    if (
+      publishRunFinishedEvent
+      && agentId === 'amr'
+      && Boolean(projectId?.trim())
+      && Boolean(conversationId?.trim())
+      && serverDeclaredSuccess
+      && endStatus === 'succeeded'
+      && resolvedArtifactCount !== undefined
+      && resolvedArtifactCount > 0
+    ) {
+      publishDaemonRunFinishedEvent({
+        agentId,
+        runId,
+        projectId: projectId!,
+        conversationId: conversationId!,
+        result: 'success',
+        artifactCount: resolvedArtifactCount,
+      });
     }
     handlers.onDone(acc);
   } finally {
@@ -1072,6 +1730,34 @@ function isChatRunStatus(value: unknown): value is ChatRunStatus {
   return value === 'queued' || value === 'running' || value === 'succeeded' || value === 'failed' || value === 'canceled';
 }
 
+/** Tag an error surfaced to the chat with whether the failed run can be
+ *  resumed (continued from its existing CLI session). Only stamps the property
+ *  when true so non-resumable failures stay undefined. */
+function markErrorResumable(err: Error, resumable: boolean): Error {
+  if (resumable) (err as Error & { resumable?: boolean }).resumable = true;
+  return err;
+}
+
+/** Stamp the daemon's failure classification onto a surfaced error so the chat
+ *  error card can map `failureDetail` to a specific named failure type + fix
+ *  (see resolveRunFailureUi). Only stamps present values so an older daemon that
+ *  omits the fields leaves the error's classification undefined. */
+function markErrorRunFailure(
+  err: Error,
+  fields: {
+    failureCategory?: ChatRunStatusResponse['failureCategory'];
+    failureDetail?: ChatRunStatusResponse['failureDetail'];
+  },
+): Error {
+  const target = err as Error & {
+    failureCategory?: ChatRunStatusResponse['failureCategory'];
+    failureDetail?: ChatRunStatusResponse['failureDetail'];
+  };
+  if (fields.failureCategory) target.failureCategory = fields.failureCategory;
+  if (fields.failureDetail) target.failureDetail = fields.failureDetail;
+  return err;
+}
+
 function normalizeToolInput(input: unknown): unknown {
   if (input == null || typeof input !== 'object') return input;
   const obj = input as Record<string, unknown>;
@@ -1079,6 +1765,17 @@ function normalizeToolInput(input: unknown): unknown {
     return { ...obj, file_path: obj.filePath };
   }
   return input;
+}
+
+const TRANSIENT_ACP_STATUS_LABELS = new Set([
+  'waiting_for_first_output',
+  'tool_call',
+  'tool_call_update',
+  'session_update',
+]);
+
+function normalizeAgentStatusLabel(label: string): string {
+  return TRANSIENT_ACP_STATUS_LABELS.has(label) ? 'running' : label;
 }
 
 // Translate a raw `agent` SSE payload (what apps/daemon/src/claude-stream.ts emits)
@@ -1089,7 +1786,7 @@ function translateAgentEvent(data: DaemonAgentPayload): AgentEvent | null {
   if (t === 'status' && typeof data.label === 'string') {
     return {
       kind: 'status',
-      label: data.label,
+      label: normalizeAgentStatusLabel(data.label),
       detail:
         typeof data.detail === 'string'
           ? data.detail
@@ -1102,6 +1799,9 @@ function translateAgentEvent(data: DaemonAgentPayload): AgentEvent | null {
   }
   if (t === 'text_delta' && typeof data.delta === 'string') {
     return { kind: 'text', text: data.delta };
+  }
+  if (t === 'conversation_title' && typeof data.title === 'string') {
+    return { kind: 'conversation_title', title: data.title };
   }
   if (t === 'thinking_delta' && typeof data.delta === 'string') {
     return { kind: 'thinking', text: data.delta };
@@ -1158,6 +1858,15 @@ function translateAgentEvent(data: DaemonAgentPayload): AgentEvent | null {
       label: 'warning',
       detail: `Model emitted fabricated role marker ("${data.marker}"). Response was truncated to prevent unauthorized instruction injection.`,
     };
+  }
+  if (t === 'tool_loop' && typeof data.toolName === 'string') {
+    const toolName = data.toolName;
+    const count = typeof data.count === 'number' ? data.count : 0;
+    const detail =
+      data.action === 'halt'
+        ? `Run stopped: the agent repeated a failing ${toolName} call ${count}× without progress. Re-check the actual target before retrying.`
+        : `Heads up — the agent has repeated a failing ${toolName} call ${count}× and may be stuck.`;
+    return { kind: 'status', label: 'warning', detail };
   }
   if (t === 'raw' && typeof data.line === 'string') {
     return { kind: 'raw', line: data.line };

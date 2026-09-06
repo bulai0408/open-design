@@ -48,12 +48,20 @@ describe('composeSystemPrompt — audio voice options', () => {
 
     expect(prompt).toContain('<question-form id="elevenlabs-voice" title="Choose an ElevenLabs voice">');
     expect(prompt).toContain('"type": "select"');
+    expect(prompt).toContain('"allowCustom": false');
     expect(prompt).toContain('"label": "Rachel — american · female"');
     expect(prompt).toContain('"value": "21m00Tcm4TlvDq8ikWAM"');
     expect(prompt).toContain('"label": "Voice 50 — mandarin"');
     expect(prompt).toContain('"value": "voice-50"');
     expect(prompt).not.toContain('showing the first 12');
     expect(prompt).toContain('selected value must be the exact `voice_id`');
+    expect(prompt).toContain('If the provider default can safely satisfy the brief');
+    expect(prompt).toContain(
+      'Only when voice selection would materially change the requested result',
+    );
+    expect(prompt).toContain(
+      'Conditional template — do not emit unless the voice-selection policy above requires clarification',
+    );
   });
 
   it('surfaces ElevenLabs voice lookup failures in the prompt', () => {

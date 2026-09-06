@@ -32,6 +32,7 @@ export interface ProjectFileStubGuardWarning {
 export interface ProjectFile {
   name: string;
   path?: string;
+  localPath?: string;
   type?: 'file' | 'dir';
   size: number;
   mtime: number;
@@ -40,6 +41,7 @@ export interface ProjectFile {
   artifactKind?: ArtifactKind;
   artifactManifest?: ArtifactManifest;
   stubGuardWarning?: ProjectFileStubGuardWarning;
+  traceObjectReason?: 'new' | 'modified' | 'recovered';
 }
 
 export interface ProjectFolder {
@@ -52,6 +54,92 @@ export interface ProjectFolder {
 
 export interface ProjectFilesResponse {
   files: ProjectFile[];
+}
+
+export type ProjectFileVersionSource = 'ai' | 'manual' | 'restore';
+export type ProjectFileVersionPromptSource = 'message' | 'project' | 'manual' | 'restore';
+
+export type ArtifactOriginEntrySurface =
+  | 'open_design_ui'
+  | 'od_cli'
+  | 'external_mcp'
+  | 'unknown';
+
+/**
+ * Bounded provenance for the content lineage of an HTML file version.
+ *
+ * This is deliberately distinct from `ProjectFileVersion.source`: `source`
+ * records how this checkpoint was created, while `origin` records where the
+ * content lineage began. Prompts, file paths, account data, and credentials
+ * must never be stored here.
+ */
+export interface ArtifactOrigin {
+  entrySurface: ArtifactOriginEntrySurface;
+  externalPluginId?: string;
+  pluginWorkflowId?: string;
+  runId?: string;
+}
+
+export type ArtifactOriginStatus =
+  | 'matched'
+  | 'missing_version'
+  | 'digest_mismatch'
+  | 'invalid_origin'
+  | 'unknown';
+
+export interface ProjectFileVersion {
+  id: string;
+  fileName: string;
+  version: number;
+  label: string;
+  createdAt: number;
+  source: ProjectFileVersionSource;
+  prompt: string | null;
+  promptSource?: ProjectFileVersionPromptSource;
+  restoreFromVersionId?: string;
+  size: number;
+  mime: string;
+  kind: ProjectFileKind;
+  current: boolean;
+  contentDigest?: string;
+  parentVersionId?: string;
+  origin?: ArtifactOrigin;
+}
+
+export interface ProjectFileVersionsResponse {
+  file: ProjectFile;
+  versions: ProjectFileVersion[];
+}
+
+export interface ProjectFileVersionResponse {
+  version: ProjectFileVersion;
+  content: string;
+}
+
+export interface CreateProjectFileVersionRequest {
+  prompt?: string | null;
+  label?: string | null;
+  source?: ProjectFileVersionSource;
+  parentVersionId?: string;
+}
+
+export interface CreateProjectFileVersionResponse {
+  version: ProjectFileVersion;
+}
+
+export interface RestoreProjectFileVersionRequest {
+  prompt?: string | null;
+}
+
+export interface ProjectFileVersionWarning {
+  code: 'PROJECT_FILE_VERSION_CAPTURE_FAILED';
+  message: string;
+}
+
+export interface RestoreProjectFileVersionResponse {
+  file: ProjectFile;
+  version: ProjectFileVersion | null;
+  versionWarning?: ProjectFileVersionWarning;
 }
 
 export interface ProjectFoldersResponse {
@@ -83,8 +171,10 @@ export interface ProjectExportManifestArtifact {
   updatedAt: string | null;
 }
 
+export const PROJECT_EXPORT_MANIFEST_SCHEMA = 'open-design.project-export-manifest.v1' as const;
+
 export interface ProjectExportManifestResponse {
-  schema: 'open-design.project-export-manifest.v1';
+  schema: typeof PROJECT_EXPORT_MANIFEST_SCHEMA;
   projectId: string;
   projectName: string | null;
   generatedAt: string;
@@ -99,10 +189,54 @@ export interface ProjectPreviewUrlResponse {
   csp: string;
   iframeSandbox: string;
   opaqueOrigin: true;
+  /** Unix epoch milliseconds when the bearer scope stops authorizing assets. */
+  expiresAt: number;
+}
+
+export interface ProjectPreviewScopeRenewResponse {
+  /** Unix epoch milliseconds after the authenticated host renewed the scope. */
+  expiresAt: number;
+}
+
+/**
+ * Runtime info the web host needs to render a "powered preview" — an HTML
+ * artifact that requires real Web Workers, Web Storage, WASM, or (via
+ * cross-origin isolation) SharedArrayBuffer, which the default opaque-origin
+ * preview sandbox cannot provide.
+ *
+ * `baseOrigin` is the daemon's own directly-reachable http origin. The web
+ * host loads the powered iframe from a host-swapped loopback variant of it.
+ * That reserved browser origin is cross-origin to the app shell and is allowed
+ * to read `/powered/` file bytes, but the daemon rejects its browser requests
+ * to normal `/api/*` routes. `null` when the daemon cannot resolve a usable
+ * origin (powered mode is then unavailable and previews stay on the opaque
+ * sandbox).
+ */
+export interface ProjectPreviewIsolationResponse {
+  supported: boolean;
+  baseOrigin: string | null;
+  /** URL path segment for the powered file route (`.../:id/<pathPrefix>/<file>`). */
+  pathPrefix: string;
 }
 
 export interface ProjectFileResponse {
   file: ProjectFile;
+  version?: ProjectFileVersion | null;
+  versionWarning?: ProjectFileVersionWarning;
+}
+
+export interface ProjectFileTextPreviewResponse {
+  text: string;
+  truncated: boolean;
+  size: number;
+  limit: number;
+  mime: string;
+  kind: ProjectFileKind;
+  poweredPreview: {
+    required: boolean;
+    scannedBytes: number;
+    complete: boolean;
+  };
 }
 
 export interface ProjectFolderResponse {
@@ -124,4 +258,45 @@ export interface RenameProjectFileResponse {
   file: ProjectFile;
   oldName: string;
   newName: string;
+}
+
+export function buildProjectRawFileUrl(
+  baseUrl: string,
+  projectId: string,
+  filePath: unknown,
+): string | null {
+  if (typeof filePath !== 'string' || filePath.length === 0) return null;
+  const segments = filePath
+    .split('/')
+    .filter((segment) => segment.length > 0)
+    .map(encodeURIComponent)
+    .join('/');
+  if (segments.length === 0) return null;
+
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, '');
+  return `${normalizedBaseUrl}/api/projects/${encodeURIComponent(projectId)}/raw/${segments}`;
+}
+
+/**
+ * Build an absolute powered-preview URL. Same shape as buildProjectRawFileUrl
+ * but targets the `/powered/` route (cross-origin-isolation headers) and is
+ * meant to be joined against the host-swapped preview origin derived from
+ * ProjectPreviewIsolationResponse — NOT a relative path — so the iframe runs
+ * at an origin isolated from the app shell and from normal daemon APIs.
+ */
+export function buildProjectPoweredFileUrl(
+  baseOrigin: string,
+  projectId: string,
+  filePath: unknown,
+): string | null {
+  if (typeof filePath !== 'string' || filePath.length === 0) return null;
+  const segments = filePath
+    .split('/')
+    .filter((segment) => segment.length > 0)
+    .map(encodeURIComponent)
+    .join('/');
+  if (segments.length === 0) return null;
+
+  const normalizedBaseUrl = baseOrigin.replace(/\/+$/, '');
+  return `${normalizedBaseUrl}/api/projects/${encodeURIComponent(projectId)}/powered/${segments}`;
 }

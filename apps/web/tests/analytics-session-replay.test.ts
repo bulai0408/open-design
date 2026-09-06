@@ -3,7 +3,7 @@
 // Regression test for "PostHog session replay is enabled but privacy-masked".
 //
 // Session replay was previously off (`disable_session_recording: true`)
-// because Open Design's DOM is full of sensitive content — prompts, generated
+// because OpenDesign's DOM is full of sensitive content — prompts, generated
 // artifacts, and BYOK provider keys. Turning replay on without masking would
 // violate the no-prompt-content rule.
 //
@@ -30,6 +30,8 @@ interface InitConfig {
 }
 
 let lastInitConfig: InitConfig | null = null;
+let lastRegisterPayload: Record<string, unknown> | null = null;
+let lastPersonProperties: Record<string, unknown> | null = null;
 
 vi.mock('posthog-js', () => {
   const stub = {
@@ -41,7 +43,12 @@ vi.mock('posthog-js', () => {
       loaded?.(stub);
       return stub;
     },
-    register: () => undefined,
+    register: (payload: Record<string, unknown>) => {
+      lastRegisterPayload = payload;
+    },
+    setPersonProperties: (payload: Record<string, unknown>) => {
+      lastPersonProperties = payload;
+    },
     opt_in_capturing: () => undefined,
     opt_out_capturing: () => undefined,
     reset: () => undefined,
@@ -55,6 +62,8 @@ describe('PostHog session replay configuration', () => {
 
   beforeEach(() => {
     lastInitConfig = null;
+    lastRegisterPayload = null;
+    lastPersonProperties = null;
     vi.resetModules();
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url =
@@ -67,6 +76,7 @@ describe('PostHog session replay configuration', () => {
         return new Response(
           JSON.stringify({
             enabled: true,
+            env: 'local_development',
             key: 'phc_test_key',
             host: 'https://us.i.posthog.com',
             installationId: 'install-123',
@@ -116,5 +126,33 @@ describe('PostHog session replay configuration', () => {
     const config = await initClient();
     expect(config?.session_recording?.blockSelector).toBe('iframe');
     expect(config?.session_recording?.recordCrossOriginIframes).toBe(false);
+  });
+
+  it('registers the daemon-provided telemetry environment', async () => {
+    await initClient();
+    expect(lastRegisterPayload).toMatchObject({
+      env: 'local_development',
+    });
+  });
+
+  it('flushes person properties staged before PostHog init finishes', async () => {
+    const { getAnalyticsClient, setAnalyticsPersonProperties } = await import('../src/analytics/client');
+    setAnalyticsPersonProperties({
+      od_app_user_id: 'usr_amr_42',
+      od_source_resolved: 'social',
+    });
+
+    await getAnalyticsClient({
+      anonymousId: 'anon-1',
+      sessionId: 'sess-1',
+      clientType: 'web',
+      locale: 'en',
+      appVersion: '1.2.3',
+    });
+
+    expect(lastPersonProperties).toEqual({
+      od_app_user_id: 'usr_amr_42',
+      od_source_resolved: 'social',
+    });
   });
 });

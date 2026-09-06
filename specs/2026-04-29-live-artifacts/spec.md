@@ -5,13 +5,13 @@
 **Siblings:** [`docs/skills-protocol.md`](../../docs/skills-protocol.md) · [`docs/agent-adapters.md`](../../docs/agent-adapters.md) · [`docs/modes.md`](../../docs/modes.md)  
 **Reference implementation:** `~/Projects/monet` connectors + live artifacts
 
-This spec defines how to bring Monet's **connectors** and **live artifacts** ideas into Open Design, but implement the agent-facing surface as **file-based agent skills plus daemon-owned local tools**, not as an in-process tool registry or MCP-first integration.
+This spec defines how to bring Monet's **connectors** and **live artifacts** ideas into OpenDesign, but implement the agent-facing surface as **file-based agent skills plus daemon-owned local tools**, not as an in-process tool registry or MCP-first integration.
 
 ---
 
 ## 1. Product goal
 
-Open Design should let an agent create previewable artifacts that are not just one-off generated files, but **live, refreshable, auditable views** backed by external or local data sources.
+OpenDesign should let an agent create previewable artifacts that are not just one-off generated files, but **live, refreshable, auditable views** backed by external or local data sources.
 
 Examples:
 
@@ -167,7 +167,7 @@ skills/live-artifact/
 ---
 name: live-artifact
 description: |
-  Create refreshable, auditable Open Design artifacts backed by connector or local data.
+  Create refreshable, auditable OpenDesign artifacts backed by connector or local data.
   Trigger when the user asks for live dashboards, refreshable reports, synced views, or reusable data-backed artifacts.
 triggers:
   - live artifact
@@ -356,13 +356,13 @@ Add live-artifact and connector-specific `ApiErrorCode` values such as `TOOL_TOK
 
 ### 7.1 Storage layout
 
-Use project-scoped files under the daemon runtime data directory first. `OD_DATA_DIR` may override the default; otherwise `<RUNTIME_DATA_DIR>` is `<repo>/.od`:
+Use project-scoped files under daemon-managed storage. This historical spec
+MUST NOT define daemon data paths; read root [`AGENTS.md`](../../AGENTS.md) →
+**Daemon data directory contract** before documenting storage.
 
 ```text
-<RUNTIME_DATA_DIR>/projects/<projectId>/
-└── .live-artifacts/
-    └── <artifactId>/
-        ├── artifact.json
+project artifact storage
+└── live artifact metadata and payloads
         ├── template.html
         ├── index.html
         ├── data.json
@@ -638,9 +638,9 @@ Connector policy must be enforced at execution and refresh time, not only when t
 
 Default decision:
 
-- OAuth connection state and credentials live outside project artifacts, under a daemon-controlled global store such as `~/.open-design/connectors/` or an app database.
+- OAuth connection state and credentials live outside project artifacts, under daemon-controlled storage or an app database. This spec MUST NOT define daemon data paths.
 - Project artifacts only store stable references: `connectorId`, `accountLabel`, provider tool id/name, minimized input, and provenance.
-- Access tokens, refresh tokens, headers, cookies, OAuth state, and raw provider responses are never written under `<RUNTIME_DATA_DIR>/projects/<projectId>/.live-artifacts` or any other project artifact directory.
+- Access tokens, refresh tokens, headers, cookies, OAuth state, and raw provider responses are never written under project artifact storage.
 - Refresh resolves credentials through the daemon connector service at execution time.
 - UI must show the connector/account label so users understand which global connection backs a project artifact.
 

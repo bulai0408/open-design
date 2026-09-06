@@ -49,13 +49,13 @@ describe('buildPluginFolderAgentActionPrompt', () => {
         /Do NOT (call|route through) `?od plugin publish --to open-design`?/i,
       );
       expect(prompt).toMatch(
-        /registry[- ]submission|registry-submission flow|Open Design PR/i,
+        /registry[- ]submission|registry-submission flow|OpenDesign PR/i,
       );
     });
 
-    it('hard-bans AskUserQuestion + auto-install + force-push + retry', () => {
-      expect(prompt).toContain('AskUserQuestion');
-      expect(prompt).toMatch(/fire-and-forget|do not call the `AskUserQuestion`/i);
+    it('hard-bans mid-turn clarification + auto-install + force-push + retry', () => {
+      expect(prompt).toContain('<question-form>');
+      expect(prompt).toMatch(/fire-and-forget|clarification UI that waits/i);
       expect(prompt).toMatch(/do not try to install/i);
       expect(prompt).toMatch(/do not force-push|--force/i);
       expect(prompt).toMatch(/do not retry/i);
@@ -76,7 +76,7 @@ describe('buildPluginFolderAgentActionPrompt', () => {
   describe('contribute (PR-based flow)', () => {
     const prompt = buildPluginFolderAgentActionPrompt(FOLDER, 'contribute');
 
-    it('delegates Open Design PR creation to the deterministic plugin CLI helper', () => {
+    it('delegates OpenDesign PR creation to the deterministic plugin CLI helper', () => {
       expect(prompt).toContain('nexu-io/open-design');
       expect(prompt).toContain(`"$OD_NODE_BIN" "$OD_BIN" plugin open-design-pr ${FOLDER}`);
     });
@@ -100,12 +100,12 @@ describe('buildPluginFolderAgentActionPrompt', () => {
       expect(prompt).toMatch(/do not auto-submit/i);
     });
 
-    it('hard-bans AskUserQuestion to avoid 600s mid-turn stalls', () => {
+    it('hard-bans mid-turn clarification forms to avoid 600s stalls', () => {
       // Regression guard for the stall we observed during e2e: agent paused
-      // mid-turn on an AskUserQuestion tool waiting for a host answer the
-      // user never sent (they clicked the plugin-folder card instead).
-      expect(prompt).toContain('AskUserQuestion');
-      expect(prompt).toMatch(/do not call the `AskUserQuestion` tool|fire-and-forget/i);
+      // mid-turn on a clarification waiting for a host answer the user never
+      // sent (they clicked the plugin-folder card instead).
+      expect(prompt).toContain('<question-form>');
+      expect(prompt).toMatch(/clarification UI that waits|fire-and-forget/i);
     });
 
     it('forbids the agent from installing tools or retrying failures', () => {

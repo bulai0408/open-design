@@ -2,9 +2,9 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { ToolPackConfig } from "../src/config.js";
-import { resolveMacInstallIdentity } from "../src/mac/identity.js";
-import { resolveMacPaths } from "../src/mac/paths.js";
+import type { ToolPackConfig } from "@/config/index.js";
+import { resolveMacInstallIdentity } from "@/mac/identity.js";
+import { resolveMacPaths } from "@/mac/paths.js";
 
 function makeConfig(root: string, namespace: string): ToolPackConfig {
   return {
@@ -82,25 +82,25 @@ describe("resolveMacInstallIdentity", () => {
     expect(resolveMacPaths(config).appPath).toMatch(/Open Design Preview\.app$/);
   });
 
-  it("uses first-class nightly app identity for nightly release versions and namespaces", () => {
-    const nightlyVersionConfig = {
+  it("uses first-class prerelease app identity for prerelease release versions and namespaces", () => {
+    const prereleaseVersionConfig = {
       ...makeConfig("/work", "release-stable"),
-      appVersion: "0.8.0.nightly.2",
+      appVersion: "0.8.0-prerelease.2",
     };
-    const nightlyNamespaceConfig = makeConfig("/work", "release-nightly");
+    const prereleaseNamespaceConfig = makeConfig("/work", "release-prerelease");
 
-    expect(resolveMacInstallIdentity(nightlyVersionConfig)).toEqual({
-      appId: "io.open-design.desktop.nightly",
-      executableName: "Open Design Nightly",
-      installerTitle: "Open Design Nightly",
-      productName: "Open Design Nightly",
-      publicAppBundleName: "Open Design Nightly.app",
-      systemAppBundleName: "Open Design Nightly.app",
+    expect(resolveMacInstallIdentity(prereleaseVersionConfig)).toEqual({
+      appId: "io.open-design.desktop.prerelease",
+      executableName: "Open Design Prerelease",
+      installerTitle: "Open Design Prerelease",
+      productName: "Open Design Prerelease",
+      publicAppBundleName: "Open Design Prerelease.app",
+      systemAppBundleName: "Open Design Prerelease.app",
     });
-    expect(resolveMacPaths(nightlyVersionConfig).appPath).toMatch(/Open Design Nightly\.app$/);
-    expect(resolveMacInstallIdentity(nightlyNamespaceConfig)).toMatchObject({
-      productName: "Open Design Nightly",
-      publicAppBundleName: "Open Design Nightly.app",
+    expect(resolveMacPaths(prereleaseVersionConfig).appPath).toMatch(/Open Design Prerelease\.app$/);
+    expect(resolveMacInstallIdentity(prereleaseNamespaceConfig)).toMatchObject({
+      productName: "Open Design Prerelease",
+      publicAppBundleName: "Open Design Prerelease.app",
     });
   });
 });

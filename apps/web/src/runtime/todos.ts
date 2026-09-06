@@ -1,3 +1,4 @@
+import { todoStatusIsUnfinished } from '@open-design/contracts';
 import type { AgentEvent } from '../types';
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'stopped';
@@ -25,7 +26,13 @@ export function parseTodoWriteInput(input: unknown): TodoItem[] {
           ? record.content
           : typeof record.step === 'string'
             ? record.step
-            : '';
+            : typeof record.description === 'string'
+              ? record.description
+              : typeof record.label === 'string'
+                ? record.label
+                : typeof record.text === 'string'
+                  ? record.text
+                  : '';
       if (!content) return null;
       const status = normalizeTodoStatus(record.status);
       return {
@@ -63,7 +70,29 @@ export function latestTodosFromEvents(events: AgentEvent[] | undefined): TodoIte
 }
 
 export function unfinishedTodosFromEvents(events: AgentEvent[] | undefined): TodoItem[] {
-  return latestTodosFromEvents(events).filter((todo) => todo.status !== 'completed');
+  // Uses the SAME canonical predicate the daemon stamps `endedWithUnfinishedWork`
+  // with (todoStatusIsUnfinished), so this footer and the Pet task center / project
+  // pill can never disagree about whether a run's work is finished (#1247 / #1060).
+  return latestTodosFromEvents(events).filter((todo) => todoStatusIsUnfinished(todo.status));
+}
+
+/**
+ * Unfinished todos the user can still usefully be offered to continue.
+ *
+ * A stale TodoWrite snapshot is not sufficient grounds for the offer. When the
+ * turn belongs to a strategy task that already settled `completed` — a verdict
+ * the daemon only reaches after verifying the canonical deliverable on disk —
+ * the declared work IS done, and "continue" would open a fresh task with
+ * nothing left to write, which can only end blocked on `no_artifact`.
+ *
+ * Mirrors the daemon's `endedWithUnfinishedWork` derivation, where the same
+ * verdict outranks the same snapshot.
+ */
+export function continuableUnfinishedTodos(
+  message: { events?: AgentEvent[]; strategyTaskDelivered?: boolean } | undefined,
+): TodoItem[] {
+  if (!message || message.strategyTaskDelivered) return [];
+  return unfinishedTodosFromEvents(message.events);
 }
 
 // Walk the conversation in reverse to find the most recent TodoWrite

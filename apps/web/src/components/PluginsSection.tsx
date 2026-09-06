@@ -38,11 +38,14 @@ import type {
 import {
   applyPlugin,
   renderPluginBriefTemplate,
+  resolvedWorkspaceContextForWrite,
 } from '../state/projects';
+import { useProjectCollabContext } from '../collab/collab-context';
+import { useWorkspaceContext } from '../collab/useWorkspaceContext';
 import { useI18n } from '../i18n';
 import { ContextChipStrip } from './ContextChipStrip';
 import { InlinePluginsRail } from './InlinePluginsRail';
-import { PluginInputsForm } from './PluginInputsForm';
+import { localizePluginTitle } from './plugins-home/localization';
 
 interface Props {
   // Active project the apply will be scoped to. Omit on Home.
@@ -72,6 +75,12 @@ interface Props {
   // Forwarded to ContextChipStrip so chips can open the plugin details
   // modal when the user clicks one (kind === 'plugin').
   onChipDetails?: (item: ContextItem) => void;
+  // When false, the applied-plugin chip is NOT rendered here — the host
+  // (ChatComposer) renders it inside the shared staged-context row instead,
+  // so the plugin chip sits inline with the design-system picker and file
+  // chips rather than on its own line. The section still manages apply state
+  // and exposes the imperative handle.
+  renderActiveChip?: boolean;
 }
 
 export interface PluginsSectionHandle {
@@ -93,40 +102,53 @@ export interface PluginsSectionHandle {
 export const PluginsSection = forwardRef<PluginsSectionHandle, Props>(
   function PluginsSection(props, ref) {
     const { locale } = useI18n();
+    const shellWorkspace = useWorkspaceContext();
+    const projectCollab = useProjectCollabContext();
     const [applied, setApplied] = useState<ApplyResult | null>(null);
     const [activeRecord, setActiveRecord] = useState<InstalledPluginRecord | null>(null);
-    const [pluginInputs, setPluginInputs] = useState<Record<string, unknown>>({});
+
+    const workspaceContextForAction = useCallback(() => {
+      if (props.projectId) {
+        if (projectCollab.workspaceContextLoading) {
+          throw new Error(
+            'Workspace context is unavailable. Try again when workspace sync finishes.',
+          );
+        }
+        return projectCollab.workspaceContext;
+      }
+      if (shellWorkspace.identityChangePending) {
+        throw new Error(
+          'Workspace context is unavailable. Try again when workspace sync finishes.',
+        );
+      }
+      return resolvedWorkspaceContextForWrite(shellWorkspace);
+    }, [
+      props.projectId,
+      projectCollab.workspaceContext,
+      projectCollab.workspaceContextLoading,
+      shellWorkspace,
+    ]);
 
     const handleApplied = useCallback(
       (record: InstalledPluginRecord | null, result: ApplyResult) => {
         setActiveRecord(record);
         setApplied(result);
+        // Seed inputs from their schema defaults. The inputs form is no longer
+        // rendered in the composer, so these defaults are the values that ride
+        // the brief — users no longer edit them inline.
         const initialInputs: Record<string, unknown> = {};
         for (const field of result.inputs ?? []) {
           if (field.default !== undefined) initialInputs[field.name] = field.default;
         }
-        setPluginInputs(initialInputs);
         const brief = renderPluginBriefTemplate(result.query ?? '', initialInputs);
         props.onApplied?.(brief, result);
       },
       [props],
     );
 
-    const onInputsChange = useCallback(
-      (next: Record<string, unknown>) => {
-        setPluginInputs(next);
-        if (applied) {
-          const brief = renderPluginBriefTemplate(applied.query ?? '', next);
-          props.onApplied?.(brief, applied);
-        }
-      },
-      [applied, props],
-    );
-
     const clear = useCallback(() => {
       setApplied(null);
       setActiveRecord(null);
-      setPluginInputs({});
       props.onCleared?.();
     }, [props]);
 
@@ -141,9 +163,16 @@ export const PluginsSection = forwardRef<PluginsSectionHandle, Props>(
       ref,
       () => ({
         applyById: async (pluginId, record = null) => {
+          let workspaceContext;
+          try {
+            workspaceContext = workspaceContextForAction();
+          } catch {
+            return null;
+          }
           const result = await applyPlugin(pluginId, {
             ...(props.projectId ? { projectId: props.projectId } : {}),
             locale,
+            workspaceContext,
           });
           if (!result) return null;
           handleApplied(record, result);
@@ -152,10 +181,18 @@ export const PluginsSection = forwardRef<PluginsSectionHandle, Props>(
         clear,
         getActiveRecord: () => activeRecord,
       }),
-      [props.projectId, locale, handleApplied, clear, activeRecord],
+      [
+        props.projectId,
+        locale,
+        workspaceContextForAction,
+        handleApplied,
+        clear,
+        activeRecord,
+      ],
     );
 
     const showRail = props.showRail ?? true;
+    const renderActiveChip = props.renderActiveChip ?? true;
 
     // Surface the applied plugin as a SINGLE context chip — like a file
     // context — never the per-category (design-system / asset / skill)
@@ -171,7 +208,7 @@ export const PluginsSection = forwardRef<PluginsSectionHandle, Props>(
           {
             kind: 'plugin',
             id: recordId,
-            label: activeRecord?.title ?? recordId,
+            label: activeRecord ? localizePluginTitle(locale, activeRecord) : recordId,
           },
         ];
       }
@@ -183,23 +220,29 @@ export const PluginsSection = forwardRef<PluginsSectionHandle, Props>(
       return self ? [self] : [];
     })();
 
+    // Host renders the chip elsewhere AND there's no rail to show: this mount
+    // is a pure state/handle container, so render nothing (keeps it out of the
+    // composer's flex column gap).
+    if (!renderActiveChip && !showRail) return null;
+
     return (
       <div className="plugins-section" data-testid="plugins-section">
-        {applied ? (
+        {renderActiveChip && applied ? (
           <div className="plugins-section__active" data-active-plugin-id={activeRecord?.id}>
             <ContextChipStrip
               items={chipItems}
               onRemove={onChipRemove}
               {...(props.onChipDetails ? { onSelect: props.onChipDetails } : {})}
             />
-            {applied.inputs && applied.inputs.length > 0 ? (
-              <PluginInputsForm
-                fields={applied.inputs}
-                values={pluginInputs}
-                onChange={onInputsChange}
-                onValidityChange={props.onValidityChange ?? (() => undefined)}
-              />
-            ) : null}
+            {/*
+              The per-plugin inputs form (e.g. MODEL / ASPECT RATIO selects)
+              is intentionally NOT rendered inside the composer: it cluttered
+              the input area with a model-picker-looking panel on every applied
+              plugin. Inputs fall back to their schema `default` values (seeded
+              in handleApplied), so the brief still renders fully. When a plugin
+              genuinely needs a user decision, that should surface as an
+              question-form card in the chat stream, not as composer chrome.
+            */}
           </div>
         ) : null}
         {showRail ? (

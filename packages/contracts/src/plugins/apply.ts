@@ -12,6 +12,7 @@ import {
   type PluginConnectorRef,
   type PluginPipeline,
 } from './manifest.js';
+import { AppliedStrategyBindingV2Schema } from './strategy-v2.js';
 
 // Apply-time refs to staged assets. `stageAt` defaults to `'run-start'` to
 // keep `POST /api/projects` from accidentally turning into a staging endpoint
@@ -54,6 +55,7 @@ export const AppliedPluginSnapshotSchema = z.object({
   pinnedRef:            z.string().optional(),
   inputs:               z.record(z.union([z.string(), z.number(), z.boolean()])),
   resolvedContext:      ResolvedContextSchema,
+  craftRequires:        z.array(z.string()).optional(),
   capabilitiesGranted:  z.array(z.string()),
   capabilitiesRequired: z.array(z.string()),
   assetsStaged:         z.array(PluginAssetRefSchema),
@@ -71,6 +73,9 @@ export const AppliedPluginSnapshotSchema = z.object({
   pluginTitle:          z.string().optional(),
   pluginDescription:    z.string().optional(),
   query:                z.string().optional(),
+  // Internal, nullable strategy content identity. Legacy and ordinary plugin
+  // snapshots omit this field; daemon persistence stores SQL NULL.
+  strategy:             AppliedStrategyBindingV2Schema.nullable().optional(),
   // Apply-pipeline status — flips to 'stale' when `od plugin doctor` detects
   // a digest drift after an upgrade. Snapshots are never rewritten in place.
   status: z.enum(['fresh', 'stale']).default('fresh'),

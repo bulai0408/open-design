@@ -1,10 +1,10 @@
-# Open Design Plugin Registry — Plan (living)
+# OpenDesign Plugin Registry — Plan (living)
 
 > **One sentence:** Turn the existing `open-design-marketplace.json` federation
 > into a real npm-/clawhub-/skills.sh-style **registry**: GitHub repo as the v1
 > storage backend, `od` CLI as the canonical client, official site as one
 > rendered consumer, and the whole thing pluggable so a third party can stand
-> up their own Open Design plugin source with one config line.
+> up their own OpenDesign plugin source with one config line.
 
 Source spec: [`docs/plugins-spec.md`](../plugins-spec.md) · zh-CN
 [`docs/plugins-spec.zh-CN.md`](../plugins-spec.zh-CN.md).
@@ -124,7 +124,7 @@ Packaged official plugins
 
 Default community registry
   community source -> Available by default -> user installs intentionally
-  -> ~/.open-design/plugins/<plugin-id> -> Installed -> agent
+  -> installed plugin record -> Installed -> agent
 ```
 
 `Available` is not directly consumable by the agent. It is a supply pool. The
@@ -133,12 +133,13 @@ plugins, direct GitHub/URL/local installs, and marketplace-installed plugins. A
 future "Use from Available" convenience action may auto-install first, but it
 must still create an installed record before execution.
 
-User-created and user-installed plugins are persisted under the user plugin
-root (`~/.open-design/plugins/<plugin-id>` by default). Daemon startup reloads
-installed records from SQLite and resolves those user-state plugin folders; a
-packaged runtime upgrade should not overwrite them. Bundled official plugins
-stay inside the runtime image and are re-registered on boot as official-source
-preinstalls.
+User-created and user-installed plugins are persisted through daemon-managed
+storage. This plan MUST NOT define daemon data paths; read the root
+`AGENTS.md` section **Daemon data directory contract** before changing or
+documenting plugin storage. Daemon startup reloads installed records from
+SQLite and resolves those user-state plugin folders; a packaged runtime upgrade
+should not overwrite them. Bundled official plugins stay inside the runtime
+image and are re-registered on boot as official-source preinstalls.
 
 Authoring and publishing mirror the consumption loop:
 
@@ -162,7 +163,7 @@ agent is the product wrapper around the CLI workflow.
 v1 registry scope is intentionally simple: a GitHub repo with reviewable source
 entries plus a generated `open-design-marketplace.json`. The JSON is what
 daemon/CLI/UI fetch; the source entries are what humans review in PRs. This can
-start in the main Open Design repo, but the code path must still be expressed as
+start in the main OpenDesign repo, but the code path must still be expressed as
 `RegistryBackend` so moving to `open-design/plugin-registry` or a database later
 does not change the product model.
 
@@ -289,10 +290,10 @@ the archive remains reachable and integrity matches.
 od plugin install <name>[@<range>]
   → daemon iterates configured backends in trust order
   → first match: download tarball, verify SHA-256, extract to
-    .od/plugins/<name>/<version>/, write InstalledPluginRecord with
+    daemon-managed plugin storage, write InstalledPluginRecord with
     full provenance (sourceMarketplaceId, marketplaceTrust, source URL,
     sourceDigest, resolved ref)
-  → record into .od/od-plugin-lock.json for reproducibility
+  → record the lockfile through daemon-managed storage for reproducibility
 ```
 
 `od plugin upgrade [--policy latest|pinned]` re-resolves against lockfile and
@@ -304,7 +305,7 @@ swap symlink, rollback on failure).
 - `gh` is a first-class dependency of `od` registry workflows. Installing
   `od` should ensure `gh` is present when the platform channel can bootstrap
   it; otherwise the installer fails with exact remediation.
-- `od plugin login` wraps `gh auth login` with Open Design copy, scopes, and
+- `od plugin login` wraps `gh auth login` with OpenDesign copy, scopes, and
   host guidance. `od plugin whoami` wraps `gh auth status` plus `gh api user`.
 - `od plugin logout` may wrap `gh auth logout`, but only after explicit
   confirmation because it affects the user's global GitHub CLI session.
@@ -394,7 +395,7 @@ This repo now has the first registry closure in place:
 - Home now presents official plugins as `Official starters` with a
   `Browse registry` path into `/plugins`; `/plugins` remains the registry
   console (`Installed / Available / Sources / Team`).
-- `apps/landing-page` now exposes the public SEO renderer at `/plugins/` plus
+- The extracted marketing-site repository now exposes the public SEO renderer at `/plugins/` plus
   static per-plugin detail pages. It reads `plugins/registry/official`,
   `plugins/registry/community`, and bundled official manifests at build time,
   so open-design.ai can show the ecosystem without calling daemon APIs.
@@ -463,7 +464,7 @@ first, headless, JSON-emitting.
   PR payloads; `od plugin publish --to marketplace-json --catalog <path>`
   covers self-hosted static catalogs. The release-upload/fork/branch executor
   remains an adapter on top of the tested mutation contract.
-- [x] **P1.4 Lockfile.** `.od/od-plugin-lock.json` records resolved
+- [x] **P1.4 Lockfile.** The daemon-managed plugin lockfile records resolved
   `name@version` + integrity + `sourceMarketplaceId`. `od plugin install`
   honors lock on second run; `od plugin upgrade` rewrites it.
 - [x] **P1.5 Private GitHub catalog auth.** `od marketplace login <id>`
@@ -516,7 +517,7 @@ first, headless, JSON-emitting.
   the bundled plugins currently shipped in `plugins/_official/`. The local repo
   now carries the source shape and generated registry inputs; creating the
   external GitHub repo is an operational launch step, not a code blocker.
-- [x] **P3.2 Static site renderer.** `apps/landing-page` now
+- [x] **P3.2 Static site renderer.** The extracted marketing-site repository now
   statically generates `open-design.ai/plugins` and per-plugin detail routes
   from `plugins/registry/*/open-design-marketplace.json` plus bundled official
   manifests, with SEO metadata, search JSON, and `od://` detail links.

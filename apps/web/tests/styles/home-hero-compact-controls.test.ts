@@ -9,8 +9,9 @@ const homeHeroCss = readFileSync(
 function cssDeclarations(selector: string): string {
   const blocks: string[] = [];
   const rulePattern = /([^{}]+)\{([^}]*)\}/g;
+  const cssWithoutComments = homeHeroCss.replace(/\/\*[\s\S]*?\*\//g, '');
   let match: RegExpExecArray | null;
-  while ((match = rulePattern.exec(homeHeroCss)) !== null) {
+  while ((match = rulePattern.exec(cssWithoutComments)) !== null) {
     const selectors = (match[1] ?? '').split(',').map((item) => item.trim());
     if (selectors.includes(selector)) blocks.push(match[2] ?? '');
   }
@@ -18,38 +19,62 @@ function cssDeclarations(selector: string): string {
   return blocks.join('\n');
 }
 
-function ruleValue(block: string, property: string): string {
+function ruleValues(block: string, property: string): string[] {
   const matches = [...block.matchAll(new RegExp(`(?:^|[;\\n])\\s*${property}:\\s*([^;]+);`, 'g'))];
-  const match = matches.at(-1);
-  if (!match) throw new Error(`Missing CSS property ${property}`);
-  return match[1]!.trim();
+  if (matches.length === 0) throw new Error(`Missing CSS property ${property}`);
+  return matches.map((match) => match[1]!.trim());
+}
+
+function ruleValue(block: string, property: string): string {
+  return ruleValues(block, property).at(-1)!;
 }
 
 describe('HomeHero compact composer controls', () => {
-  it('keeps the session mode and execution buttons compact in the hero', () => {
-    const modeTrigger = cssDeclarations(
-      '.home-hero__foot-right .session-mode-toggle__trigger',
+  it('keeps the floating @ picker shell stable while result tabs change', () => {
+    const floatingPicker = cssDeclarations(
+      '.caret-floating-layer .home-hero__plugin-picker--floating',
     );
-    const switcherChip = cssDeclarations(
-      '.home-hero__execution-switcher .inline-switcher__chip',
-    );
+    const picker = cssDeclarations('.home-hero__plugin-picker');
+    const results = cssDeclarations('.home-hero__plugin-picker-results');
 
-    // The footer buttons were unified to a single 32px pill height; the
-    // session-mode trigger matches the other footer controls.
-    expect(ruleValue(modeTrigger, 'height')).toBe('32px');
-    expect(ruleValue(modeTrigger, 'max-width')).toBe('120px');
-    expect(ruleValue(switcherChip, 'height')).toBe('30px');
-    expect(ruleValue(switcherChip, 'max-width')).toBe('48px');
+    expect(ruleValue(floatingPicker, 'height')).toBe('var(--cfl-max-h, 60vh)');
+    expect(ruleValue(floatingPicker, 'max-height')).toBe('var(--cfl-max-h, 60vh)');
+    expect(ruleValue(picker, 'overflow')).toBe('hidden');
+    expect(ruleValue(results, 'flex')).toBe('1 1 auto');
+    expect(ruleValue(results, 'overflow-y')).toBe('auto');
   });
 
-  it('prevents the compact execution switcher from expanding on narrow screens', () => {
-    const switcher = cssDeclarations('.home-hero__execution-switcher');
+  it('sizes the execution chip to the status dot + model name (#5517 round 4)', () => {
     const switcherChip = cssDeclarations(
       '.home-hero__execution-switcher .inline-switcher__chip',
     );
+
+    // Round 4 widened the old 36px icon square into a pill that carries a
+    // connection dot + the selected model name, capped so a long model id
+    // ellipsizes instead of stretching the composer foot.
+    // The 220px name-pill cap holds at every width now: the ≤900px block no
+    // longer collapses the chip back to a 36px icon square (#7635).
+    expect(ruleValue(switcherChip, 'height')).toBe('36px');
+    expect(ruleValues(switcherChip, 'max-width')[0]).toBe('220px');
+    expect(ruleValues(switcherChip, 'max-width').at(-1)).toBe('220px');
+  });
+
+  it('keeps the switcher from expanding beyond its content on narrow screens', () => {
+    const switcher = cssDeclarations('.home-hero__execution-switcher');
 
     expect(ruleValue(switcher, 'flex-basis')).toBe('auto');
-    expect(ruleValue(switcherChip, 'width')).toBe('auto');
-    expect(ruleValue(switcherChip, 'max-width')).toBe('48px');
   });
+
+  it('reveals the creation-type clear icon from the whole pill hover target', () => {
+    const hideTypeIcon = cssDeclarations(
+      '.home-hero__template-option:hover .home-hero__template-icon--clearable .home-hero__template-icon-glyph',
+    );
+    const revealClearIcon = cssDeclarations(
+      '.home-hero__template-option:hover .home-hero__template-icon--clearable .home-hero__template-icon-clear',
+    );
+
+    expect(ruleValue(hideTypeIcon, 'opacity')).toBe('0');
+    expect(ruleValue(revealClearIcon, 'opacity')).toBe('1');
+  });
+
 });

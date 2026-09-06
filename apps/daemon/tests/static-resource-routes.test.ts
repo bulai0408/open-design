@@ -7,7 +7,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import type { DesignSystemTokenContractRebuildJobResponse } from '@open-design/contracts';
 
 import { isLocalSameOrigin } from '../src/origin-validation.js';
-import { listDesignSystems } from '../src/design-systems.js';
+import { listDesignSystems } from '../src/design-systems/index.js';
+import { closeDatabase, openDatabase } from '../src/db.js';
 import { registerStaticResourceRoutes } from '../src/routes/static-resource.js';
 
 describe('static resource mutation routes', () => {
@@ -23,6 +24,10 @@ describe('static resource mutation routes', () => {
         const app = express();
         app.use(express.json({ limit: '4mb' }));
         registerStaticResourceRoutes(app, {
+          // Never reached by any subtest in this file — every request either
+          // 403s on the cross-origin guard or hits a design-system-only route
+          // before touching the skill workspace-mutation gate that reads it.
+          db: {} as any,
           http: {
             createSseResponse: () => undefined,
             isLocalSameOrigin,
@@ -40,9 +45,12 @@ describe('static resource mutation routes', () => {
           },
           paths: {
             ARTIFACTS_DIR: path.join(tempRoot, 'artifacts'),
+            BRANDS_DIR: path.join(tempRoot, 'brands'),
             BUNDLED_PETS_DIR: path.join(tempRoot, 'pets'),
+            CRAFT_DIR: path.join(tempRoot, 'craft'),
             DESIGN_SYSTEMS_DIR: path.join(tempRoot, 'design-systems'),
             DESIGN_TEMPLATES_DIR: path.join(tempRoot, 'design-templates'),
+            LIBRARY_DIR: path.join(tempRoot, 'library'),
             OD_BIN: path.join(tempRoot, 'od'),
             PROJECT_ROOT: tempRoot,
             PROJECTS_DIR: path.join(tempRoot, 'projects'),
@@ -155,6 +163,7 @@ describe('static resource mutation routes', () => {
 
 describe('design system import catalog lookup', () => {
   let server: http.Server;
+  let db: ReturnType<typeof openDatabase>;
   let baseUrl: string;
   let tempRoot: string;
   let sourceRoot: string;
@@ -169,6 +178,7 @@ describe('design system import catalog lookup', () => {
         tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'od-static-import-'));
         sourceRoot = path.join(tempRoot, 'source-app');
         userDesignSystemsDir = path.join(tempRoot, 'user-design-systems');
+        db = openDatabase(path.join(tempRoot, 'projects'), { dataDir: path.join(tempRoot, 'data') });
         fs.mkdirSync(path.join(sourceRoot, 'src', 'styles'), { recursive: true });
         fs.writeFileSync(
           path.join(sourceRoot, 'package.json'),
@@ -186,6 +196,10 @@ describe('design system import catalog lookup', () => {
         const app = express();
         app.use(express.json({ limit: '4mb' }));
         registerStaticResourceRoutes(app, {
+          // Never reached by any subtest in this file — every request either
+          // 403s on the cross-origin guard or hits a design-system-only route
+          // before touching the skill workspace-mutation gate that reads it.
+          db,
           http: {
             createSseResponse: () => undefined,
             isLocalSameOrigin,
@@ -203,9 +217,12 @@ describe('design system import catalog lookup', () => {
           },
           paths: {
             ARTIFACTS_DIR: path.join(tempRoot, 'artifacts'),
+            BRANDS_DIR: path.join(tempRoot, 'brands'),
             BUNDLED_PETS_DIR: path.join(tempRoot, 'pets'),
+            CRAFT_DIR: path.join(tempRoot, 'craft'),
             DESIGN_SYSTEMS_DIR: path.join(tempRoot, 'design-systems'),
             DESIGN_TEMPLATES_DIR: path.join(tempRoot, 'design-templates'),
+            LIBRARY_DIR: path.join(tempRoot, 'library'),
             OD_BIN: path.join(tempRoot, 'od'),
             PROJECT_ROOT: tempRoot,
             PROJECTS_DIR: path.join(tempRoot, 'projects'),
@@ -253,6 +270,7 @@ describe('design system import catalog lookup', () => {
     () =>
       new Promise<void>((resolve) => {
         server.close(() => {
+          closeDatabase();
           fs.rmSync(tempRoot, { recursive: true, force: true });
           resolve();
         });

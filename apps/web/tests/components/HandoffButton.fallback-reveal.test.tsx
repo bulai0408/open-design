@@ -27,6 +27,8 @@ vi.mock('../../src/lib/copy-to-clipboard', () => ({
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
+  window.localStorage.clear();
   fetchHostEditors.mockReset();
   openProjectInEditor.mockReset();
   copyToClipboard.mockReset();
@@ -42,14 +44,14 @@ describe('HandoffButton zero-editors fallback', () => {
 
     render(
       <I18nProvider initial="en">
-        <HandoffButton projectId="p1" />
+        <HandoffButton projectId="p1" projectKind="prototype" />
       </I18nProvider>,
     );
 
     const fallback = (await screen.findByText('Finder')).closest('button') as HTMLButtonElement;
     fireEvent.click(fallback);
 
-    await waitFor(() => expect(openProjectInEditor).toHaveBeenCalledWith('p1', 'finder'));
+    await waitFor(() => expect(openProjectInEditor).toHaveBeenCalledWith('p1', 'finder', null));
   });
 
   it('surfaces a daemon spawn failure inline so the fallback is not a silent no-op', async () => {
@@ -65,7 +67,7 @@ describe('HandoffButton zero-editors fallback', () => {
 
     render(
       <I18nProvider initial="en">
-        <HandoffButton projectId="p1" />
+        <HandoffButton projectId="p1" projectKind="prototype" />
       </I18nProvider>,
     );
 
@@ -107,18 +109,22 @@ describe('HandoffButton zero-editors fallback', () => {
       <I18nProvider initial="zh-CN">
         <HandoffButton
           projectId="p1"
+          projectKind="prototype"
           projectName="Landing"
           projectDir="/tmp/open-design/Landing"
           agents={agents}
+          metricsConsent
+          installationId="od-install-abc"
         />
       </I18nProvider>,
     );
 
     fireEvent.click(await screen.findByTestId('handoff-caret'));
     fireEvent.click(await screen.findByRole('tab', { name: '复制给 CLI' }));
-    expect(screen.getByRole('link', { name: /打开 AMR 官网/ }).getAttribute('href'))
-      .toBe('https://open-design.ai/amr');
-    expect(screen.getByTestId('handoff-cli-item-amr').textContent).toContain('Open Design AMR');
+    // The "OpenDesign Cloud website" link was removed from the CLI tab
+    // (acceptance #101); the CLI agent cards remain the surface here.
+    expect(screen.queryByRole('link', { name: /打开 OpenDesign Cloud 官网/ })).toBeNull();
+    expect(screen.getByTestId('handoff-cli-item-amr').textContent).toContain('OpenDesign');
     expect(screen.getByTestId('handoff-cli-item-amr').textContent).not.toContain('未安装');
     expect(
       screen.getByTestId('handoff-cli-item-amr').compareDocumentPosition(
@@ -154,6 +160,7 @@ describe('HandoffButton zero-editors fallback', () => {
       <I18nProvider initial="en">
         <HandoffButton
           projectId="p1"
+          projectKind="prototype"
           projectName="Landing"
           projectDir={projectDir}
         />

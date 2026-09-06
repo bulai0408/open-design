@@ -236,7 +236,6 @@ const DE_SKILL_COPY: Record<string, LocalizedSkillCopy> = {
   },
   'html-ppt': {},
   'html-ppt-course-module': {},
-  'html-ppt-dir-key-nav-minimal': {},
   'html-ppt-graphify-dark-graph': {},
   'html-ppt-hermes-cyber-terminal': {},
   'html-ppt-knowledge-arch-blueprint': {},
@@ -248,7 +247,6 @@ const DE_SKILL_COPY: Record<string, LocalizedSkillCopy> = {
   'html-ppt-testing-safety-alert': {},
   'html-ppt-weekly-report': {},
   'html-ppt-xhs-pastel-card': {},
-  'html-ppt-xhs-post': {},
   'html-ppt-xhs-white-editorial': {},
   'hyperframes': {
     examplePrompt:
@@ -379,6 +377,8 @@ const DE_DESIGN_SYSTEM_SUMMARIES: Record<string, string> = {
   claude: 'Anthropics AI-Assistent. Warmer Terrakotta-Akzent, klares Editorial-Layout.',
   clay: 'Kreativagentur. Organische Formen, weiche Verläufe, art-directed Layout.',
   clickhouse: 'Schnelle Analytics-Datenbank. Gelb akzentuierter, technischer Dokumentationsstil.',
+  'cloudflare-kumo':
+    'Cloudflares Komponentensystem für moderne Web-Apps: semantische Hell-/Dunkel-Tokens, kompakte Inter-Typografie, geschichtete neutrale Flächen, barrierearme Controls und charttaugliche Farbregeln.',
   cohere: 'Enterprise-AI-Plattform. Lebendige Verläufe, datenreiche Dashboard-Ästhetik.',
   coinbase: 'Krypto-Börse. Klare blaue Identität, vertrauensfokussiert, institutionelles Gefühl.',
   composio: 'Tool-Integrationsplattform. Modern dunkel mit farbigen Integrationsicons.',
